@@ -1,0 +1,14 @@
+research/
+.build/
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+__pycache__/
+*.pem
+*.key
+*.p12
+*.pfx
+*pair_record*
+*pairing_record*
+.env
+.DS_Store

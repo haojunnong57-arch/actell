@@ -1,0 +1,61 @@
+name: PhoneAgent
+options:
+  bundleIdPrefix: com.ja1chen
+  deploymentTarget:
+    iOS: '17.0'
+settings:
+  base:
+    GENERATE_INFOPLIST_FILE: YES
+    SWIFT_VERSION: '5.0'
+    SWIFT_STRICT_CONCURRENCY: complete
+    DEVELOPMENT_TEAM: ''
+    MARKETING_VERSION: '0.1.0'
+    CURRENT_PROJECT_VERSION: '1'
+packages:
+  SwiftAgentKit:
+    url: https://github.com/ayman3000/SwiftAgentKit.git
+    revision: 84ddf324fd2a223834323537eb3f8746d669753b
+  LLMProviderKit:
+    url: https://github.com/ayman3000/LLMProviderKit.git
+    exactVersion: 0.1.0-alpha.35
+targets:
+  PhoneAgent:
+    type: application
+    platform: iOS
+    sources: [PhoneAgent]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ja1chen.PhoneAgent
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Phone Agent
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Connect to your explicitly paired development bridge while this app is open.
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: '1,2'
+    dependencies:
+      - package: SwiftAgentKit
+        product: SwiftAgentKit
+      - package: LLMProviderKit
+        product: LLMProviderKit
+      - package: LLMProviderKit
+        product: LLMProviderKitOpenAI
+  PhoneAgentTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [PhoneAgentTests]
+    dependencies:
+      - target: PhoneAgent
+      - package: SwiftAgentKit
+        product: SwiftAgentKit
+      - package: LLMProviderKit
+        product: LLMProviderKit
+      - package: LLMProviderKit
+        product: LLMProviderKitOpenAI
+schemes:
+  PhoneAgent:
+    build:
+      targets:
+        PhoneAgent: all
+    test:
+      targets: [PhoneAgentTests]

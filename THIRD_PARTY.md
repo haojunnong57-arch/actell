@@ -1,0 +1,81 @@
+# Provenance and licenses
+
+The combined v0.3 project is distributed under GPL-3.0-only; see LICENSE.
+Original v0.1/new independent files retain their individual GPL-3.0-or-later
+headers. The raw mux module conservatively retains GPL-2.0-only OR GPL-3.0-only,
+so version 3 is the compatible choice for this combined distribution.
+
+The protocol inspection reference is pymobiledevice3 commit
+cd895d17ce8a97d883c10f87b26c7356d5e0ccb1 (2026-09-30),
+https://github.com/doronz88/pymobiledevice3 . Its pyproject.toml declares
+GPL-3.0-or-later. The full research checkout is not shipped. Four unchanged protocol
+reference files are shipped under tests/upstream_reference for offline test
+oracles, with provenance and SHA-256 manifest.
+
+bridge_xpc.c, bridge_hid.c, bridge_requests.c, bridge_media_offer.c and
+bridge_screenshot_stream.c selectively translate/use the pinned protocol
+schemas and report/offer builders. Their source origins are identified in the
+files; corresponding upstream references are GPL-3.0-or-later.
+
+bridge_io.c implements the 4-byte big-endian length prefix described in
+pymobiledevice3/service_connection.py. The bounded binary-plist view is new C
+implementation; test fixtures are created by Python's standard plistlib.
+No code/fixtures from real iPhones, pairing records, certificates or private keys
+are included.
+
+Build dependency: Espressif ESP-IDF v5.5.5, commit
+b774170ff46c393eeb5e495ea37936038d3f4f4f,
+https://github.com/espressif/esp-idf/tree/v5.5.5 . ESP-IDF is primarily Apache-2.0,
+with component-specific notices; it is fetched separately, not vendored.
+An eventual distributed firmware including ESP-IDF dependencies must retain their
+applicable license notices. This source checkpoint is not a hardware-validated bridge.
+
+Do not confuse LGPL libusbmuxd's daemon client with a standalone USB host transport.
+
+## Raw USB mux and directional magic (v0.2)
+
+Primary wire/state reference: libimobiledevice/usbmuxd
+3ded00c9985a5108cfc7591a309f9a23d57a8cba, src/device.c, src/usb.c and src/usb.h.
+Source headers permit GPL version 2 or version 3. The bounded implementation
+bridge_usbmux.c retains that either-version notice and upstream author credits.
+
+Directional magic cross-reference: hack-different/demuxusb
+778f8cd0ffd1558be857c0d170ab5d8eacd89ba3, ext/usbmux.h.
+SHA-256 a74d8f8bb21b3f9d15d51d7df9f73c72576bd8e5b975d777fc776d4a46cea4ad.
+That header is GPL2-or3, despite the repository's MIT summary; no analyzer
+implementation is copied or vendored. Device IN is FACEFACE, host OUT FEEDFACE.
+
+bridge_usb_descriptors.c and bridge_usb_host.c are independent bounded API
+implementations using USB descriptor/ESP-IDF public API contracts. QueryType
+semantics were checked against libimobiledevice src/lockdown.c; no upstream
+implementation was copied. No pairing records or keys are included.
+
+## Authentication, networking and compression (v0.3)
+
+New lockdown, CDTunnel, RSD and RemoteXPC implementations selectively follow the
+pinned pymobiledevice3 wire schemas. Four unmodified Python files are test
+oracles, not a runnable device tool; only selected pure methods execute in tests.
+TLS changes the upstream authentication policy to an explicit exact device-leaf
+pin; no upstream CERT_NONE fallback is provided.
+
+ESP-IDF mbedTLS 3.6.6 source: 9d669eadb1955d348986b9280156710aaaadf79f.
+Real TLS tests read already-public test identities from that separately obtained
+checkout; no certificate or private-key fixture is included in this project or
+firmware. License/provenance details are in tests/test_tls_README.md.
+
+lwIP source: fd432e4ee2cfb7f7f1c7eb7227e0173412e7b84e, ESP-IDF v5.5.5 submodule.
+The source is not vendored. Host tests compile the real stack and its Unix port;
+a host-only critical-section shim addresses a test-port bookkeeping race without
+modifying the stack. lwIP's BSD-style notices remain with its source.
+
+The minimal unmodified zlib 1.3.2 deflate source subset is vendored under
+firmware/components/bridge_zlib/vendor/zlib, with its LICENSE and complete
+SOURCE_MANIFEST.json. Official archive SHA-256:
+bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16.
+Only adler32, deflate, trees and zutil translation units are built (Z_SOLO,
+Z_PREFIX, NO_GZIP); no decompressor or upstream executable is shipped.
+
+Additional research-only cross-reference: idevice
+d32c8189c51c2789496b0768039419c3705498c3. No implementation copied or vendored.
+Its display-stream client also uses global stopAll, not a verified stream-token
+extraction rule.

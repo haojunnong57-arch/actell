@@ -1,0 +1,11 @@
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.env
+secrets*
+*.p12
+*.pem
+*.key
+__pycache__/
+.venv/
