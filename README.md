@@ -31,11 +31,47 @@ with-esp/
 
 | 部分 | 源码包含 | 验证状态与缺口 |
 | --- | --- | --- |
-| ESP32 固件 | ESP-IDF/C、USB Host/mux、已有配对身份下的 TLS/lockdown、CDTunnel、lwIP、RSD/RemoteXPC、截图与 Home 请求路径 | 此前通过云端分层/模拟对端测试及 S3 交叉编译；本次通过部分 Mac 宿主机测试。没有真实 iPhone/S3 联通；首次配对与身份配置、触控媒体流安全启停、固件 App 通道、硬件 RAM/PSRAM/栈水位尚未完成 |
+| ESP32 固件 | ESP-IDF/C、USB Host/mux、已有配对身份下的 TLS/lockdown、CDTunnel、lwIP、RSD/RemoteXPC、截图与 Home 请求路径 | 云端分层测试及本地 S3 编译通过；2026-10-04 实体 N16R8 的原生 USB / COM 烧录、16 MB Flash 检测、8 MB PSRAM 初始化与基础自测通过。COM 使用 115200，高速传输仍有错误。没有真实 iPhone/S3 联通；首次配对、触控媒体流启停、固件 App 通道及负载下的内存/栈峰值仍待完成 |
 | iOS App | SwiftUI、SwiftAgentKit、视觉模型适配、逐动作确认/停止、Keychain、实验 TLS-PSK 桥接协议，以及 Xcode 工程和只读状态 PiP 原型 | 修复依赖的 iOS 路径 API 后，完整无签名 Simulator App 与 18 项 XCTest 编译通过；12 项 Python 协议测试通过；XCTest 执行、界面和真机验证未运行；未启用跨 App PiP 后台能力 |
 | 两端联调 | 拟由 S3 经 usbmux 连接 App 的 NWListener，独立于 CoreDevice 通道 | 固件尚无 App 通道，协议约定不等于已连接；模型 API 与硬件端到端尚未验证 |
 
 **App 离开前台即停止，不能宣称同一台 iPhone 跨 App 持续自动化。** 独立的 Mac 历史基线曾在 iPhone 15 Pro / iOS 27.0、Xcode 27 DDI、USB 进程内 userspace RSD、无 WDA 的条件下完成截图、触控和 Home，文字输入字符错误；这不代表 ESP32 已成功。见[原始基线记录](https://chatgpt.com/space/page_6abf8257931881918f961de7bba04aeb)。
+
+## ESP32-S3 本地构建与基础实测（2026-10-04）
+
+本次基础测试没有修改固件源码，板上仍为项目默认诊断固件。
+
+本机已将 ESP-IDF v5.5.5（`b774170ff46c393eeb5e495ea37936038d3f4f4f`）、Xtensa GCC 14.2.0、Python 3.12、CMake 和 Ninja 安装在 `.build/toolchains/`，未修改 shell 启动文件。[环境入口](tools/with_esp_idf.sh)仅适用于这份已安装的本地环境；新克隆需要先按[官方说明](https://docs.espressif.com/projects/esp-idf/en/v5.5.5/esp32s3/get-started/linux-macos-setup.html)安装相应工具链。
+
+在项目根目录运行：
+
+```sh
+./tools/with_esp_idf.sh idf.py --version
+./tools/with_esp_idf.sh ./tools/build_firmware.sh
+# 以下会烧录开发板；先确认实际串口名和已保留的备份
+./tools/with_esp_idf.sh idf.py -C firmware -p /dev/cu.usbserial-110 -b 115200 flash
+./tools/with_esp_idf.sh idf.py -C firmware -p /dev/cu.usbserial-110 monitor
+```
+
+实测时 COM 串口为 `/dev/cu.usbserial-110`，原生 USB 曾枚举为 `/dev/cu.usbmodem1101`，重接后名称可能变化。使用 ESP-IDF 配套 esptool 4.12.0；COM 460800 / 921600 曾出现传输错误，已验证的烧录速度是 115200，保留了[460800 失败证据](docs/local-validation/esp32-com-460800-failure.log)。原生 USB 同样已通过标准 `idf.py flash` 流程。
+
+实际烧录产物位于 `firmware/build/`：`bootloader/bootloader.bin`、`partition_table/partition-table.bin`、`esp32_iphone_bridge_diagnostics.bin` 和配套 `flash_args` / `flasher_args.json`。应用镜像为 448016 字节。默认固件输出 COM 日志及原生 USB 辅助日志，USB Host 仍关闭。
+
+首次烧录前的完整 Flash 备份保存在 `device-backups/20261004/factory-flash-16mb.bin`，共 16777216 字节，已与设备端摘要核对一致；同目录的 manifest 保存 SHA-256。后续逐字节核验发现 **整份镜像全部为 `0xFF`，即备份时 Flash 为空白状态，不含厂家演示固件**；写回它只会恢复空白 Flash。文件名中的 `factory` 沿用最初命名。该目录被 Git 忽略，独立于可清理的 `.build/` 缓存，请保留备份。
+
+可直接复制独立备份包 `device-backups/esp32-s3-n16r8-preflash-backup-20261004.zip` 到项目外或其他磁盘。包内含完整镜像、原始 manifest、设备摘要校验日志、恢复说明及 `SHA256SUMS`；包外另有同名 `.zip.sha256`。ZIP 已逐项解压校验一致；由于镜像全为 `0xFF`，压缩后约 20 KB 属正常现象，不是只备份了部分 Flash。
+
+证据见[实测摘要](docs/local-validation/esp32-bringup-summary.json)、[Hello World 启动日志](docs/local-validation/esp32-hello-runtime.log)、[原生 USB 诊断日志](docs/local-validation/esp32-diagnostics-usb-runtime.log)和[COM 诊断日志](docs/local-validation/esp32-diagnostics-com-after-flash.log)。PSRAM 已通过 IDF 启动时的步进地址测试和项目的 16 KiB 读写测试，尚未进行持续负载或全容量多模式压力测试。
+
+阶段证据、构建环境限制、高波特率与 USB 读取试错，以及本次归档校验见[会话整理记录](docs/local-validation/ESP32-SESSION-REVIEW.md)。
+
+## 这块开发板的 USB 接线依据
+
+完整的原理图分析、J4 测量证据、USB-C 角色说明和扩展配件清单见[板级 USB 与 Host 方案](docs/hardware/ESP32-S3-USB.md)。COM 对应 CH340C 串口；原生 USB 对应 GPIO20/D+、GPIO19/D-。图中 CC1/CC2 固定下拉，J4 仅旁路供电二极管；改 Host 固件或短接 J4 不会改变 CC 角色。
+
+用户报告焊盘双向电阻与表笔短接基线均为 1.7 Ω、COM 供电时两端各 4.95 V。前者支持低阻通路判断，后者为空载电压；均未定位实物 J4 的短接方式，也未证明对外供电或 iPhone 接法已通过验证。无需再短接焊盘。
+
+下一阶段采用 GPIO19/20/GND 接外部 USB-A 母口、独立受保护 5V 给该口供电的原型方案，板载原生 USB 留空，COM 保留日志。配件尚未组装或联调，USB Host 仍关闭。
 
 ## 本地离线校验
 
@@ -52,4 +88,4 @@ CC=clang bash tools/test_lockdown_session.sh
 
 `verify_import.py` 比较当前文件与原始归档，会报告后续有意修改的 iOS 文件和 `.gitignore`；原始清单保留为导入时的历史证据。这些测试会在本目录 `.build/` 生成合成数据和测试二进制。其他原始脚本的完整依赖和平台限制见[导入时验证记录](docs/LOCAL-VALIDATION.md)；不要把这些检查当作完整构建或真机验收。
 
-Git 版本管理范围仅为本目录，`../app-only` 独立维护。当前检查点包含原始归档、导入源码、Xcode 工程、状态 PiP 原型和验证记录；构建缓存与 Xcode 个人状态不纳入版本管理。后续 Xcode 验证已解析并下载固定依赖，详情见上述验证文档。未推送代码、刷机、安装手机 App、调用模型或创建、读取真实配对凭据。
+Git 版本管理范围仅为本目录，`../app-only` 独立维护。当前检查点包含原始归档、导入源码、Xcode 工程、状态 PiP 原型和验证记录；构建缓存与 Xcode 个人状态不纳入版本管理。后续 Xcode 验证已解析并下载固定依赖，详情见上述验证文档。2026-10-04 已执行上述 ESP32 备份和诊断固件烧录；这不代表已连接或控制 iPhone。

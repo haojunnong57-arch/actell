@@ -1,5 +1,6 @@
 research/
 .build/
+device-backups/
 firmware/build/
 firmware/sdkconfig
 firmware/sdkconfig.old

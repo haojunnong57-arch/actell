@@ -23,6 +23,13 @@ implementation; test fixtures are created by Python's standard plistlib.
 No code/fixtures from real iPhones, pairing records, certificates or private keys
 are included.
 
+Hardware reference: `docs/hardware/xinlu-esp32s3-schematic.pdf` is the unmodified
+vendor schematic linked from https://www.xinlucity.com/?s=resourcedetail/index/id/61.html,
+retrieved on 2026-10-04. Its source URL and SHA-256 are recorded in
+`docs/local-validation/esp32-bringup-summary.json`. It is third-party reference
+material, not covered by this project's GPL grant; no redistribution license
+was identified on the supplied schematic.
+
 Build dependency: Espressif ESP-IDF v5.5.5, commit
 b774170ff46c393eeb5e495ea37936038d3f4f4f,
 https://github.com/espressif/esp-idf/tree/v5.5.5 . ESP-IDF is primarily Apache-2.0,
