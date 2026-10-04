@@ -139,7 +139,7 @@ actor TLSBridge: DeviceBridge {
                         case "image_chunk": try assembler.chunk(frame.payload)
                         case "image_end": try assembler.end(frame.payload)
                         case "tool_result":
-                            guard frame.payload["status"]?.string == "ok" else { throw AppError.unavailable("桥接报告工具失败；运行已停止") }
+                            guard frame.payload["status"]?.string == "ok" else { throw AppError.unavailable("桥接报告工具失败；连接已断开，请检查桥接状态") }
                             if name == "screenshot" {
                                 guard let imageID = frame.payload["image_id"]?.string else { throw AppError.protocolViolation("截图结果缺少 ID") }
                                 return Response(image: try assembler.committed(imageID: imageID))

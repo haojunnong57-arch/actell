@@ -6,7 +6,7 @@ enum RunPhase: String, Codable { case idle, running, awaitingApproval, stopped, 
 enum RunMode: String, CaseIterable, Identifiable, Codable, Sendable {
     case demo, live
     var id: String { rawValue }
-    var label: String { self == .demo ? "离线演示" : "真实桥接 · 实验" }
+    var label: String { self == .demo ? "离线演示" : "真实模型" }
 }
 struct Receipt: Identifiable, Codable, Sendable {
     let id: UUID
@@ -41,6 +41,7 @@ struct Approval: Identifiable, Sendable {
     let tool: String
     let detail: String
     let imageID: String
+    var callID: String? = nil
 }
 struct AgentLimits: Sendable {
     let maxTurns = 12
@@ -57,7 +58,7 @@ enum AppError: LocalizedError, Equatable {
         case .invalid(let s), .unavailable(let s), .protocolViolation(let s): return s
         case .stopped: return "已停止；继续时将获取新截图"
         case .timeout: return "桥接超时，已断开；没有自动重发动作"
-        case .unknownOutcome: return "动作结果未知，已停止；请检查设备后重新获取截图"
+        case .unknownOutcome: return "动作结果未知；请检查设备后重新获取截图，不要重发该动作"
         }
     }
 }

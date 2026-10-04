@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var model: AgentViewModel
+    @ObservedObject var statusPiP: StatusPiPController
     @Environment(\.dismiss) private var dismiss
     @State private var key = ""
     @State private var psk = ""
@@ -9,6 +10,11 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    NavigationLink { ControlDebugView(model: model, statusPiP: statusPiP) } label: {
+                        Label("控制调试", systemImage: "slider.horizontal.3")
+                    }.accessibilityIdentifier("controlDebug")
+                } footer: { Text("设备连接、截图、逐步控制和状态画中画预览。") }
                 Section("视觉模型 · OpenAI Chat Completions 兼容") {
                     TextField("HTTPS API 基础地址", text: $model.settings.baseURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                     TextField("支持视觉和工具调用的模型 ID", text: $model.settings.model).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -29,9 +35,9 @@ struct SettingsView: View {
                         .font(.caption)
                 }
                 Section("本地记录") {
-                    Text("最近 20 个任务，每项最多 100 条简短记录。截图不写入磁盘，任务文件开启完整文件保护并排除备份。锁屏 / 离开前台即停，不自动恢复。")
+                    Text("会话保留最近 200 条消息与工具记录，包含用户消息和模型公开回复。截图不写入磁盘，会话文件开启完整文件保护并排除备份。打开历史不会自动执行工具；锁屏 / 离开前台即停。")
                         .font(.caption)
-                    Button("清空本地任务记录", role: .destructive) { clear = true }
+                    Button("清空本地会话与任务记录", role: .destructive) { clear = true }.disabled(model.running || model.stopping)
                 }
                 if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
                 Text(model.status).font(.caption)

@@ -5,16 +5,64 @@ import LLMProviderKit
 
 private actor SpyBridge: DeviceBridge {
     private(set) var taps = 0
+    private(set) var drags = 0
     private(set) var stopped = false
+    let tapError: AppError?
+    init(tapError: AppError? = nil) { self.tapError = tapError }
     func screenshot() async throws -> FrameImage { FrameImage(id: "fresh", png: Data(), width: 390, height: 844, capturedAt: Date(), isDemo: true) }
-    func tap(x: Int, y: Int, imageID: String) async throws { taps += 1 }
-    func drag(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMS: Int, imageID: String) async throws {}
+    func tap(x: Int, y: Int, imageID: String) async throws { taps += 1; if let tapError { throw tapError } }
+    func drag(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMS: Int, imageID: String) async throws { drags += 1 }
     func stop() async { stopped = true }
 }
 final class SafetyTests: XCTestCase {
+    func testToolValidationErrorReturnsNormallyAndAllowsCorrectedCall() async throws {
+        let c = ActionCoordinator(bridge: SpyBridge(), limits: AgentLimits(), approve: { _ in true }, onImage: { _, _ in }, onReceipt: { _ in })
+        let actions = ToolActions()
+        let tool = DeviceTool(name: "wait", coordinator: c)
+        let failed = try await tool.execute(context: ToolContext(callId: "bad", toolName: "wait", parameters: ["duration_ms": 0], state: AgentState(), actions: actions))
+        XCTAssertTrue(failed.isError)
+        XCTAssertEqual(failed.result, "等待必须为 1–3000 毫秒")
+        XCTAssertEqual(failed.toolCallId, "bad")
+        XCTAssertFalse(actions.shouldStop)
+        let corrected = try await tool.execute(context: ToolContext(callId: "corrected", toolName: "wait", parameters: ["duration_ms": 1], state: AgentState(), actions: actions))
+        XCTAssertFalse(corrected.isError)
+        XCTAssertFalse(actions.shouldStop)
+    }
+    func testUncertainInputReturnsErrorAndFencesBothInputToolsAfterNewScreenshot() async throws {
+        let bridge = SpyBridge(tapError: .unknownOutcome)
+        let c = ActionCoordinator(bridge: bridge, limits: AgentLimits(), approve: { _ in true }, onImage: { _, _ in }, onReceipt: { _ in })
+        let actions = ToolActions()
+        _ = try await c.execute(name: "screenshot", parameters: [:], callID: "s")
+        let failed = try await DeviceTool(name: "tap", coordinator: c).execute(context:
+            ToolContext(callId: "t", toolName: "tap", parameters: ["x": 100, "y": 100, "based_on_image_id": "fresh", "purpose": "test"], state: AgentState(), actions: actions))
+        XCTAssertTrue(failed.isError)
+        XCTAssertTrue(failed.result.contains("动作结果未知"))
+        XCTAssertFalse(actions.shouldStop)
+        _ = try await c.execute(name: "screenshot", parameters: [:], callID: "s2")
+        for name in ["tap", "drag"] {
+            let result = try await DeviceTool(name: name, coordinator: c).execute(context:
+                ToolContext(callId: name + "-blocked", toolName: name, parameters: ["x": 100, "y": 100, "from_x": 100, "from_y": 100, "to_x": 120, "to_y": 120, "duration_ms": 200, "based_on_image_id": "fresh", "purpose": "must not send"], state: AgentState(), actions: actions))
+            XCTAssertTrue(result.isError)
+            XCTAssertTrue(result.result.contains("本轮后续点击和拖动已禁用"))
+            XCTAssertFalse(actions.shouldStop)
+        }
+        let taps = await bridge.taps, drags = await bridge.drags
+        XCTAssertEqual(taps, 1)
+        XCTAssertEqual(drags, 0)
+    }
+    func testExplicitStopStillEndsToolExecution() async throws {
+        let c = ActionCoordinator(bridge: SpyBridge(), limits: AgentLimits(), approve: { _ in true }, onImage: { _, _ in }, onReceipt: { _ in })
+        await c.stop()
+        let actions = ToolActions()
+        do {
+            _ = try await DeviceTool(name: "screenshot", coordinator: c).execute(context: ToolContext(callId: "s", toolName: "screenshot", parameters: [:], state: AgentState(), actions: actions))
+            XCTFail("An explicit stop must not become a recoverable tool result")
+        } catch { XCTAssertEqual(error as? AppError, .stopped) }
+        XCTAssertTrue(actions.shouldStop)
+    }
     func testApprovalDeniedNeverSendsInput() async throws {
         let bridge = SpyBridge()
-        let c = ActionCoordinator(bridge: bridge, limits: AgentLimits(), approve: { _ in false }, onImage: { _ in }, onReceipt: { _ in })
+        let c = ActionCoordinator(bridge: bridge, limits: AgentLimits(), approve: { _ in false }, onImage: { _, _ in }, onReceipt: { _ in })
         _ = try await c.execute(name: "screenshot", parameters: [:], callID: "s")
         do {
             _ = try await c.execute(name: "tap", parameters: ["x": 100, "y": 100, "based_on_image_id": "fresh", "purpose": "test"], callID: "t")
@@ -24,7 +72,7 @@ final class SafetyTests: XCTestCase {
     }
     func testFreshImageRequiredAfterEveryInput() async throws {
         let bridge = SpyBridge()
-        let c = ActionCoordinator(bridge: bridge, limits: AgentLimits(), approve: { _ in true }, onImage: { _ in }, onReceipt: { _ in })
+        let c = ActionCoordinator(bridge: bridge, limits: AgentLimits(), approve: { _ in true }, onImage: { _, _ in }, onReceipt: { _ in })
         _ = try await c.execute(name: "screenshot", parameters: [:], callID: "s")
         let p: [String: Any] = ["x": 100, "y": 100, "based_on_image_id": "fresh", "purpose": "test"]
         _ = try await c.execute(name: "tap", parameters: p, callID: "t1")
@@ -33,18 +81,18 @@ final class SafetyTests: XCTestCase {
     }
     func testStopFencesLaterTools() async throws {
         let bridge = SpyBridge()
-        let c = ActionCoordinator(bridge: bridge, limits: AgentLimits(), approve: { _ in true }, onImage: { _ in }, onReceipt: { _ in })
+        let c = ActionCoordinator(bridge: bridge, limits: AgentLimits(), approve: { _ in true }, onImage: { _, _ in }, onReceipt: { _ in })
         await c.stop()
         do { _ = try await c.execute(name: "screenshot", parameters: [:], callID: "s"); XCTFail("Stopped session must fail") } catch {}
         let value = await bridge.stopped; XCTAssertTrue(value)
     }
     func testFinishRequiresFreshObservation() async throws {
-        let c = ActionCoordinator(bridge: SpyBridge(), limits: AgentLimits(), approve: { _ in true }, onImage: { _ in }, onReceipt: { _ in })
+        let c = ActionCoordinator(bridge: SpyBridge(), limits: AgentLimits(), approve: { _ in true }, onImage: { _, _ in }, onReceipt: { _ in })
         do { _ = try await c.execute(name: "finish", parameters: ["summary": "done"], callID: "f"); XCTFail("No image means no finish") } catch {}
     }
     func testBooleansCannotBecomePixelCoordinates() async throws {
         let bridge = SpyBridge()
-        let c = ActionCoordinator(bridge: bridge, limits: AgentLimits(), approve: { _ in true }, onImage: { _ in }, onReceipt: { _ in })
+        let c = ActionCoordinator(bridge: bridge, limits: AgentLimits(), approve: { _ in true }, onImage: { _, _ in }, onReceipt: { _ in })
         _ = try await c.execute(name: "screenshot", parameters: [:], callID: "s")
         do { _ = try await c.execute(name: "tap", parameters: ["x": true, "y": 0, "based_on_image_id": "fresh", "purpose": "bad"], callID: "t"); XCTFail("Boolean must fail") } catch {}
         let count = await bridge.taps; XCTAssertEqual(count, 0)

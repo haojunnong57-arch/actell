@@ -22,11 +22,18 @@ packages:
   LLMProviderKit:
     url: https://github.com/ayman3000/LLMProviderKit.git
     exactVersion: 0.1.0-alpha.35
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui.git
+    exactVersion: 2.4.1
 targets:
   PhoneAgent:
     type: application
     platform: iOS
-    sources: [PhoneAgent]
+    sources:
+      - PhoneAgent
+      - path: Licenses
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ja1chen.PhoneAgent
@@ -44,6 +51,8 @@ targets:
         product: LLMProviderKit
       - package: LLMProviderKit
         product: LLMProviderKitOpenAI
+      - package: MarkdownUI
+        product: MarkdownUI
   PhoneAgentTests:
     type: bundle.unit-test
     platform: iOS
@@ -56,10 +65,21 @@ targets:
         product: LLMProviderKit
       - package: LLMProviderKit
         product: LLMProviderKitOpenAI
+  PhoneAgentUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [PhoneAgentUITests]
+    settings:
+      base:
+        TEST_TARGET_NAME: PhoneAgent
+    dependencies:
+      - target: PhoneAgent
 schemes:
   PhoneAgent:
     build:
       targets:
         PhoneAgent: all
     test:
-      targets: [PhoneAgentTests]
+      targets: [PhoneAgentTests, PhoneAgentUITests]
+      environmentVariables:
+        PHONEAGENT_ISOLATED_TESTS: '1'

@@ -47,9 +47,11 @@ def generate():
         add("SwiftAgentKit", "XCLocalSwiftPackageReference", relativePath="Vendor/SwiftAgentKit"),
         add("LLMProviderKit", "XCRemoteSwiftPackageReference", repositoryURL="https://github.com/ayman3000/LLMProviderKit.git",
             requirement=dict(kind="exactVersion", version="0.1.0-alpha.35")),
+        add("MarkdownUI", "XCRemoteSwiftPackageReference", repositoryURL="https://github.com/gonzalezreal/swift-markdown-ui.git",
+            requirement=dict(kind="exactVersion", version="2.4.1")),
     ]
     targets, groups, products = [], [], []
-    for name, extension, product_type in [("PhoneAgent", "app", "application"), ("PhoneAgentTests", "xctest", "bundle.unit-test")]:
+    for name, extension, product_type in [("PhoneAgent", "app", "application"), ("PhoneAgentTests", "xctest", "bundle.unit-test"), ("PhoneAgentUITests", "xctest", "bundle.ui-testing")]:
         sources, children = [], []
         for path in sorted((ROOT / name).rglob("*.swift")):
             relative = path.relative_to(ROOT).as_posix()
@@ -61,16 +63,24 @@ def generate():
             ref = add("PrivacyManifest", "PBXFileReference", lastKnownFileType="text.xml", path="PhoneAgent/PrivacyInfo.xcprivacy", sourceTree="SOURCE_ROOT")
             children.append(ref)
             resources.append(add("PrivacyBuild", "PBXBuildFile", fileRef=ref))
+            ref = add("Licenses", "PBXFileReference", lastKnownFileType="folder", path="Licenses", sourceTree="SOURCE_ROOT")
+            children.append(ref)
+            resources.append(add("LicensesBuild", "PBXBuildFile", fileRef=ref))
         group = add(name + "Group", "PBXGroup", name=name, children=children, sourceTree="<group>")
         groups.append(group)
         product = add(name + "Product", "PBXFileReference", explicitFileType="wrapper.application" if extension == "app" else "wrapper.cfbundle",
                       includeInIndex=0, path=name + "." + extension, sourceTree="BUILT_PRODUCTS_DIR")
         products.append(product)
         package_products, frameworks = [], []
-        for product_name, package in [("SwiftAgentKit", packages[0]), ("LLMProviderKit", packages[1]), ("LLMProviderKitOpenAI", packages[1])]:
+        linked_products = [] if name == "PhoneAgentUITests" else [("SwiftAgentKit", packages[0]), ("LLMProviderKit", packages[1]), ("LLMProviderKitOpenAI", packages[1])]
+        for product_name, package in linked_products:
             dependency = add(name + product_name, "XCSwiftPackageProductDependency", package=package, productName=product_name)
             package_products.append(dependency)
             frameworks.append(add(name + product_name + "Build", "PBXBuildFile", productRef=dependency))
+        if name == "PhoneAgent":
+            dependency = add(name + "MarkdownUI", "XCSwiftPackageProductDependency", package=packages[2], productName="MarkdownUI")
+            package_products.append(dependency)
+            frameworks.append(add(name + "MarkdownUIBuild", "PBXBuildFile", productRef=dependency))
         phases = [add(name + "Sources", "PBXSourcesBuildPhase", buildActionMask=2147483647, files=sources, runOnlyForDeploymentPostprocessing=0),
                   add(name + "Frameworks", "PBXFrameworksBuildPhase", buildActionMask=2147483647, files=frameworks, runOnlyForDeploymentPostprocessing=0),
                   add(name + "Resources", "PBXResourcesBuildPhase", buildActionMask=2147483647, files=resources, runOnlyForDeploymentPostprocessing=0)]
@@ -87,9 +97,12 @@ def generate():
                             INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents="YES",
                             INFOPLIST_KEY_UILaunchScreen_Generation="YES")
         else:
-            settings.update(TEST_HOST="$(BUILT_PRODUCTS_DIR)/PhoneAgent.app/PhoneAgent", BUNDLE_LOADER="$(TEST_HOST)")
-            proxy = add("AppProxy", "PBXContainerItemProxy", containerPortal=uid("Project"), proxyType=1, remoteGlobalIDString=uid("PhoneAgentTarget"), remoteInfo="PhoneAgent")
-            dependencies.append(add("AppDependency", "PBXTargetDependency", target=uid("PhoneAgentTarget"), targetProxy=proxy))
+            if name == "PhoneAgentUITests":
+                settings.update(TEST_TARGET_NAME="PhoneAgent")
+            else:
+                settings.update(TEST_HOST="$(BUILT_PRODUCTS_DIR)/PhoneAgent.app/PhoneAgent", BUNDLE_LOADER="$(TEST_HOST)")
+            proxy = add(name + "AppProxy", "PBXContainerItemProxy", containerPortal=uid("Project"), proxyType=1, remoteGlobalIDString=uid("PhoneAgentTarget"), remoteInfo="PhoneAgent")
+            dependencies.append(add(name + "AppDependency", "PBXTargetDependency", target=uid("PhoneAgentTarget"), targetProxy=proxy))
         targets.append(add(name + "Target", "PBXNativeTarget", name=name, productName=name, productReference=product,
                            productType="com.apple.product-type." + product_type, buildConfigurationList=configs(name, settings),
                            buildPhases=phases, buildRules=[], dependencies=dependencies, packageProductDependencies=package_products))
@@ -111,13 +124,13 @@ def generate():
     schemes.mkdir(parents=True, exist_ok=True)
     def reference(name, extension):
         return f'<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{uid(name + "Target")}" BuildableName="{name}.{extension}" BlueprintName="{name}" ReferencedContainer="container:PhoneAgent.xcodeproj"/>'
-    app, tests = reference("PhoneAgent", "app"), reference("PhoneAgentTests", "xctest")
+    app, tests, ui_tests = reference("PhoneAgent", "app"), reference("PhoneAgentTests", "xctest"), reference("PhoneAgentUITests", "xctest")
     (schemes / "PhoneAgent.xcscheme").write_text(f'''<?xml version="1.0" encoding="UTF-8"?>
 <Scheme LastUpgradeVersion="2700" version="1.7">
   <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries>
     <BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">{app}</BuildActionEntry>
   </BuildActionEntries></BuildAction>
-  <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables><TestableReference skipped="NO">{tests}</TestableReference></Testables></TestAction>
+  <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="NO"><Testables><TestableReference skipped="NO">{tests}</TestableReference><TestableReference skipped="NO">{ui_tests}</TestableReference></Testables><EnvironmentVariables><EnvironmentVariable key="PHONEAGENT_ISOLATED_TESTS" value="1" isEnabled="YES"/></EnvironmentVariables></TestAction>
   <LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" allowLocationSimulation="NO"><BuildableProductRunnable runnableDebuggingMode="0">{app}</BuildableProductRunnable></LaunchAction>
   <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES"><BuildableProductRunnable runnableDebuggingMode="0">{app}</BuildableProductRunnable></ProfileAction>
   <AnalyzeAction buildConfiguration="Debug"/><ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>
