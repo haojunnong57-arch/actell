@@ -6,12 +6,8 @@
 	"objectVersion" = 56;
 	"objects" = {
 		"9F0AC23D4698CC02B51EE183" = {
-			"isa" = "XCRemoteSwiftPackageReference";
-			"repositoryURL" = "https://github.com/ayman3000/SwiftAgentKit.git";
-			"requirement" = {
-				"kind" = "revision";
-				"revision" = "84ddf324fd2a223834323537eb3f8746d669753b";
-			};
+			"isa" = "XCLocalSwiftPackageReference";
+			"relativePath" = "Vendor/SwiftAgentKit";
 		};
 		"6556B2DE0778215E7C1F35E3" = {
 			"isa" = "XCRemoteSwiftPackageReference";
@@ -270,6 +266,7 @@
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents" = "YES";
 				"INFOPLIST_KEY_UILaunchScreen_Generation" = "YES";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
+				"ONLY_ACTIVE_ARCH" = "YES";
 				"ENABLE_TESTABILITY" = "YES";
 				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "DEBUG $(inherited)";
 			};
@@ -295,6 +292,7 @@
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents" = "YES";
 				"INFOPLIST_KEY_UILaunchScreen_Generation" = "YES";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-O";
+				"ONLY_ACTIVE_ARCH" = "NO";
 			};
 		};
 		"2F8C79022BA56E966F1916DE" = {
@@ -314,6 +312,16 @@
 			"buildRules" = ();
 			"dependencies" = ();
 			"packageProductDependencies" = ("9E29101299A135B79CA9F7FC", "1978B0BFD94C79F36356CDC3", "BE5513EA04DC336AE3331F2F",);
+		};
+		"46693BDF9568EA4A77D61F09" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "PhoneAgentTests/DependencyStorageTests.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"0A341B6FC0976B8722FE3C8D" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "46693BDF9568EA4A77D61F09";
 		};
 		"C99D3DF710BAAB15E0A62485" = {
 			"isa" = "PBXFileReference";
@@ -348,7 +356,7 @@
 		"01C9D5910E626DA35A0A8FDF" = {
 			"isa" = "PBXGroup";
 			"name" = "PhoneAgentTests";
-			"children" = ("C99D3DF710BAAB15E0A62485", "CB922EF7EC8951DF7B2EACD8", "06437B4CD4B86D08F95DA3F8",);
+			"children" = ("46693BDF9568EA4A77D61F09", "C99D3DF710BAAB15E0A62485", "CB922EF7EC8951DF7B2EACD8", "06437B4CD4B86D08F95DA3F8",);
 			"sourceTree" = "<group>";
 		};
 		"E661666073140993B89C6C0D" = {
@@ -388,7 +396,7 @@
 		"D0C8EC9372E4FCBB321CE820" = {
 			"isa" = "PBXSourcesBuildPhase";
 			"buildActionMask" = 2147483647;
-			"files" = ("AA953DE31549635C6D0158D9", "96FF39CA3F3AA1D17C39C97D", "AB76300D9182BE1E1EAA07BA",);
+			"files" = ("0A341B6FC0976B8722FE3C8D", "AA953DE31549635C6D0158D9", "96FF39CA3F3AA1D17C39C97D", "AB76300D9182BE1E1EAA07BA",);
 			"runOnlyForDeploymentPostprocessing" = 0;
 		};
 		"872A48C0B0DF0413D63031E8" = {
@@ -433,6 +441,7 @@
 				"TEST_HOST" = "$(BUILT_PRODUCTS_DIR)/PhoneAgent.app/PhoneAgent";
 				"BUNDLE_LOADER" = "$(TEST_HOST)";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
+				"ONLY_ACTIVE_ARCH" = "YES";
 				"ENABLE_TESTABILITY" = "YES";
 				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "DEBUG $(inherited)";
 			};
@@ -455,6 +464,7 @@
 				"TEST_HOST" = "$(BUILT_PRODUCTS_DIR)/PhoneAgent.app/PhoneAgent";
 				"BUNDLE_LOADER" = "$(TEST_HOST)";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-O";
+				"ONLY_ACTIVE_ARCH" = "NO";
 			};
 		};
 		"390DED13C6C536784DF2771D" = {
@@ -498,6 +508,7 @@
 				"CLANG_ENABLE_OBJC_ARC" = "YES";
 				"GCC_C_LANGUAGE_STANDARD" = "gnu17";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
+				"ONLY_ACTIVE_ARCH" = "YES";
 				"ENABLE_TESTABILITY" = "YES";
 				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "DEBUG $(inherited)";
 			};
@@ -514,6 +525,7 @@
 				"CLANG_ENABLE_OBJC_ARC" = "YES";
 				"GCC_C_LANGUAGE_STANDARD" = "gnu17";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-O";
+				"ONLY_ACTIVE_ARCH" = "NO";
 			};
 		};
 		"67F98A53B3601D59AC990BA8" = {

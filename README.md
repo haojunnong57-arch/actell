@@ -23,6 +23,7 @@ with-esp/
 
 - [固件原始说明](README.firmware.md) · [iOS 工程说明](ios-app/README.md)
 - [Xcode 工程与状态 PiP 原型验证](ios-app/docs/XCODE-PIP.md)
+- [iOS 编译修复与最新验证](ios-app/docs/IOS-BUILD-FIX.md)
 - [方案与未完成项](docs/STATUS.md) · [App 桥接协议](ios-app/docs/BRIDGE_PROTOCOL_V1.md)
 - [导入来源、哈希和映射](docs/IMPORT.md) · [本次 Mac 验证](docs/LOCAL-VALIDATION.md)
 
@@ -31,7 +32,7 @@ with-esp/
 | 部分 | 源码包含 | 验证状态与缺口 |
 | --- | --- | --- |
 | ESP32 固件 | ESP-IDF/C、USB Host/mux、已有配对身份下的 TLS/lockdown、CDTunnel、lwIP、RSD/RemoteXPC、截图与 Home 请求路径 | 此前通过云端分层/模拟对端测试及 S3 交叉编译；本次通过部分 Mac 宿主机测试。没有真实 iPhone/S3 联通；首次配对与身份配置、触控媒体流安全启停、固件 App 通道、硬件 RAM/PSRAM/栈水位尚未完成 |
-| iOS App | SwiftUI、SwiftAgentKit、视觉模型适配、逐动作确认/停止、Keychain、实验 TLS-PSK 桥接协议，以及 Xcode 工程和只读状态 PiP 原型 | 12 项 Python 协议测试、SPM 解析及核心状态/PiP 文件类型检查通过；完整 Xcode 构建受阻于 SwiftAgentKitMacros 信任要求，XCTest、界面和真机验证未运行；未启用跨 App PiP 后台能力 |
+| iOS App | SwiftUI、SwiftAgentKit、视觉模型适配、逐动作确认/停止、Keychain、实验 TLS-PSK 桥接协议，以及 Xcode 工程和只读状态 PiP 原型 | 修复依赖的 iOS 路径 API 后，完整无签名 Simulator App 与 18 项 XCTest 编译通过；12 项 Python 协议测试通过；XCTest 执行、界面和真机验证未运行；未启用跨 App PiP 后台能力 |
 | 两端联调 | 拟由 S3 经 usbmux 连接 App 的 NWListener，独立于 CoreDevice 通道 | 固件尚无 App 通道，协议约定不等于已连接；模型 API 与硬件端到端尚未验证 |
 
 **App 离开前台即停止，不能宣称同一台 iPhone 跨 App 持续自动化。** 独立的 Mac 历史基线曾在 iPhone 15 Pro / iOS 27.0、Xcode 27 DDI、USB 进程内 userspace RSD、无 WDA 的条件下完成截图、触控和 Home，文字输入字符错误；这不代表 ESP32 已成功。见[原始基线记录](https://chatgpt.com/space/page_6abf8257931881918f961de7bba04aeb)。

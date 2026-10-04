@@ -11,10 +11,14 @@ settings:
     DEVELOPMENT_TEAM: ''
     MARKETING_VERSION: '0.1.0'
     CURRENT_PROJECT_VERSION: '1'
+  configs:
+    Debug:
+      ONLY_ACTIVE_ARCH: YES
+    Release:
+      ONLY_ACTIVE_ARCH: NO
 packages:
   SwiftAgentKit:
-    url: https://github.com/ayman3000/SwiftAgentKit.git
-    revision: 84ddf324fd2a223834323537eb3f8746d669753b
+    path: Vendor/SwiftAgentKit
   LLMProviderKit:
     url: https://github.com/ayman3000/LLMProviderKit.git
     exactVersion: 0.1.0-alpha.35

@@ -32,7 +32,10 @@ def configs(name, settings):
     ids = []
     for configuration in ("Debug", "Release"):
         s = dict(settings)
-        s.update(SWIFT_OPTIMIZATION_LEVEL="-Onone" if configuration == "Debug" else "-O")
+        s.update(SWIFT_OPTIMIZATION_LEVEL="-Onone" if configuration == "Debug" else "-O",
+                 # Match SPM's Debug architecture for a concrete simulator.
+                 # A generic destination still builds all supported architectures.
+                 ONLY_ACTIVE_ARCH="YES" if configuration == "Debug" else "NO")
         if configuration == "Debug":
             s.update(ENABLE_TESTABILITY="YES", SWIFT_ACTIVE_COMPILATION_CONDITIONS="DEBUG $(inherited)")
         ids.append(add(name + configuration, "XCBuildConfiguration", name=configuration, buildSettings=s))
@@ -41,8 +44,7 @@ def configs(name, settings):
 
 def generate():
     packages = [
-        add("SwiftAgentKit", "XCRemoteSwiftPackageReference", repositoryURL="https://github.com/ayman3000/SwiftAgentKit.git",
-            requirement=dict(kind="revision", revision="84ddf324fd2a223834323537eb3f8746d669753b")),
+        add("SwiftAgentKit", "XCLocalSwiftPackageReference", relativePath="Vendor/SwiftAgentKit"),
         add("LLMProviderKit", "XCRemoteSwiftPackageReference", repositoryURL="https://github.com/ayman3000/LLMProviderKit.git",
             requirement=dict(kind="exactVersion", version="0.1.0-alpha.35")),
     ]

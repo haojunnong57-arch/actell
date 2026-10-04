@@ -16,7 +16,7 @@ App 的工具子集为 screenshot / tap / drag，wait / finish 为本地动作�
 - 板型、USB 接线、VBUS 供电、实际吞吐及内部 SRAM / PSRAM / 任务栈峰值未实测。云端镜像大小不是硬件内存水位。
 - iOS 离开前台会停止任务和连接。同机打开另一 App 可能终止控制过程；当前没有跨 App 后台持续执行能力。
 - iOS 的演示模式使用合成画面；协议 fixture、模拟 USB 对端和语法解析都不证明真实桥接成功。
-- App 的模型 API、SPM 依赖解算、Swift 类型检查、Xcode 构建、XCTest 与真机运行仍待完成。
+- App 已完成 SPM 解析和无签名 Simulator `build-for-testing`；18 项 XCTest 已编译但未执行。模型 API、界面启动及真机运行仍待完成，详见[最新编译验证](../ios-app/docs/IOS-BUILD-FIX.md)。
 - 两份工程尚未联调。App PSK 与 Apple 配对身份是不同材料，不能复用；本次没有生成或读取这些材料。
 
 ## 历史证据

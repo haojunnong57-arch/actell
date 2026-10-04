@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Source grammar/config/safety assertions. NOT a Swift compiler or iOS build."""
-import pathlib, plistlib, sys
+import json, pathlib, plistlib, sys
 import yaml
 from tree_sitter import Language, Parser
 import tree_sitter_swift
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 parser = Parser(Language(tree_sitter_swift.language()))
-files = sorted(ROOT.rglob('*.swift'))
+files = sorted(p for folder in ('PhoneAgent', 'PhoneAgentTests') for p in (ROOT / folder).rglob('*.swift'))
 errors = []
 for path in files:
     tree = parser.parse(path.read_bytes())
@@ -14,7 +14,9 @@ for path in files:
         errors.append(str(path.relative_to(ROOT)))
 assert not errors, f'Swift grammar errors: {errors}'
 project = yaml.safe_load((ROOT / 'project.yml').read_text())
-assert project['packages']['SwiftAgentKit']['revision'] == '84ddf324fd2a223834323537eb3f8746d669753b'
+assert project['packages']['SwiftAgentKit']['path'] == 'Vendor/SwiftAgentKit'
+upstream = json.loads((ROOT / 'Vendor/SwiftAgentKit/UPSTREAM.json').read_text())
+assert upstream['revision'] == '84ddf324fd2a223834323537eb3f8746d669753b'
 assert project['packages']['LLMProviderKit']['exactVersion'] == '0.1.0-alpha.35'
 assert 'PhoneAgentTests' in project['targets']
 plistlib.loads((ROOT / 'PhoneAgent/PrivacyInfo.xcprivacy').read_bytes())
@@ -43,4 +45,4 @@ assert 'guard await approve' in tools and 'image = nil' in tools
 assert 'requiresConfirmationEvenWhenAutonomous' not in tools # app-owned gate cannot be waived
 assert 'UIBackgroundModes' not in (ROOT / 'project.yml').read_text()
 print(f'PASS: {len(files)} Swift files parsed; project/plist/pins and source guardrail assertions checked')
-print('NOT RUN: Swift type-check, dependency resolution, Xcode, XCTest, Simulator, or device/TLS tests')
+print('This script does not perform Swift type-check, dependency resolution, Xcode, XCTest, Simulator, or device/TLS tests.')

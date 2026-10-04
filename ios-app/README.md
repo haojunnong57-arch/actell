@@ -1,8 +1,8 @@
-> **本地工程更新（2026-10-03 UTC）**：已提供 [PhoneAgent.xcodeproj](PhoneAgent.xcodeproj)，主 target Bundle ID 为 `com.ja1chen.PhoneAgent`。无需安装 XcodeGen。固定依赖已解析并生成真实 `Package.resolved`；完整 Simulator 构建目前被 Xcode 的 `SwiftAgentKitMacros` 信任检查阻断，不能标为构建通过。新增的状态/PiP 核心代码已通过 Apple SDK 类型检查。PiP 后台能力尚未获授权启用，目前仅前台预览。详见 [Xcode 与 PiP 实施记录](docs/XCODE-PIP.md)。下方旧验证段落保留交付时语境。
+> **本地工程更新（2026-10-04）**：已修复 SwiftAgentKit 的 iOS 不可用路径 API，以及选择具体模拟器时 App/依赖架构不一致的问题。Xcode 27 无签名 Simulator `build-for-testing` 成功：通用目标生成 arm64/x86_64，具体 iPhone 18 Pro / iOS 27 目标生成 arm64，均包含完整 App 和 18 项 XCTest 的编译。测试执行、界面启动和真机运行尚未验证。主 Bundle ID 为 `com.ja1chen.PhoneAgent`。PiP 后台能力仍未启用。详见[编译修复与验证](docs/IOS-BUILD-FIX.md)。
 
 # Phone Agent iOS · 0.1 source candidate
 
-轻量 iOS agent App 的第一版源码。**尚未使用 Xcode 编译、未安装到 iPhone，也未完成 ESP32 真机闭环。** 本包是可继续开发的源码交付，不是 IPA 或可宣称已运行的发行版。
+轻量 iOS agent App 的源码开发版。**已通过模拟器编译，未安装到 iPhone，也未完成 ESP32 真机闭环。** 本工程仍不是可宣称已运行验收的发行版。
 
 ## 已实现到源码的内容
 
@@ -23,40 +23,45 @@
 3. **模型/API 兼容性未实测。** 仅支持 Chat Completions 形状和原生 function calls；不是 Responses API。模型须支持图片和工具调用；不兼容参数会明确报错，不能冒充成功
 4. **计费上限不是金额硬上限。** 20,000 tokens 是服务实际报告后的停机门槛，当前请求可能已产生费用，缺失 usage 时无法完整统计。还有请求次数、输出 tokens 和运行时间上限
 5. **“完成”是模型 / 演示脚本报告并提交新截图后的状态。** 用户应核对结果。命令送达不能证明屏幕变化。普通坐标无法在本地可靠识别付款等后果；此版强制逐动作人工复核，高风险步骤应自行处理
-6. 本包不含个人截图、设备唯一标识、配对记录、证书私钥、API keys、下载的依赖源码或工具缓存
+6. 本工程不含个人截图、配对记录、证书私钥或 API keys；只将带来源及 MIT 许可证的 SwiftAgentKit 核心兼容快照纳入 `Vendor/`，其余下载依赖与工具缓存不纳入版本管理
 
 ## 打开工程与构建
 
-目标为 iOS 17+。SwiftAgentKit 的 package manifest 要求 Swift tools 6.2+；其宏依赖 SwiftSyntax 603 系列，建议使用与该版本匹配的当前 Xcode / Swift 6.3 工具链做第一次验收。App 自身使用 Swift 5 language mode + complete concurrency checking，减少 alpha 依赖迁移干扰。完整 SPM 解算仍待执行。
+目标为 iOS 17+。SwiftAgentKit 的 package manifest 要求 Swift tools 6.2+；本机使用 Xcode 27 / Swift 6.4 完成编译。App 自身使用 Swift 5 language mode + complete concurrency checking。SwiftAgentKit 使用仓库内兼容快照，两个远程依赖已解析并锁定。
 
 1. 用 Xcode 打开 `PhoneAgent.xcodeproj`，选择共享 scheme `PhoneAgent` 和 iOS Simulator。主 Bundle ID 固定为 `com.ja1chen.PhoneAgent`，不要改成随机 ID。
-2. Xcode 首次构建会要求信任固定版本 SwiftAgentKit 的编译期宏。尚未自动授予该信任；先核对提示，获授权后再继续构建。
+2. 等待 Xcode 解析依赖，再按 `⌘R`。若 Xcode 仍显示旧的远程 SwiftAgentKit 报错路径，关闭并重新打开工程，确认 SwiftAgentKit 指向 `Vendor/SwiftAgentKit`。本次未绕过宏验证或修改全局信任配置。
 3. 模拟器不需要选择 Team。真机签名、Team、App ID 注册和设备安装属于单独步骤，本次没有执行。
 4. PiP 状态预览默认关闭，在主界面主动开启。当前构建未增加后台模式，跨 App PiP 按钮禁用；不影响前台原型的展示。
 5. `project.yml` 保留为 XcodeGen 来源；也可以用 Python 标准库脚本重新生成同一工程，新增 Swift 源文件后运行：
 
 ```sh
 python3 scripts/generate_xcode_project.py
-# 已信任 SwiftAgentKitMacros 后，无签名构建：
+# 无签名编译 App 和测试（不启动模拟器）：
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   xcodebuild -project PhoneAgent.xcodeproj -scheme PhoneAgent \
-  -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+  -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath .build/VerifiedBuild \
   -clonedSourcePackagesDirPath .build/SourcePackages \
-  -scmProvider system -disablePackageRepositoryCache CODE_SIGNING_ALLOWED=NO build
+  -scmProvider system -disablePackageRepositoryCache -skipPackageUpdates \
+  CODE_SIGNING_ALLOWED=NO build-for-testing
 ```
 
-不要把源码打包状态误记成 Xcode build 成功。本次真实 dependency resolution 已生成 `PhoneAgent.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`，已随工程保存。
+不要添加全局 `-sdk iphonesimulator`：编译期宏需要在 Mac 上构建，Xcode 应根据 destination 分别选择平台。`build-for-testing` 只编译测试，不执行测试。真实解析产生的 `PhoneAgent.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved` 已随工程保存。
+
+Debug 使用 `ONLY_ACTIVE_ARCH = YES`，与 SPM 在具体模拟器上的架构选择一致；Release 保持 `NO`。
+没有硬编码 arm64 或排除 x86_64。模拟 Xcode 的具体设备构建时，可将 destination 替换为
+`platform=iOS Simulator,name=iPhone 18 Pro,OS=27.0`（按本机可用设备调整）。
 
 ## 依赖固定点与许可证
 
-- SwiftAgentKit：MIT，revision `84ddf324fd2a223834323537eb3f8746d669753b`
+- SwiftAgentKit：MIT，基于 revision `84ddf324fd2a223834323537eb3f8746d669753b` 的[本地核心快照](Vendor/SwiftAgentKit/README.md)，仅三个移动平台存储路径补丁
 - LLMProviderKit：MIT，exact tag `0.1.0-alpha.35`，本次实读 revision `f55aeb4d7a935b9f20c5c85d32cd21eb635ee38d`
 - 项目只链接 SwiftAgentKit core、LLMProviderKit core 与 OpenAI provider，没有链接 Mac / Simulator 驱动模块
 - 上游许可证保存在 `Licenses/`。TLS-PSK public API 参考 Apple 官方 TicTacToe sample 与 TN3213，见协议文档；本包未引入私有 iOS 控制 API
-- 上游仍处于 alpha；所有传递依赖未在本环境解算，不能宣称全依赖锁定或可重复构建已验证
+- SwiftSyntax：`603.0.2`；未使用的 MCP、桌面控制和示例 target 未纳入本地快照，当前解析图只有 LLMProviderKit 和 SwiftSyntax 两个远程包
 
-## 当前验证
+## 原始交付验证（历史）
 
 在 dot 自带 Linux 云环境执行，未切换到 Work/Codex 子任务、用户电脑或保存的编码环境：
 
