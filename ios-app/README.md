@@ -1,3 +1,5 @@
+> 本实验分支最低版本改为 **iOS 27**，新增系统全屏采集和 USB Device TCP 连接；主 Bundle ID 不变。见 [架构与限制](../docs/usb-device/ARCHITECTURE.md) 和 [验证记录](../docs/usb-device/VALIDATION.md)。下文 iOS 17 / Host TLS 路径说明是原始基线。Agent 仍然离开前台就停止，采集后台模式不等于后台控制闭环。
+
 > **本地工程更新（2026-10-04）**：已接入会话列表、会话页、真实流式回复、工具步骤/参数、单次批准/拒绝/停止及本地历史；执行层保留 SwiftAgentKit，工具展示选择性复用 ManifoldKit MIT 源码，Markdown 使用 MarkdownUI。会话 UI 与工具错误处理基于 `e183d6d` 扩展。实际编译、单元和 UI 验证见 [AGENT-UI-VALIDATION.md](docs/AGENT-UI-VALIDATION.md)，实现与开源复用清单见 [AGENT-UI.md](docs/AGENT-UI.md)。主 Bundle ID 固定 `com.ja1chen.PhoneAgent`，PiP 后台能力仍未启用。
 
 # Phone Agent iOS · 0.1 source candidate

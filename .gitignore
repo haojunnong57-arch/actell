@@ -12,3 +12,8 @@ __pycache__/
 *pairing_record*
 .env
 .DS_Store
+
+firmware-device/managed_components/
+firmware-device/sdkconfig
+firmware-device/sdkconfig.old
+firmware-device/build/

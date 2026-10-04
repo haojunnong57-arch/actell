@@ -23,10 +23,11 @@ struct SettingsView: View {
                         .font(.caption)
                     Button("删除当前地址的 API 密钥", role: .destructive) { model.deleteProviderKey() }
                 }
-                Section("实验桥接 · 独立 TLS-PSK") {
+                Section("实验桥接 · 独立 PSK") {
                     SecureField("32 字节随机 PSK 的 64 位十六进制", text: $psk).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Text("由你通过可信渠道在开发桥接设备中配置同一随机 PSK。不是 Apple 配对文件、证书或设备密码。App 不自动生成或传出密钥。TCP 端口 28765；固件 v0.3 尚不兼容。")
+                    Text("通过可信渠道给 USB Device 固件配置相同 PSK。USB TCP 28766 使用 HMAC 认证；旧 Host TLS 入口使用 28765。不是 Apple 配对文件、证书或设备密码。App 不自动生成或传出密钥。")
                         .font(.caption)
+                    Button("仅保存桥接 PSK") { model.saveUSBPSK(psk); psk = "" }.disabled(psk.isEmpty || model.running || model.stopping)
                     Button("删除桥接 PSK", role: .destructive) { model.deleteBridgeKey() }
                 }
                 Section("运行限制") {

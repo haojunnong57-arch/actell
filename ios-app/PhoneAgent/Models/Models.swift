@@ -35,6 +35,7 @@ struct FrameImage: Sendable {
     let height: Int
     let capturedAt: Date
     let isDemo: Bool
+    var capture: CaptureStamp? = nil
 }
 struct Approval: Identifiable, Sendable {
     let id = UUID()

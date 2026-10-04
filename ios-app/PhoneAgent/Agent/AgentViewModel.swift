@@ -20,6 +20,9 @@ struct AgentRunServices {
     @Published var stopping = false
     @Published var status = "离线演示不会联网，也不会控制真实设备"
     @Published var bridgeStatus = "真实桥接未启动"
+    let capture = ScreenCaptureController()
+    @Published var allowCapturedScreenUpload = false
+    private var usbClient: USBCommandClient?
     @Published var errorMessage: String?
     @Published var storageWarning: String?
     @Published private(set) var selectedConversationID: UUID?
@@ -53,6 +56,10 @@ struct AgentRunServices {
             catch { storageWarning = "旧任务记录未能读取；原文件保留" }
         }
         self.sessions = sessions ?? ConversationStore(legacy: legacy)
+        capture.onLoss = { [weak self] in
+            guard let self, self.usbClient != nil || self.running else { return }
+            self.stop(message: "系统采集已停止，输入已禁用")
+        }
         if loadPersistentState, let data = UserDefaults.standard.data(forKey: "providerSettings"), let saved = try? JSONDecoder().decode(ProviderSettings.self, from: data) { settings = saved }
     }
     @discardableResult func createConversation(mode: RunMode) -> UUID {
@@ -90,12 +97,20 @@ struct AgentRunServices {
         } catch { errorMessage = error.localizedDescription }
     }
     func deleteProviderKey() { do { try SecretStore.delete(settings.keyAccount); status = "当前模型地址的密钥已删除" } catch { errorMessage = error.localizedDescription } }
+    func saveUSBPSK(_ psk: String) {
+        guard !running, !stopping else { return }
+        do {
+            _ = try USBWire.key(psk)
+            try SecretStore.save(psk.lowercased(), account: "bridge-psk-v1")
+            status = "USB PSK 已保存到本机钥匙串"
+        } catch { errorMessage = Self.safeError(error) }
+    }
     func deleteBridgeKey() { stop(); do { try SecretStore.delete("bridge-psk-v1"); status = "桥接密钥已删除" } catch { errorMessage = error.localizedDescription } }
     func setForeground(_ active: Bool) {
         foreground = active
         // SwiftUI reports an initial inactive phase before the first foreground.
         // Do not turn an idle welcome state into a fictitious interrupted run.
-        if !active, running || listenerTask != nil || liveBridge != nil {
+        if !active, running || listenerTask != nil || liveBridge != nil || usbClient != nil {
             stop(message: "App 离开前台，已中断；返回后需手动重新开始", interrupted: true)
         }
     }
@@ -119,6 +134,33 @@ struct AgentRunServices {
         }
     }
     func disconnect() { stop(message: "桥接已断开；若有已发送动作，请核对设备") }
+    func connectUSB() {
+        guard foreground, !running, !stopping, listenerTask == nil else { return }
+        let operation = UUID(); listenerGeneration = operation
+        listenerTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.listenerGeneration == operation { self.listenerTask = nil } }
+            do {
+                guard let secret = try SecretStore.load("bridge-psk-v1") else { throw AppError.invalid("请先保存与 USB 固件相同的独立 PSK") }
+                await self.usbClient?.stop()
+                let client = USBCommandClient(); self.usbClient = client
+                try await client.connect(pskHex: secret)
+                try await client.command("PING")
+                guard self.listenerGeneration == operation, self.foreground, !Task.isCancelled else { await client.stop(); return }
+                self.bridgeStatus = await client.supportsHID ? "USB NCM + HID 已认证；屏幕控制尚需逐动作确认" : "USB NCM 双向 PING 已验证；固件未启用 HID"
+            } catch {
+                if self.listenerGeneration == operation { self.errorMessage = Self.safeError(error); self.usbClient = nil }
+            }
+        }
+    }
+    func stopCapture() { stop(); Task { await capture.stop() } }
+    func previewCapture() {
+        // Local-only preview; does not invoke the Agent or the model provider.
+        do {
+            let frame = try capture.frames.encoded()
+            latestFrame = PresentedFrame(step: StepIdentity(run: RunIdentity(conversationID: selectedConversationID ?? UUID(), runID: UUID()), stepID: "local-preview"), image: frame)
+        } catch { errorMessage = Self.safeError(error) }
+    }
     // Kept for Settings → Control Debug. Each explicit debug run has its own history.
     func start(resuming: Bool = false) {
         guard !running, !stopping else { return }
@@ -141,7 +183,16 @@ struct AgentRunServices {
             else {
                 guard let key = try SecretStore.load(settings.keyAccount) else { throw AppError.invalid("请在设置中保存当前模型地址的 API 密钥") }
                 let cloud = try PrivateVisionProvider(settings: settings, apiKey: key, limits: limits)
-                selectedBridge = liveBridge.map { $0 as any DeviceBridge } ?? UnavailableBridge()
+                if let usbClient {
+                    guard allowCapturedScreenUpload else { throw AppError.invalid("本次运行尚未允许将全屏截图发送给已配置的模型服务") }
+                    let usb = USBDeviceBridge(frames: capture.frames, transport: usbClient) { [weak self] in
+                        Task { @MainActor in
+                            guard self?.generation == token else { return }
+                            self?.stop(message: "采集或 USB 连接失效，输入已停止")
+                        }
+                    }
+                    selectedBridge = usb
+                } else { selectedBridge = liveBridge.map { $0 as any DeviceBridge } ?? UnavailableBridge() }
                 selectedProvider = cloud; provider = cloud
             }
         } catch {
@@ -187,6 +238,7 @@ struct AgentRunServices {
         }
         runTask = Task { [weak self, runner] in
             do {
+                if let usb = selectedBridge as? USBDeviceBridge { try await usb.arm() }
                 var callbacks = AgentCallbacks()
                 callbacks.afterTool = { [weak runner] _, result, _ in
                     if let runner, !result.images.isEmpty {
@@ -240,10 +292,11 @@ struct AgentRunServices {
         let oldListenerTask = listenerTask; listenerTask = nil
         runTask?.cancel(); watchdog?.cancel(); agent?.requestCancel(); provider?.cancel()
         approvalContinuation?.resume(returning: false); approvalContinuation = nil; approval = nil
-        let old = coordinator, oldBridge = bridge, oldLive = liveBridge, oldTask = runTask
+        let old = coordinator, oldBridge = bridge, oldLive = liveBridge, oldTask = runTask, oldUSB = usbClient
+        usbClient = nil; allowCapturedScreenUpload = false
         stopping = true
         Task {
-            await old?.stop(); await oldBridge?.stop(); await oldLive?.stop()
+            await old?.stop(); await oldBridge?.stop(); await oldLive?.stop(); await oldUSB?.stop()
             await oldListenerTask?.value
             await oldTask?.value
             stopping = false
@@ -305,6 +358,7 @@ struct AgentRunServices {
         }
     }
     private func end(_ phase: RunPhase, result: String, publishNotice: Bool = true) {
+        usbClient = nil; allowCapturedScreenUpload = false
         if let identity = runIdentity { sessions.finish(identity, phase: phase, summary: phase == .completed || !publishNotice ? "" : result) }
         runIdentity = nil
         watchdog?.cancel(); provider?.cancel(); running = false

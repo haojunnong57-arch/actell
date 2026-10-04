@@ -71,6 +71,19 @@ import XCTest
         XCTAssertTrue(app.staticTexts["最新截图"].exists)
         capture("06-control-debug")
     }
+    func testUSBScreenCaptureRemainsExplicitAndSimulatorReportsUnsupported() {
+        let app = launch()
+        XCTAssertTrue(app.buttons["设置"].waitForExistence(timeout: 10))
+        app.buttons["设置"].tap(); app.buttons["controlDebug"].tap()
+        XCTAssertTrue(app.segmentedControls.buttons["真实模型"].waitForExistence(timeout: 5))
+        app.segmentedControls.buttons["真实模型"].tap()
+        XCTAssertTrue(app.buttons["connectUSBNCM"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["此 Simulator SDK 不含 ScreenCaptureKit；需 iOS 27 真机授权"].exists)
+        XCTAssertEqual(app.switches["screenUploadConsent"].value as? String, "0")
+        XCTAssertFalse(app.buttons["仅在本机预览截图"].isEnabled)
+        XCTAssertFalse(app.buttons["startScreenCapture"].isEnabled)
+        capture("usb-capture-simulator-unavailable")
+    }
     private func pendingDemo(_ app: XCUIApplication) {
         XCTAssertTrue(app.staticTexts["新会话"].waitForExistence(timeout: 10))
         app.staticTexts["新会话"].tap()

@@ -76,7 +76,15 @@ actor ActionCoordinator {
             usedDeviceTools = true
             let frame = try await bridge.screenshot(); try checkActive(); image = frame
             await onImage(frame, callID); await onReceipt(frame.isDemo ? "演示截图已更新" : "PNG 已校验并更新；图像将发送给已确认的模型服务")
-            let receipt = try JSONSerialization.data(withJSONObject: ["image_id": frame.id, "width": frame.width, "height": frame.height, "is_demo": frame.isDemo])
+            var metadata: [String: Any] = ["image_id": frame.id, "width": frame.width, "height": frame.height, "is_demo": frame.isDemo]
+            if let capture = frame.capture {
+                metadata["sequence"] = capture.sequence
+                metadata["captured_at"] = frame.capturedAt.timeIntervalSince1970
+                metadata["presentation_seconds"] = capture.presentationSeconds
+                metadata["source_width"] = capture.width; metadata["source_height"] = capture.height
+                metadata["video_orientation"] = capture.videoOrientation
+            }
+            let receipt = try JSONSerialization.data(withJSONObject: metadata)
             return .success(toolCallId: callID, toolName: name, result: String(data: receipt, encoding: .utf8)!, images: [LLMImage(data: frame.png)])
         case "tap", "drag":
             if let inputFailureMessage { throw AppError.unavailable(inputFailureMessage) }
