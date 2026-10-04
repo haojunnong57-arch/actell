@@ -1,34 +1,67 @@
-# PA2 本地 USB TCP 协议（免 PSK）
+# PA3 本地 USB TCP 协议（免 PSK、连接跨任务复用）
 
-2026-10-04 用户选择 USB 免 PSK，并接受可访问 USB 网络的其他程序也能发命令。PA2 不认证设备或客户端身份，不验签、不加密；不提供跨连接的密码学防重放。App 不读取桥接 Keychain，设备不访问 `pa_usb/psk`，无默认密钥、NVS 配置、eFuse 写入或安全启动设置。旧 Host TLS PSK 与模型 API key 独立保留。
+PA3 同时更新 App 与 ESP32 固件，不兼容或回退 PA1/PA2。停止任务只释放 HID，TCP 继续用于 PING 和下一轮任务。升级和验证见 [USB 常连](PERSISTENT-USB.md)。
 
-ASCII，单行 LF 结束；接收缓冲上限 256 字节、命令正文上限 128 字节。端口 28766，服务端仅绑定 192.168.7.1。App 按本地 `192.168.7.2/24` 查找唯一符合链路条件的接口，校验名称、索引及类型后，通过 `requiredInterface` 和 `requiredLocalEndpoint` 绑定；不回退到无线或无绑定连接，详见 [接口绑定验证](NO-PSK.md#vpn-对比与具体接口绑定--2026-10-04)。参数使用无前导零的非负十进制整数。大小写与空格必须精确。
+用户已选择 USB 免 PSK，并接受能访问 USB 网络的其他程序也能发命令。协议不认证身份、不验签、不加密；没有跨连接的密码学防重放。App 不读取 USB 密钥，设备不访问 NVS，无默认密钥、eFuse 或安全启动修改。旧 Host TLS PSK 与模型 API key 独立保留。
+
+## 连接与格式
+
+服务端仅绑定 `192.168.7.1:28766`。App 按本地 `192.168.7.2/24` 查找唯一符合链路条件的接口，并通过 `requiredInterface` 和 `requiredLocalEndpoint` 绑定；不回退到无线或无绑定连接。详见 [接口绑定验证](NO-PSK.md#vpn-对比与具体接口绑定--2026-10-04)。
+
+ASCII、LF 结尾，接收缓冲上限 256 字节、命令正文上限 128 字节。参数是无前导零的非负十进制整数，大小写与空格精确匹配。
 
 ```text
-S -> C: PA2 READY H\n
-C -> S: 1 PING\n
-S -> C: 1 executed\n
+S -> C: PA3 READY 1
+C -> S: 1 PING
+S -> C: 1 executed
 ```
 
-`H=0` 仅 NCM、`H=1` 包含 HID。客户端等待 greeting 最多 3 秒，再用 PING 验证双向收发。READY 只是对端自报能力，不能证明身份。App 与固件需同时更新；旧 `PA1 LOCKED` / `PA1 CHALLENGE` greeting 会明确报协议不匹配，设备拒绝旧 AUTH 和带签名的命令，不自动兼容或回退。
+`READY 0` 为 NCM-only，`READY 1` 表示固件包含 HID。App 等待 greeting 最多 3 秒，再明确 PING 验证双向收发。能力自报不证明身份或实际输入效果。
 
-命令正文与 ACK 均直接以 LF 结束，没有签名字段：
-
-| 命令 | 条件 | ACK |
+| 命令 | 条件 | 回执 |
 | --- | --- | --- |
-| `id PING` | TCP 已连接 | `id executed`，仅表示协议往返/续租 |
-| `id TAP x y` | HID 就绪、750 ms 内有 PING、无另一输入 | `id received` → `id executed` |
-| `id DRAG x y tx ty duration` | 同上，100…2000 ms | `id received` → `id executed` |
-| `id STOP` | TCP 已连接 | 释放完成后 `id executed`，并关闭连接 |
+| `id PING` | TCP 已连接 | `id executed` |
+| `id TAP generation x y` | 当前输入代号、HID 就绪、750 ms 内有 PING、无另一输入/释放 | `id received` → `id executed`，或 `id cancelled` |
+| `id DRAG generation x y tx ty duration` | 同上，duration 为 100…2000 ms | 同上 |
+| `id STOP generation` | 当前输入代号、无另一释放 | HID 释放完成后 `id executed`；保留 TCP |
 
-`id` 范围 1…4294967295，坐标 0…65535，基于已经旋转到显示方向的图像；画面 ID 不传给 S3，由 iOS ActionCoordinator + USBDeviceBridge 校验。本 App 仍逐动作批准并核实画面；其他客户端可以直接调用设备协议，固件无法证明人工批准或屏幕内容。免 PSK 不取消 iOS 本地网络和全屏采集系统权限。
+`id` 和 `generation` 为 1…4294967295；坐标为 0…65535，基于已旋转到显示方向的图像。图片 ID 不传给 S3，也不是模型动作参数。USB 普通动作由用户开始任务时授权；固件无法验证屏幕内容或人工授权。
 
-两种 ACK 必须严格解析并关联原 id。tap/drag 的 executed 不得先于 received。App 一次只发送一个输入；并发 PING 使用独立 id。输入不自动重试，丢失 executed 的结果标为未知并停止。设备按 TCP session 保留有界去重记录；相同 id/参数返回已有阶段，冲突或过期 id 关闭连接。重连从空记录开始，不自动恢复旧动作；其他程序仍可在新连接重新发送相同明文命令。
+## 输入代号与停止
 
-非 ASCII/超长行、格式错误、越界参数、重复冲突、过期 id、HID 未启用、操作忙、缺少心跳：立即关闭并释放，不把拒绝伪装成 executed。32 条缓存不会逐出尚未完成的输入。每条新连接首次输入前必须先 PING；动作期间 PING 间隔超过 750 ms 撤销，动作总时限 2500 ms。非活动会话 60 秒关闭。
+每条新 TCP 连接的输入代号从 1 开始。App 为每轮任务取得一个连接内的输入会话；停止后旧会话不可用于新任务。该代号只由 App/固件管理，不暴露给模型，也不具有图片过期语义。
 
-received 表示已接受且尚未完成 USB 报告序列；executed 表示该序列的最终鼠标释放报告 transfer completion 已到达。无法证明 iOS 已改变界面，因此 Agent 必须读取 ACK 后到达的新帧。STOP 还发送键盘全零报告。
+首个有效 `STOP generation` 立即撤销该代号，将固件代号递增并开始释放鼠标、键盘；固定其命令 ID 和 500 ms 释放期限。App 等 STOP 的 executed 后才使用下一代号。代号溢出关闭连接，不回绕。
 
-不支持发现、自动重连、队列恢复、多客户端控制或任意二进制 payload。loopback 测试仅替换平台/USB 层；生产解析、socket 状态机、幂等表和 HID 时序代码直接参与测试，没有凭据夹具，不模拟 USB 总线驱动。
+释放期间继续读取 TCP：PING 正常回复，新的输入或 STOP 返回 cancelled（包括猜测下一代号的命令），不能重启释放或覆盖首个 STOP。相同 ID/参数的待完成 STOP 不提前回复 received；释放后重复该 STOP 只返回已缓存 executed，不再次递增代号。
 
-已知限制：此前审计发现连续不同 id 的 STOP 可能覆盖待回执的 STOP id；本次免 PSK 变更没有修复该问题。单 STOP 释放/终止已测，重复 STOP 竞争仍需在 HID 真机验收前单独修复和回归。
+若 STOP 中断了正在执行的输入，确认 HID 已释放后，先返回该输入的 cancelled，再返回 STOP 的 executed。中断的动作可能已经部分执行，cancelled **不代表从未产生输入**。没有启动的旧代号/忙碌/缺心跳/无 HID 命令则直接 cancelled。
+
+```text
+C -> S: 2 DRAG 1 100 200 300 400 1000
+S -> C: 2 received
+C -> S: 3 STOP 1
+S -> C: 2 cancelled
+S -> C: 3 executed
+C -> S: 4 PING
+S -> C: 4 executed
+C -> S: 5 TAP 2 100 200
+S -> C: 5 received
+S -> C: 5 executed
+```
+
+## 回执、取消与幂等
+
+- received 只表示接受了输入；executed 表示最终释放报告的 USB transfer completion 已到达。不能据此证明 iOS 界面已改变，Agent 仍需取得 ACK 后到达的新帧。
+- 输入可以直接 cancelled，或 received 后 cancelled；不能先 executed 后 received。STOP 只有最终 executed/cancelled，PING 只有 executed。
+- 命令 ID 在整条 TCP 连接内递增，不随任务结束复位。32 条缓存跨任务保留，相同 ID/参数返回已有阶段；同 ID 不同参数、已逐出 ID、尚未完成回执将被覆盖等情况关闭连接。generation 也参与参数比较。
+- App 不自动重发输入。单条请求取消仅结束调用方等待，保留其回执槽以消费迟到 ACK；输入取消还会触发本轮 STOP。缺失 ACK 的真实超时仍关闭连接，避免将结果未知误报为成功。
+- STOP 占用预留请求槽，重复停止共享一次释放任务；旧任务的清理回调不能停止下一代输入。
+
+## 连接关闭边界
+
+任务结束/取消、采集丢失、画面不匹配、锁屏等 App 事件撤销任务输入并释放 HID，成功后保留 TCP。只有用户明确断开或真实通信/协议/释放故障关闭连接。App 单独持有每 200 ms 一次的 PING 循环，任务桥只检查健康，不重复发送心跳。
+
+固件仍在 USB 总线失效/换代、socket EOF/错误、非法行或命令、回执冲突/缓存失效、100 ms 发送期限耗尽、60 秒未收到新命令时关闭。活动输入期间 PING 超过 750 ms 或动作超过 2500 ms，也释放并关闭；STOP 释放超过 500 ms 不返回成功。App 普通命令 ACK 等待 1 秒、DRAG 3 秒；无法确认 STOP 时关闭 TCP 并提示核对设备。
+
+不支持自动重连、旧动作恢复、多客户端控制、发现或任意二进制 payload。PA3 的本机 TCP 回归直接编译生产解析、socket 状态机和幂等代码，仅替换平台/USB 层；它不等于真实 USB 总线与 iPhone 控制验证。

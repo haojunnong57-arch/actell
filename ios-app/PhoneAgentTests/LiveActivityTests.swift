@@ -6,7 +6,7 @@ import Combine
     private let run = RunIdentity(conversationID: UUID(), runID: UUID())
     private func request() throws -> Approval {
         Approval(tool: "tap", detail: "Sensitive purpose", imageID: "private-screen", callID: "call-1",
-                 parametersDigest: try ApprovalRecordStore.digest(tool: "tap", parameters: ["x": 3, "y": 7, "based_on_image_id": "private-screen", "purpose": "Sensitive purpose"]))
+                 parametersDigest: try ApprovalRecordStore.digest(tool: "tap", parameters: ["x": 3, "y": 7, "purpose": "Sensitive purpose"]))
     }
     private func directory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -27,6 +27,20 @@ import Combine
         XCTAssertThrowsError(try store.claimExecution(callID: "call-1", run: run))
         try store.finish(callID: "call-1", run: run)
         XCTAssertEqual(store.record(id: request.id)?.state, .finished)
+    }
+    func testTaskGrantIsRecordedAndCannotBeReusedAfterCancellationOrRestart() throws {
+        let dir = try directory(), store = ApprovalRecordStore(directory: dir), request = try request()
+        try store.register(request, run: run, authorizationMode: .task)
+        try store.resolve(request, run: run, approved: true)
+        XCTAssertEqual(store.record(id: request.id)?.authorizationMode, .task)
+        try store.claimExecution(callID: "call-1", run: run)
+        XCTAssertThrowsError(try store.claimExecution(callID: "call-1", run: run))
+        let restored = ApprovalRecordStore(directory: dir)
+        XCTAssertEqual(restored.record(id: request.id)?.authorizationMode, .task)
+        XCTAssertEqual(restored.record(id: request.id)?.state, .interrupted)
+        XCTAssertThrowsError(try restored.claimExecution(callID: "call-1", run: run))
+        try store.invalidate(run: run)
+        XCTAssertThrowsError(try store.claimExecution(callID: "call-1", run: run))
     }
     func testWrongRunParametersVersionAndExpiryCannotAuthorize() throws {
         let store = ApprovalRecordStore(inMemory: true), request = try request()
@@ -189,19 +203,21 @@ import Combine
         XCTAssertEqual(model.approval?.callID, "next-action")
         XCTAssertEqual(model.approvalRecords.record(id: old.id)?.state, .pending)
     }
-    func testExpiredScreenshotApprovalAutomaticallyCancelsWithoutSending() async throws {
-        let bridge = NearExpiryBridge()
+    func testOldScreenshotDoesNotExpireApprovalAndCanCompleteAfterConfirmation() async throws {
+        let bridge = OldScreenshotBridge()
         let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
                                   runServices: AgentRunServices(provider: DemoProvider(), bridge: bridge))
+        defer { model.stop() }
         let id = model.createConversation(mode: .demo)
-        XCTAssertTrue(model.send("expiry", in: id))
+        XCTAssertTrue(model.send("old screenshot", in: id))
         try await waitUntil { model.approval != nil }
+        XCTAssertGreaterThan(try XCTUnwrap(model.approval).expiresAt.timeIntervalSinceNow, 40)
+        model.approve(true)
         try await waitUntil { !model.running && !model.stopping }
         XCTAssertNil(model.approval)
-        XCTAssertEqual(model.activitySnapshot?.state.phase, .interrupted)
+        XCTAssertEqual(model.activitySnapshot?.state.phase, .completed)
         let taps = await bridge.taps
-        XCTAssertEqual(taps, 0)
-        XCTAssertTrue(model.sessions.conversation(id)?.messages.last?.text.contains("过期") == true)
+        XCTAssertEqual(taps, 1)
     }
     func testDenyAndStopRemainDistinctTerminalStates() async throws {
         let denied = try await pendingDemo(), stopped = try await pendingDemo()
@@ -212,13 +228,13 @@ import Combine
     }
 }
 
-private actor NearExpiryBridge: DeviceBridge {
+private actor OldScreenshotBridge: DeviceBridge {
     private let demo = DemoBridge()
     private(set) var taps = 0
     func screenshot() async throws -> FrameImage {
         let frame = try await demo.screenshot()
         return FrameImage(id: frame.id, png: frame.png, width: frame.width, height: frame.height,
-                          capturedAt: Date().addingTimeInterval(-43.5), isDemo: true)
+                          capturedAt: Date().addingTimeInterval(-3_600), isDemo: true)
     }
     func tap(x: Int, y: Int, imageID: String) async throws { taps += 1 }
     func drag(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMS: Int, imageID: String) async throws { XCTFail("Unexpected drag") }

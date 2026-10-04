@@ -60,7 +60,7 @@ final class ScreenSampleSink: NSObject, SCStreamOutput, @unchecked Sendable {
             reject(status == .stopped ? "stopped" : (status == .blank ? "blank" : "suspended"))
             frames.invalidate(epoch: epoch); onLoss(status == .stopped); return
         }
-        // .started can contain the first valid frame. Idle never renews freshness.
+        // .started can contain the first valid frame. Idle retains the existing sample.
         guard status == .complete || status == .started else { reject("idle"); return }
         guard let pixel = CMSampleBufferGetImageBuffer(buffer) else { reject("missingPixelBuffer"); return }
         let metadata = CaptureSampleMetadata.videoOrientation(in: buffer, key: SCStreamFrameInfo.videoOrientation.rawValue)

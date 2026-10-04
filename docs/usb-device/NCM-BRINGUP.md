@@ -1,3 +1,5 @@
+> 当前源码已升级为 [PA3 常连](PERSISTENT-USB.md)：停止任务释放 HID 并保留 TCP，App 与固件必须同时更新。本文 PA1/PA2 构建、烧录和测试结果是历史记录；PA3 已完成 COM 烧录和启动检查，iPhone 端仍待验收，见该升级说明。
+
 # NCM-only 首次 COM 烧录 · 2026-10-04
 
 18:47（Asia/Shanghai）完成烧录。用户已确认仅 COM 接 Mac、原生 USB 口留空，并明确批准替换当前诊断固件为准备好的 NCM-only 镜像。烧录阶段没有连接 iPhone，没有烧录 HID、配置 PSK或修改 App 签名。随后用户报告 iPhone 设置中已出现以太网接口，枚举识别获得用户侧确认。
@@ -35,4 +37,4 @@ be0bfa5782e695cd8684573a90b794d5fb92c756c5a345e043ebe34f57d90a6a
 
 用户已报告固定 IP 配置完成；S3 为 `192.168.7.1`。首次烧录时 PA1 服务为 `LOCKED`。随后用户明确选择 **USB 免 PSK**，因此不再配置双方密钥；2026-10-04 19:34 已获明确授权并完成 PA2 NCM-only 的 COM 烧录和启动检查，详见 [NO-PSK.md](NO-PSK.md)。配套 App 尚待更新，PA2 的 iPhone PING 尚未验证。此阶段不启动 Agent、不上传屏幕；旧 Host 桥接 Keychain 和模型 API 密钥不变。
 
-已知并发 STOP 回执覆盖问题尚未修复；当前 NCM-only 无 HID 控制能力。本次成功不作为 NCM+HID 验收，HID 联调前须完成相关修复和回归。
+首次烧录时并发 STOP 回执覆盖问题尚未修复；后续已完成修复、18 项 TCP 回归与两版固件构建，23:03 经用户明确批准完成 NCM+HID COM 烧录及启动检查，见 [HID 烧录与联调](HID-BRINGUP.md)。设备当前已更换为 HID 版，iPhone 上的复合枚举和真实输入仍待验收。

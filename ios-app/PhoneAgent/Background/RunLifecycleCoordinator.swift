@@ -242,7 +242,12 @@ struct RunCheckpoint: Codable, Equatable {
                 checkpoint?.tools[i].delivery = .failed
                 activeToolBackgroundCapable = true; saveOrPause()
             }
-        } else { activeToolBackgroundCapable = true; saveOrPause() }
+        } else {
+            if let i = checkpoint?.tools.firstIndex(where: { $0.callID == callID }), checkpoint?.tools[i].delivery == .prepared {
+                checkpoint?.tools[i].delivery = .failed
+            }
+            activeToolBackgroundCapable = true; saveOrPause()
+        }
     }
     func waitForApproval(callID: String, generation: UUID) throws {
         guard ownsRun, checkpoint?.generation == generation, checkpoint?.phase == .running,

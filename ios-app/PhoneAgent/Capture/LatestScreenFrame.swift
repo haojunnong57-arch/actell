@@ -11,10 +11,6 @@ struct CaptureStamp: Sendable, Equatable {
     let width: Int
     let height: Int
     let videoOrientation: UInt32
-    func isFresh(now: TimeInterval, maximumAge: TimeInterval = 2) -> Bool {
-        let age = now - uptime
-        return age >= 0 && age <= maximumAge
-    }
 }
 
 struct CaptureDiagnostics: Sendable {
@@ -158,10 +154,10 @@ final class LatestScreenFrame: @unchecked Sendable {
         } while ProcessInfo.processInfo.systemUptime < deadline
         throw AppError.unavailable("等待有效采集画面超时。\(diagnostics().summary)。请复制诊断日志检查接收状态。")
     }
-    func latestStamp(now: TimeInterval = ProcessInfo.processInfo.systemUptime) throws -> CaptureStamp {
+    func latestStamp() throws -> CaptureStamp {
         try lock.withLock {
-            guard accepting, let stamp = frame?.1, stamp.isFresh(now: now) else {
-                throw AppError.unavailable("屏幕采集已停止或超过 2 秒未更新；输入已禁用")
+            guard accepting, let stamp = frame?.1 else {
+                throw AppError.unavailable("屏幕采集已停止或尚未提供画面；输入已禁用")
             }
             return stamp
         }
@@ -172,13 +168,12 @@ final class LatestScreenFrame: @unchecked Sendable {
             return epoch
         }
     }
-    func requireSession(_ expected: UUID, now: TimeInterval) throws {
-        try withSession(expected, now: now) {}
+    func requireSession(_ expected: UUID) throws {
+        try withSession(expected) {}
     }
-    func withSession(_ expected: UUID, now: TimeInterval, sequence: UInt64? = nil, _ action: () -> Void) throws {
+    func withSession(_ expected: UUID, _ action: () -> Void) throws {
         try lock.withLock {
-            guard accepting, epoch == expected, frame?.1.isFresh(now: now) == true,
-                  sequence == nil || frame?.1.sequence == sequence else { throw AppError.stopped }
+            guard accepting, epoch == expected, frame != nil else { throw AppError.stopped }
             action()
         }
     }
@@ -186,8 +181,7 @@ final class LatestScreenFrame: @unchecked Sendable {
                  maxDimension: Int = 1280) throws -> FrameImage {
         let snapshot = try lock.withLock { () throws -> (CVPixelBuffer, CaptureStamp, Date, UUID) in
             guard accepting, let (pixel, stamp, date) = frame,
-                  stamp.sequence > sequence, stamp.uptime > uptime,
-                  stamp.isFresh(now: ProcessInfo.processInfo.systemUptime) else { throw AppError.unavailable("等待动作之后的新画面") }
+                  stamp.sequence > sequence, stamp.uptime > uptime else { throw AppError.unavailable("等待动作之后的新画面") }
             return (pixel, stamp, date, epoch)
         }
         let (pixel, stamp, date, capturedEpoch) = snapshot
@@ -202,7 +196,7 @@ final class LatestScreenFrame: @unchecked Sendable {
         CGImageDestinationAddImage(png, cgImage, nil)
         guard CGImageDestinationFinalize(png) else { throw AppError.unavailable("PNG 编码失败") }
         try lock.withLock {
-            guard accepting, epoch == capturedEpoch, stamp.isFresh(now: ProcessInfo.processInfo.systemUptime) else { throw AppError.stopped }
+            guard accepting, epoch == capturedEpoch else { throw AppError.stopped }
         }
         return FrameImage(id: "sck-\(capturedEpoch.uuidString)-\(stamp.sequence)", png: data as Data,
                           width: cgImage.width, height: cgImage.height, capturedAt: date, isDemo: false, capture: stamp)

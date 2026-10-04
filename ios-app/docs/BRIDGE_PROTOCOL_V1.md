@@ -2,6 +2,8 @@
 
 Status: implemented on the iOS **source** side; neither iOS compilation nor TLS/usbmux/hardware interoperability has been run. ESP32 bridge firmware v0.3 does **not** implement this application channel. Agreement on this document is not evidence of a working device-control loop.
 
+The `based_on_image_id` fields below are retained only for this legacy Host wire protocol. They are supplied internally by the App; model-facing tap/drag tools no longer accept or require an image identifier. USB NCM/HID uses PA2 and has no image field.
+
 ## Transport and trust
 
 - iOS App owns `NWListener`, TCP port **28765**, foreground only. The future ESP32 USB host opens an Apple usbmux connection to this device port. No Mac is required by this proposed runtime route, but that route has not been validated on a device.

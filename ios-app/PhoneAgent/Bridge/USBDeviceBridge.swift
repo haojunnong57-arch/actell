@@ -1,5 +1,15 @@
 import Foundation
-import CryptoKit
+
+enum USBBridgeStopReason: String, Error, Sendable {
+    case sessionInvalid, screenshotTimeout, inputFailed
+    var message: String {
+        switch self {
+        case .sessionInvalid: return "采集会话、画面或 USB 心跳已失效，本轮已停止"
+        case .screenshotTimeout: return "等待有效截图超时，本轮输入已停止"
+        case .inputFailed: return "USB 动作未完成确认，本轮已停止；请核对设备"
+        }
+    }
+}
 
 actor USBDeviceBridge: DeviceBridge {
     nonisolated let executionContext: ScreenUSBExecutionContext?
@@ -12,66 +22,113 @@ actor USBDeviceBridge: DeviceBridge {
     private var monitor: Task<Void, Never>?
     private var inputInFlight = false
     private var approvedImageID: String?
-    private let onLoss: @Sendable () -> Void
+    private var inputSession: USBInputSession?
+    private var openingSession: Task<USBInputSession, Error>?
+    private var stopTask: Task<Void, Never>?
+    private let diagnostics: USBDiagnosticsLog?
+    private let onLoss: @Sendable (USBBridgeStopReason) -> Void
     init(frames: LatestScreenFrame, transport: any USBCommandTransport,
-         context: ScreenUSBExecutionContext? = nil, onLoss: @escaping @Sendable () -> Void = {}) {
+         context: ScreenUSBExecutionContext? = nil, diagnostics: USBDiagnosticsLog? = nil,
+         onLoss: @escaping @Sendable (USBBridgeStopReason) -> Void = { _ in }) {
         self.frames = frames; self.transport = transport; self.onLoss = onLoss
-        executionContext = context
+        executionContext = context; self.diagnostics = diagnostics
     }
     nonisolated func cancelTransport() { executionContext?.revoke() }
-    func supportsBackgroundExecution(tool: String) -> Bool { executionContext?.backgroundEnabled == true }
-    func approvalContext(imageID: String) throws -> String {
+    func supportsBackgroundExecution(tool: String) async -> Bool { executionContext?.backgroundEnabled == true }
+    func approvalContext(imageID: String) async throws -> String {
         guard !stopped, image?.id == imageID else { throw AppError.stopped }
         try executionContext?.requireHealthy()
         return try frames.sessionID().uuidString
     }
-    func acceptApproval(imageID: String) throws {
+    func acceptApproval(imageID: String) async throws {
         guard !stopped, image?.id == imageID else { throw AppError.stopped }
         try executionContext?.requireForegroundApproval()
+        _ = try await requireInputSession()
+        guard !stopped else { throw AppError.stopped }
         approvedImageID = imageID
     }
-    func arm() throws {
+    func authorizeTaskInput(imageID: String) async throws {
+        guard !stopped, image?.id == imageID, let context = executionContext else { throw AppError.stopped }
+        diagnostics?.record("input.authorization.begin mode=task \(context.diagnosticSummary)")
+        // The task-start grant applies in PhoneAgent and other apps. Scene,
+        // pixel changes and frame age do not invalidate that grant.
+        try context.requireHealthy()
+        _ = try await requireInputSession()
+        guard !stopped else { throw AppError.stopped }
+        approvedImageID = imageID
+        diagnostics?.record("input.authorization.ready mode=task epoch=\(inputSession?.generation ?? 0)")
+    }
+    private func requireInputSession() async throws -> USBInputSession {
+        guard !stopped else { throw AppError.stopped }
+        if let inputSession { return inputSession }
+        let opening: Task<USBInputSession, Error>
+        if let openingSession { opening = openingSession }
+        else {
+            opening = Task { try await transport.openInputSession() }
+            openingSession = opening
+        }
+        let session = try await opening.value
+        guard !stopped else { await transport.stopInputs(session); throw AppError.stopped }
+        inputSession = session; openingSession = nil
+        return session
+    }
+    func arm() async throws {
         if executionContext == nil { _ = try frames.latestStamp() }
         try executionContext?.requireHealthy()
         guard !stopped else { throw AppError.stopped }
+        _ = try await requireInputSession()
         monitor?.cancel()
         monitor = Task { [weak self] in
             while !Task.isCancelled {
-                do { try await self?.heartbeat(); try await Task.sleep(nanoseconds: 200_000_000) }
-                catch { if !Task.isCancelled { await self?.lost() }; return }
+                do { try await self?.checkHealth(); try await Task.sleep(nanoseconds: 200_000_000) }
+                catch { if !Task.isCancelled { await self?.lost(error as? USBBridgeStopReason ?? .sessionInvalid) }; return }
             }
         }
     }
-    private func heartbeat() async throws {
-        guard !stopped else { throw AppError.stopped }
-        if executionContext == nil { _ = try frames.latestStamp() }
-        try executionContext?.requireHealthy()
-        try await transport.command("PING")
+    private func checkHealth() throws {
+        do {
+            guard !stopped else { throw AppError.stopped }
+            if executionContext == nil { _ = try frames.latestStamp() }
+            try executionContext?.requireHealthy()
+        } catch { throw USBBridgeStopReason.sessionInvalid }
     }
-    private func lost() async { guard !stopped else { return }; await stop(); onLoss() }
+    private func lost(_ reason: USBBridgeStopReason) async {
+        guard !stopped else { return }
+        // STOP may await a device ACK. Keep the originating failure visible if
+        // the lifecycle/watchdog observes revocation before onLoss is delivered.
+        executionContext?.revoke(message: reason.message)
+        diagnostics?.record("bridge.stop reason=\(reason.rawValue) \(executionContext?.diagnosticSummary ?? frames.diagnostics().summary)")
+        await stop(); onLoss(reason)
+    }
     func screenshot() async throws -> FrameImage {
         guard !stopped else { throw AppError.stopped }
-        let deadline = ProcessInfo.processInfo.systemUptime + (executionContext?.backgroundEnabled == true ? 15 : 2)
+        let started = ProcessInfo.processInfo.systemUptime
+        diagnostics?.record("screenshot.begin \(executionContext?.diagnosticSummary ?? "context=none")")
+        let deadline = started + (executionContext?.backgroundEnabled == true ? 15 : 2)
         repeat {
             try Task.checkCancellation()
             guard !stopped else { throw AppError.stopped }
-            var transitionTime: TimeInterval = 0
+            var observation: ScreenUSBExecutionContext.Observation?
             if let context = executionContext {
-                guard let scope = try context.observation() else {
+                // Reading the App's stream is valid in the foreground too.
+                // Input is also allowed in PhoneAgent under the task grant.
+                guard let scope = try context.captureObservation() else {
                     try await Task.sleep(nanoseconds: 40_000_000); continue
                 }
-                transitionTime = scope.after
+                observation = scope
             }
-            if let frame = try? frames.encoded(after: barrierSequence, notBefore: max(barrierTime, transitionTime)) {
+            if let frame = try? frames.encoded(after: barrierSequence, notBefore: max(barrierTime, observation?.after ?? 0)) {
                 // A scene transition during PNG encoding invalidates this observation.
                 if let context = executionContext {
-                    guard let scope = try context.observation(), frame.capture!.uptime > scope.after else { continue }
+                    guard let current = try context.captureObservation(), current.revision == observation?.revision,
+                          frame.capture!.uptime > current.after else { continue }
                 }
+                diagnostics?.record("screenshot.ready sequence=\(frame.capture?.sequence ?? 0) elapsedMs=\(Int((ProcessInfo.processInfo.systemUptime - started) * 1000)) \(executionContext?.diagnosticSummary ?? "context=none")")
                 approvedImageID = nil; image = frame; return frame
             }
             try await Task.sleep(nanoseconds: 40_000_000)
         } while ProcessInfo.processInfo.systemUptime < deadline
-        await lost(); throw AppError.unavailable("采集没有返回新画面，输入已停止")
+        await lost(.screenshotTimeout); throw AppError.unavailable(USBBridgeStopReason.screenshotTimeout.message)
     }
     func tap(x: Int, y: Int, imageID: String) async throws {
         try await input("TAP \(x) \(y)", coordinates: [x, y], imageID: imageID)
@@ -84,48 +141,35 @@ actor USBDeviceBridge: DeviceBridge {
     private func input(_ body: String, coordinates: [Int], imageID: String) async throws {
         try Task.checkCancellation()
         guard !stopped, !inputInFlight, coordinates.allSatisfy({ (0...65535).contains($0) }),
-              let approved = image, approved.id == imageID, let stamp = approved.capture else { throw AppError.stopped }
-        let latest = try frames.latestStamp()
-        guard stamp.isFresh(now: ProcessInfo.processInfo.systemUptime, maximumAge: executionContext?.backgroundEnabled == true ? 45 : 5),
-              stamp.videoOrientation == latest.videoOrientation, stamp.width == latest.width, stamp.height == latest.height else {
-            await lost(); throw AppError.unavailable("批准画面已过期或方向改变，请重新采集并确认")
-        }
+              let approved = image, approved.id == imageID, approved.capture != nil else { throw AppError.stopped }
         guard executionContext == nil || approvedImageID == imageID else { throw AppError.stopped }
+        let session = try await requireInputSession()
+        guard !stopped, !inputInFlight, image?.id == imageID else { throw AppError.stopped }
         image = nil; approvedImageID = nil; inputInFlight = true
         defer { inputInFlight = false }
         do {
-            var permit: USBInputPermit?
-            if let context = executionContext {
-                // The user approves in PhoneAgent. For a background observation,
-                // wait for their return to the target and compare a new complete
-                // frame; never tap the approval UI or silently change the target.
-                let returnDeadline = ProcessInfo.processInfo.systemUptime + 15
-                repeat {
-                    try Task.checkCancellation()
-                    guard !stopped, stamp.isFresh(now: ProcessInfo.processInfo.systemUptime, maximumAge: context.backgroundEnabled ? 45 : 5) else { throw AppError.stopped }
-                    if let scope = try context.observation(),
-                       let fresh = try? frames.encoded(notBefore: scope.after),
-                       fresh.capture?.videoOrientation == stamp.videoOrientation,
-                       fresh.capture?.width == stamp.width, fresh.capture?.height == stamp.height,
-                       SHA256.hash(data: fresh.png) == SHA256.hash(data: approved.png) {
-                        permit = USBInputPermit(context: context, observation: scope, sequence: fresh.capture!.sequence)
-                        break
-                    }
-                    try await Task.sleep(nanoseconds: 40_000_000)
-                } while ProcessInfo.processInfo.systemUptime < returnDeadline
-                guard permit != nil else { throw AppError.unavailable("未在 15 秒内返回匹配的目标画面；未允许发送，需重新截图批准") }
-            }
+            // A one-use task capability, not a screenshot-equality check. The
+            // final enqueue still serializes capture/USB loss and explicit stop.
+            let permit = executionContext.map { USBInputPermit(context: $0, inputSession: session) }
+            diagnostics?.record("input.dispatch sceneAndImageGates=disabled epoch=\(session.generation) \(executionContext?.diagnosticSummary ?? "context=none")")
             try await transport.command(body, permit: permit)
             guard !stopped else { throw AppError.stopped }
             // Require an arrival after executed ACK; a pre-ACK frame is insufficient.
             barrierSequence = (try frames.latestStamp()).sequence
             barrierTime = ProcessInfo.processInfo.systemUptime
-        } catch { await lost(); throw error }
+        } catch { await lost(.inputFailed); throw error }
     }
     func stop() async {
-        guard !stopped else { return }
+        if let stopTask { await stopTask.value; return }
         executionContext?.revoke()
         stopped = true; image = nil; monitor?.cancel(); monitor = nil
-        await transport.stop()
+        let session = inputSession, opening = openingSession
+        let task = Task {
+            let owned: USBInputSession?
+            if let session { owned = session } else { owned = try? await opening?.value }
+            if let owned { await transport.stopInputs(owned) }
+        }
+        stopTask = task
+        await task.value
     }
 }

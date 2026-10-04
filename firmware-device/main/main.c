@@ -16,12 +16,12 @@ static char buffer[PA_LINE_MAX+1];
 static size_t used;
 static pa_ledger ledger;
 static int64_t last_packet,last_ping,action_started;
-static uint32_t action_id,stop_id;
+static uint32_t action_id,stop_id,cancelled_id,input_generation=1;
 static int64_t milliseconds(void) { return esp_timer_get_time()/1000; }
 static void close_client(void) {
     usb_hid_cancel();
     if (client>=0) { shutdown(client,SHUT_RDWR); close(client); client=-1; }
-    used=0; action_id=stop_id=0; memset(&ledger,0,sizeof(ledger));
+    used=0; action_id=stop_id=cancelled_id=0; input_generation=1; memset(&ledger,0,sizeof(ledger));
 }
 static bool send_line(const char *line) {
     size_t length=strlen(line),offset=0;
@@ -43,7 +43,7 @@ static bool acknowledge(uint32_t id,const char *status) {
 }
 static void hello(void) {
     // Explicit no-PSK version: no credential provisioning or NVS access.
-    reply(usb_hid_enabled() ? "PA2 READY 1":"PA2 READY 0");
+    reply(usb_hid_enabled() ? "PA3 READY 1":"PA3 READY 0");
     last_packet=milliseconds(); last_ping=0;
 }
 static bool process_line(char *line,int64_t now) {
@@ -53,15 +53,29 @@ static bool process_line(char *line,int64_t now) {
     pa_receipt *receipt=NULL;
     int accepted=pa_accept(&ledger,&command,&receipt);
     if (accepted<0) return false;
-    if (!accepted) return acknowledge(command.id,receipt->executed ? "executed":"received");
+    if (!accepted) {
+        // STOP has one terminal ACK after neutral reports, never an early receipt.
+        if (command.kind==PA_STOP && receipt->phase==PA_RECEIVED) return true;
+        return acknowledge(command.id,pa_phase_name(receipt->phase));
+    }
     last_packet=now;
     if (command.kind==PA_PING) {
         last_ping=now; pa_complete(&ledger,command.id); return acknowledge(command.id,"executed");
     }
-    if (command.kind==PA_STOP) {
-        usb_hid_cancel(); action_id=0; stop_id=command.id; action_started=now; return true;
+    // STOP revokes this input generation immediately, including bytes already
+    // queued in TCP. Rejected commands never mutate motion or the stop deadline.
+    if (command.generation!=input_generation || stop_id) {
+        pa_cancel(&ledger,command.id); return acknowledge(command.id,"cancelled");
     }
-    if (stop_id || action_id || !last_ping || now-last_ping>PA_LEASE_MS || !usb_hid_start(&command,now)) return false;
+    if (command.kind==PA_STOP) {
+        if (input_generation==UINT32_MAX) return false;
+        ++input_generation;
+        usb_hid_cancel(); cancelled_id=action_id; action_id=0;
+        stop_id=command.id; action_started=now; return true;
+    }
+    if (action_id || !last_ping || now-last_ping>PA_LEASE_MS || !usb_hid_start(&command,now)) {
+        pa_cancel(&ledger,command.id); return acknowledge(command.id,"cancelled");
+    }
     action_id=command.id; action_started=now;
     return acknowledge(command.id,"received");
 }
@@ -74,7 +88,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(bind(listener,(struct sockaddr*)&address,sizeof(address)) ? ESP_FAIL:ESP_OK);
     ESP_ERROR_CHECK(listen(listener,1) ? ESP_FAIL:ESP_OK);
     fcntl(listener,F_SETFL,O_NONBLOCK);
-    ESP_LOGI(TAG,"NCM %s; 192.168.7.1:28766; PA2 no PSK; no radio/DHCP/default route",usb_hid_enabled()?"+ HID":"only");
+    ESP_LOGI(TAG,"NCM %s; 192.168.7.1:28766; PA3 persistent; no PSK/radio/DHCP/default route",usb_hid_enabled()?"+ HID":"only");
     uint32_t epoch=usb_epoch();
     for (;;) {
         int64_t now=milliseconds();
@@ -89,9 +103,15 @@ void app_main(void) {
             pa_complete(&ledger,done); action_id=0; acknowledge(done,"executed");
         }
         if (client>=0 && stop_id && usb_hid_neutral()) {
+            // An interrupted input may have partially acted. Its terminal status
+            // is cancelled, never executed; acknowledge only after HID release.
+            if (cancelled_id) {
+                uint32_t id=cancelled_id; cancelled_id=0; pa_cancel(&ledger,id);
+                if (!acknowledge(id,"cancelled")) continue;
+            }
             uint32_t id=stop_id; stop_id=0; pa_complete(&ledger,id); acknowledge(id,"executed");
-            // Revocation is terminal. Reconnect starts a new command ledger.
-            close_client();
+            // TCP and the command ledger outlive tasks. Next input uses the
+            // incremented generation, not a new connection or reset command ID.
         }
         if (client<0) {
             if (usb_online() && usb_hid_neutral()) {
@@ -103,6 +123,8 @@ void app_main(void) {
                 }
             }
         } else {
+            // Continue draining complete lines during release. PING remains
+            // available; input/STOP for a revoked generation gets cancelled.
             char input[128]; int count=recv(client,input,sizeof(input),0);
             if (count==0 || (count<0 && errno!=EAGAIN && errno!=EWOULDBLOCK)) close_client();
             for (int i=0;i<count && client>=0;i++) {

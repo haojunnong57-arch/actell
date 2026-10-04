@@ -1,6 +1,32 @@
+> 当前源码已升级为 [PA3 常连](PERSISTENT-USB.md)：停止任务释放 HID 并保留 TCP，App 与固件必须同时更新。本文 PA1/PA2 构建、烧录和测试结果是历史记录；PA3 已完成 COM 烧录和启动检查，iPhone 端仍待验收，见该升级说明。
+
+> 当前截图策略：已移除 2/5/45 秒图片年龄检查和模型动作 `based_on_image_id` 参数，诊断版本为 `usb-diag-20261004-6`。实现边界与验证见 [IMAGE-POLICY.md](IMAGE-POLICY.md)。
+
 # USB 免 PSK · PA2 · 2026-10-04
 
 用户明确选择“USB 免 PSK：接受同机其他程序可能访问，不再使用通信密钥”。已在 `<workspace>/with-esp` 的 `main` 完成实现，基线提交 `883d0e8e61e62b2c9db3361985dc43c9db45ed9a`。没有切换其他 worktree；代码、测试与脱敏说明纳入本次本地提交，原始日志仅留本地。
+
+后续联调进度：用户已确认 PA2 双向 PING，以及最新版 App 的“仅在本机预览截图”正常显示画面。NCM+HID 已修复 STOP 竞争并完成本地回归、构建和描述符核对；23:03（Asia/Shanghai）经用户明确批准完成三段 COM 烧录、设备摘要及 UART 启动检查。真实 HID/Agent 闭环仍待验证，见 [HID 烧录与联调](HID-BRINGUP.md)。下文保留此前各阶段记录。
+
+最新 App 行为：USB 普通点击/拖动改为开始任务时授权，移除逐动作回前台批准、每段后台 60 秒及总计 5 分钟；故障停止和预算仍有效。详见 [任务授权与后台执行](CONTINUOUS-RUNS.md)。下文涉及旧时限和审批的描述为阶段记录。
+
+最新截图修复：用户日志证明两次失败由 App 主动 STOP/关闭连接；HID 路由错误地要求截图也先进入后台。现已允许前台读取，输入权限检查保持，并提供具体的首次失效原因。详见 [FOREGROUND-CAPTURE.md](FOREGROUND-CAPTURE.md)，诊断版本 `usb-diag-20261004-5`。
+
+## HID 点击入口与空闲连接修正 · 2026-10-04
+
+用户在 HID 烧录后报告点击返回“屏幕由 App 采集；点击或拖动需要连接已启用 HID 的 USB 设备”。该原文仅在 `LiveDeviceBridgeRouter` 收到 `usb == nil` 时生成，说明本轮开始时客户端已不存在并固定选择只读采集路由。固件 NCM-only 和 USB 心跳失效分别使用其他错误；此句本身不能证明 HID 固件未烧录成功。用户本次断开前的具体操作顺序/完整日志尚未取得，不能把下面的可复现代码问题直接当作本次已证实触发原因。
+
+已修复的代码路径：连接成功后，系统采集授权界面等引起 App 短暂 `inactive`，此前 `setScene` 会关闭已有空闲 USB、清空客户端；返回后开始任务就只有截图能力。现在只在无运行任务、无旧 Host 桥接的情况下保留该空闲 USB 会话；仍无输入许可。进入真实 `background` 时关闭空闲连接的判断包含 `!running`，**不关闭正在执行的采集/HID Agent 任务**。运行任务由固定开启的 `ScreenUSBExecutionContext` 在后台继续采集、维持 USB 心跳、发送已批准的输入和取得动作后新帧。锁屏、采集丢失、连接/画面失效或用户停止仍撤销输入，不自动重连或重放动作。
+
+本次路由修正时尚保留 App 自身的执行策略：后台每段最多 60 秒、任务总计 300 秒，输入需回到 PhoneAgent 逐次批准，再在 15 秒内返回匹配的目标画面。这些不是 ScreenCaptureKit 声明的固定时限，现已按用户要求移除，见 [最新行为](CONTINUOUS-RUNS.md)。上一轮“进入后台仍会停止输入”的概括不准确，应区分空闲连接和运行任务。
+
+每轮任务结束仍关闭 USB，后续输入任务必须重新连接。新错误明确指向“设置 → 控制调试 → 重新连接 USB NCM → 确认 NCM + HID → 开始新任务”，不把上一轮的只读路由中途升级为输入路由。
+
+日志版本为 `usb-diag-20261004-3`。新增 `idleUSB.preserved`、`idleUSB.close`、`capture.loss`、`run.close` 和 `run.route`，记录枚举状态与固定原因，不写入任务正文、原始状态说明、截图或命令坐标。`run.route selected=usbHID` 表示本轮确实选中输入通道；`selected=localScreen reason=usbClientMissing` 表示启动时缺客户端，`firmwareNCMOnly` 和 `inputConditionsInvalid` 分别说明其他降级原因。
+
+本轮 **147 项单元测试、1 项诊断导出 UI 回归、iPhoneOS 27 无签名构建通过**。新增回归使用可注入的 USB 会话夹具，验证 inactive 不发输入且不丢连接，background/锁屏/采集丢失仍关闭，前台不自动重连、明确手动连接可恢复，以及错误/日志不泄漏原始状态正文。现有权限、停止、审批往返和图像检查回归通过。本次未打开串口、烧录、安装真机 App 或上传屏幕，固件保持上次已刷版本。
+
+日志均在 Git 忽略的 `.build/validation/usb-input-route/`：`ios-unit.log`、`ios-ui.log`、`ios-device-build.log`。Xcode 工程和 Info.plist 与本轮开始摘要一致，原有签名账户不变；依赖/工具链沿用 [VALIDATION.md](VALIDATION.md)。用户需自行重新构建安装 App；真机点击结果及本次原始断开原因仍待验证。本轮在 `with-esp/main` 修改，未提交或推送。
 
 ## 行为与兼容性
 
@@ -61,7 +87,7 @@ UART 115200 捕获 15 秒：TinyUSB 正常启动，日志包含 `NCM only; 192.1
 1. NCM-only 烧录及 UART 检查已完成，HID 仍未烧录。
 2. 配套 App 需使用 PA2 新构建；签名安装按用户已批准的流程处理，不能因无签名构建成功就声称已安装。
 3. COM 断开后再接 iPhone 原生 USB，保持既有固定 IP；App 前台处理本地网络权限，点“连接 USB NCM”，以“USB NCM 双向 PING 已验证（免 PSK）；固件未启用 HID”为首次网络验收目标。无需配置 PSK、无需采集授权或模型调用即可验证 PING。
-4. 后续才进行 HID 与实际采集/Agent 验收。已有重复 STOP 覆盖回执的竞争问题未在本次修复，须在 HID 验收前修复并回归；重复心跳和旧 checkpoint 迁移审计事项也不属于此次免 PSK 改动。
+4. 后续才进行 HID 与实际采集/Agent 验收。重复 STOP 覆盖回执的竞争问题未在免 PSK 改动中修复，后续已在 [HID 联调准备](HID-BRINGUP.md)中修复并回归；重复心跳和旧 checkpoint 迁移审计事项不属于此次免 PSK 改动。
 
 本机通过不等于手机已受控。iPhone 上的 PA2 TCP、系统采集、HID 映射、拔线/睡眠恢复、蜂窝/VPN 共存及后台闭环仍未验证。
 

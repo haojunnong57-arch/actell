@@ -45,13 +45,13 @@ struct Approval: Identifiable, Sendable {
     var callID: String? = nil
     var parametersDigest = ""
     var version = 1
+    // Approval-request timeout, measured from request creation, not capture time.
     var expiresAt = Date().addingTimeInterval(45)
 }
+enum InputAuthorizationMode: String, Codable, Sendable { case perAction, task }
 struct AgentLimits: Sendable {
     let maxTurns = 12
     let maxActions = 16
-    let maxRunSeconds: TimeInterval = 300
-    let maxScreenshotAge: TimeInterval = 45
     let maxReportedTokens = 20_000
     let maxOutputTokens = 1_024
 }

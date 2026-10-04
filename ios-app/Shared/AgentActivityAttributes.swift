@@ -52,7 +52,7 @@ struct AgentActivityAttributes: ActivityAttributes {
             case .stopped: return "如动作已发出，请核对设备"
             case .completed: return "请回到 App 核对结果"
             case .blocked: return "回到 App 查看原因"
-            default: return "运行受采集、连接与系统时限约束"
+            default: return "任务执行中；采集或连接失效时停止"
             }
         }
     }

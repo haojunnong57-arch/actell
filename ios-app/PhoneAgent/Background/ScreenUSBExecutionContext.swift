@@ -19,6 +19,9 @@ final class USBTransportHealth: @unchecked Sendable {
             }
         }
     }
+    var diagnosticSummary: String {
+        lock.withLock { "pingAge=\(pingAt.map { String(format: "%.3fs", ProcessInfo.processInfo.systemUptime - $0) } ?? "none")" }
+    }
 }
 
 /// A revocable capability checked again at the actual NWConnection enqueue.
@@ -26,6 +29,16 @@ final class USBTransportHealth: @unchecked Sendable {
 /// This is NOT a grant from BGTaskScheduler and cannot keep a suspended process alive.
 final class ScreenUSBExecutionContext: @unchecked Sendable {
     enum Scene: Sendable { case active, inactive, background }
+    enum Failure: String, Sendable {
+        case captureEnded, firstFrameTimeout, usbHeartbeat
+        var message: String {
+            switch self {
+            case .captureEnded: return "采集会话已结束或改变，输入已停止"
+            case .firstFrameTimeout: return "采集启动后 5 秒仍未收到有效画面，输入已停止"
+            case .usbHeartbeat: return "USB 心跳超过 750 毫秒未更新，输入已停止"
+            }
+        }
+    }
     struct Observation: Sendable { let revision: UInt64; let after: TimeInterval }
     let backgroundEnabled: Bool
     let epoch: UUID
@@ -33,46 +46,64 @@ final class ScreenUSBExecutionContext: @unchecked Sendable {
     private let health: USBTransportHealth?
     private let lock = NSLock()
     private let now: @Sendable () -> TimeInterval
-    private let deadline: TimeInterval
     private let firstFrameDeadline: TimeInterval
     private var revoked = false
+    private var failure: Failure?
+    private var revocationMessage: String?
     private var scene = Scene.active
     private var revision: UInt64 = 0
     private var entered: TimeInterval
-    private var backgroundDeadline: TimeInterval?
 
     init(frames: LatestScreenFrame, health: USBTransportHealth? = nil, backgroundEnabled: Bool,
          now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
         self.frames = frames; self.health = health; self.backgroundEnabled = backgroundEnabled; self.now = now
-        epoch = try frames.captureSessionID(); entered = now(); deadline = now() + 300
+        epoch = try frames.captureSessionID(); entered = now()
         firstFrameDeadline = now() + 5
         try requireHealthy()
     }
     func setScene(_ next: Scene) {
         lock.withLock {
             guard scene != next else { return }
-            if now() >= deadline || backgroundDeadline.map({ now() >= $0 }) == true { revoked = true }
             scene = next; revision += 1; entered = now()
-            if next == .background { backgroundDeadline = entered + 60 }
-            if next == .active { backgroundDeadline = nil }
             if !backgroundEnabled, next != .active { revoked = true }
         }
     }
-    func revoke() { lock.withLock { revoked = true } }
+    func revoke(message: String? = nil) {
+        lock.withLock {
+            if !revoked { revocationMessage = message }
+            revoked = true
+        }
+    }
+    var failureMessage: String? { lock.withLock { failure?.message ?? revocationMessage } }
+    var diagnosticSummary: String {
+        lock.withLock { "scene=\(scene) revoked=\(revoked) failure=\(failure?.rawValue ?? "none") \(health?.diagnosticSummary ?? "usb=none") \(frames.diagnostics(now: now()).summary)" }
+    }
     private func validate() throws {
+        guard !revoked else {
+            if let failure { throw AppError.unavailable(failure.message) }
+            if let revocationMessage { throw AppError.unavailable(revocationMessage) }
+            throw AppError.stopped
+        }
+        var checking = Failure.captureEnded
         do {
             let time = now()
-            guard !revoked, time < deadline, backgroundDeadline.map({ time < $0 }) ?? true else { throw AppError.stopped }
             try frames.requireCaptureSession(epoch)
             // Starting the stream does not imply a sample already arrived.
             // Only the initial empty session gets this bounded startup grace.
             if frames.diagnostics(now: time).accepted == 0 {
+                checking = .firstFrameTimeout
                 guard time < firstFrameDeadline else { throw AppError.unavailable("采集启动后 5 秒仍未收到有效画面；本轮已停止。\(frames.diagnostics(now: time).summary)") }
-            } else { try frames.requireSession(epoch, now: time) }
+            } else {
+                // Static content may produce no new samples. Only capture
+                // invalidation, not the age of the retained frame, ends this run.
+                try frames.requireSession(epoch)
+            }
+            checking = .usbHeartbeat
             try health?.requireHealthy(now: time)
         } catch {
             revoked = true // A late frame/PING never revives an observed loss.
-            throw error
+            failure = checking
+            throw AppError.unavailable(checking.message)
         }
     }
     func requireHealthy() throws { try lock.withLock { try validate() } }
@@ -82,11 +113,12 @@ final class ScreenUSBExecutionContext: @unchecked Sendable {
             guard scene == .active else { throw AppError.stopped }
         }
     }
+    // Snapshot metadata remains available to callers, but no longer grants or
+    // rejects input based on the foreground app or a screen transition.
     func observation() throws -> Observation? {
         try lock.withLock {
             try validate()
-            guard scene == (backgroundEnabled ? .background : .active) else { return nil }
-            return Observation(revision: revision, after: backgroundEnabled ? entered + 0.2 : 0)
+            return Observation(revision: revision, after: 0)
         }
     }
     func captureObservation() throws -> Observation? {
@@ -96,31 +128,31 @@ final class ScreenUSBExecutionContext: @unchecked Sendable {
             return Observation(revision: revision, after: scene == .background ? entered + 0.2 : 0)
         }
     }
-    func enqueue(observation: Observation, sequence: UInt64, _ send: () -> Void) throws {
+    func enqueue(observation: Observation? = nil, sequence: UInt64? = nil, _ send: () -> Void) throws {
         try lock.withLock {
             try validate()
             guard health != nil else { throw AppError.unavailable("只读采集不能授权 USB 输入") }
-            guard revision == observation.revision, scene == (backgroundEnabled ? .background : .active) else { throw AppError.stopped }
-            // Invalidation/scene changes are serialized with this last send fence.
-            try frames.withSession(epoch, now: now(), sequence: sequence, send)
+            // Only revocation/session loss is serialized with enqueue. A new
+            // frame or app transition does not revoke a live task capability.
+            try frames.withSession(epoch, send)
         }
     }
 }
 
 final class USBInputPermit: @unchecked Sendable {
+    let inputSession: USBInputSession?
     private let lock = NSLock()
     private var consumed = false
     private let context: ScreenUSBExecutionContext
-    private let observation: ScreenUSBExecutionContext.Observation
-    private let sequence: UInt64
-    init(context: ScreenUSBExecutionContext, observation: ScreenUSBExecutionContext.Observation, sequence: UInt64) {
-        self.context = context; self.observation = observation; self.sequence = sequence
+    init(context: ScreenUSBExecutionContext, observation: ScreenUSBExecutionContext.Observation? = nil, sequence: UInt64? = nil, inputSession: USBInputSession? = nil) {
+        self.context = context
+        self.inputSession = inputSession
     }
     func enqueue(_ send: () -> Void) throws {
         try lock.withLock {
             guard !consumed else { throw AppError.stopped }
             consumed = true
-            try context.enqueue(observation: observation, sequence: sequence, send)
+            try context.enqueue(send)
         }
     }
 }

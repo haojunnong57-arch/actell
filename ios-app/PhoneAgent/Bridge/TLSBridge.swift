@@ -113,6 +113,8 @@ actor TLSBridge: DeviceBridge {
         lastImageID = image.id; return image
     }
     func tap(x: Int, y: Int, imageID: String) async throws {
+        // Legacy Host wire compatibility only; the App supplies this identifier.
+        // It is not a model tool parameter and is not used on USB NCM/HID.
         try requireCurrent(imageID)
         _ = try await request("tap", arguments: ["x": .int(x), "y": .int(y), "based_on_image_id": .string(imageID)])
         lastImageID = nil

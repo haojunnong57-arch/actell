@@ -6,7 +6,7 @@ import Darwin
 /// Bounded, process-local diagnostics. Callers record protocol metadata only:
 /// never command arguments, received payloads, screenshots, goals, or secrets.
 final class USBDiagnosticsLog: @unchecked Sendable {
-    static let revision = "usb-diag-20261004-2"
+    static let revision = "usb-diag-pa3-input-4"
     private let lock = NSLock()
     private let capacity: Int
     private let console: Bool
@@ -33,11 +33,13 @@ final class USBDiagnosticsLog: @unchecked Sendable {
         header = """
         PhoneAgent USB Diagnostics v1
         revision=\(Self.revision)
+        imageExpiry=disabled modelImageIDParameter=false inputSceneGate=disabled inputImageMatch=disabled
+        finishRequired=false
         bundle=\(bundle.bundleIdentifier ?? "unknown") version=\(value("CFBundleShortVersionString")) build=\(value("CFBundleVersion"))
         OS=\(ProcessInfo.processInfo.operatingSystemVersionString) runtime=\(runtime)
         SDK=\(value("DTSDKName")) XcodeBuild=\(value("DTXcodeBuild"))
         localNetworkUsageDescriptionPresent=\(!purpose.isEmpty && purpose != "unknown") (not permission status)
-        target=192.168.7.1:28766 expectedPhone=192.168.7.2/24 binding=explicitInterfaceFromLocalIPv4 peerToPeer=false protocol=PA2 noPSK
+        target=192.168.7.1:28766 expectedPhone=192.168.7.2/24 binding=explicitInterfaceFromLocalIPv4 peerToPeer=false protocol=PA3 noPSK
         Times are UTC plus monotonic elapsed seconds. Copy buffer is process-local; events also appear in OSLog category USBNetwork.
         Interface inventory shows USB-subnet/link-local IPv4; other IPs are redacted. No MAC/SSID/IPv6 or command/screen/model payloads.
         Default/wired path monitors describe system paths, not proof of USB TCP reachability.
@@ -63,7 +65,8 @@ final class USBDiagnosticsLog: @unchecked Sendable {
         }
     }
     static func commandKind(_ body: String) -> String {
-        if body == "PING" || body == "STOP" { return body }
+        if body == "PING" { return body }
+        if body.hasPrefix("STOP ") { return "STOP" }
         if body.hasPrefix("TAP ") { return "TAP" }
         if body.hasPrefix("DRAG ") { return "DRAG" }
         return "OTHER"
@@ -208,15 +211,38 @@ enum USBConnectionStatus: Equatable {
     func allowsSetup(in scene: ScreenUSBExecutionContext.Scene) -> Bool {
         scene == .active || (scene == .inactive && isConnecting)
     }
+    var isReady: Bool { if case .ready = self { return true }; return false }
+    var isDisconnected: Bool { if case .disconnected = self { return true }; return false }
     var isFailure: Bool { if case .failed = self { return true }; return false }
+    var diagnosticState: String {
+        switch self {
+        case .idle: return "idle"
+        case .connecting: return "connecting"
+        case .waiting: return "waiting"
+        case .awaitingGreeting: return "awaitingGreeting"
+        case .checking: return "checking"
+        case .ready(let hid): return hid ? "readyHID" : "readyNCM"
+        case .failed: return "failed"
+        case .disconnected: return "disconnected"
+        }
+    }
+    var unavailableInputMessage: String {
+        let prefix: String
+        switch self {
+        case .disconnected: prefix = "USB 已断开，本轮只启用了 App 截图。"
+        case .failed: prefix = "USB 连接失败，本轮只启用了 App 截图。"
+        default: prefix = "本轮开始时没有可用的 USB HID 连接，只启用了 App 截图。"
+        }
+        return prefix + "点击或拖动前，请在设置 → 控制调试中重新连接 USB NCM，确认显示 NCM + HID 已连接，再开始新任务。"
+    }
     var message: String {
         switch self {
         case .idle: return "USB 尚未连接"
         case .connecting: return "正在连接 USB 设备 192.168.7.1:28766…"
         case .waiting(let reason): return "等待 USB 网络（本次连接最多 30 秒）：\(reason)"
-        case .awaitingGreeting: return "USB TCP 已接通，等待设备 PA2 应答…"
+        case .awaitingGreeting: return "USB TCP 已接通，等待设备 PA3 应答…"
         case .checking: return "已收到设备应答，正在验证双向 PING…"
-        case .ready(let hid): return hid ? "USB NCM + HID 已连接（免 PSK）；屏幕控制尚需逐动作确认" : "USB NCM 双向 PING 已验证（免 PSK）；固件未启用 HID"
+        case .ready(let hid): return hid ? "USB NCM + HID 已连接（免 PSK）；连接在任务间保持；开始任务后可执行点击和拖动" : "USB NCM 双向 PING 已验证（免 PSK）；固件未启用 HID"
         case .failed(let message): return "USB 连接失败：\(message)"
         case .disconnected(let message): return "USB 已断开：\(message)"
         }
@@ -256,33 +282,45 @@ enum USBWire {
     static func acceptACK(_ phase: String, needsReceipt: Bool, received: inout Bool) throws -> Bool {
         if phase == "received", needsReceipt, !received { received = true; return false }
         if phase == "executed", !needsReceipt || received { return true }
+        if phase == "cancelled" { return true }
         throw needsReceipt ? AppError.unknownOutcome : AppError.protocolViolation("USB ACK 阶段不匹配")
     }
-    // PA2 deliberately has no identity authentication or encryption. Never
+    // PA3 deliberately has no identity authentication or encryption. Never
     // silently interpret a PA1 challenge/LOCKED response as a usable session.
     static func supportsHID(_ greeting: String) throws -> Bool {
         switch greeting {
-        case "PA2 READY 0": return false
-        case "PA2 READY 1": return true
-        default: throw AppError.protocolViolation("USB 协议不匹配；App 和固件均需 PA2 免 PSK 版本")
+        case "PA3 READY 0": return false
+        case "PA3 READY 1": return true
+        default: throw AppError.protocolViolation("USB 协议不匹配；App 和固件均需 PA3 免 PSK 版本")
         }
     }
     static func parseACK(_ line: String) throws -> (id: UInt64, phase: String) {
         let parts = line.split(separator: " ", omittingEmptySubsequences: false)
         guard parts.count == 2, let id = UInt32(parts[0]), id > 0, String(id) == parts[0],
-              parts[1] == "received" || parts[1] == "executed" else {
+              parts[1] == "received" || parts[1] == "executed" || parts[1] == "cancelled" else {
             throw AppError.protocolViolation("USB ACK 格式错误")
         }
         return (UInt64(id), String(parts[1]))
     }
 }
 
+struct USBInputSession: Equatable, Sendable {
+    let connection: UUID
+    let generation: UInt32
+}
+
 protocol USBCommandTransport: Sendable {
     func command(_ body: String) async throws
     func command(_ body: String, permit: USBInputPermit?) async throws
-    func stop() async
+    func openInputSession() async throws -> USBInputSession
+    func stopInputs(_ session: USBInputSession) async
 }
 extension USBCommandTransport {
+    // In-memory test transports have no shared TCP ownership. The production
+    // client allocates and checks a connection-scoped input generation.
+    func openInputSession() async throws -> USBInputSession {
+        USBInputSession(connection: UUID(), generation: 1)
+    }
     // Test transports can use this default. The production client overrides it
     // to consume the permit at NWConnection.send, after its actor hop.
     func command(_ body: String, permit: USBInputPermit?) async throws {
@@ -293,7 +331,14 @@ extension USBCommandTransport {
 
 // Dedicated Ethernet connection only. No default-route/VPN changes, HTTP redirects,
 // DNS discovery, automatic reconnect, or automatic replay of input.
-actor USBCommandClient: USBCommandTransport {
+protocol USBConnectionSession: USBCommandTransport {
+    var health: USBTransportHealth { get }
+    var supportsHID: Bool { get async }
+    func connect(attempt: UUID) async throws
+    func disconnect() async
+}
+
+actor USBCommandClient: USBConnectionSession {
     nonisolated let health = USBTransportHealth()
     private var keepalive: Task<Void, Never>?
     private var connection: NWConnection?
@@ -313,27 +358,28 @@ actor USBCommandClient: USBCommandTransport {
     private let onProgress: @Sendable (USBConnectionStatus) -> Void
     private(set) var supportsHID = false
     private var nextID: UInt64 = 0
+    private var inputGeneration: UInt32 = 1
+    private var inputSession: USBInputSession?
+    private var releasing: (session: USBInputSession, task: Task<Void, Never>)?
+    private let makeConnection: @Sendable (USBDiagnosticsLog, UUID) throws -> NWConnection
     private struct Pending {
-        let continuation: CheckedContinuation<Void, Error>
+        var continuation: CheckedContinuation<Void, Error>?
         var received = false
         let needsReceipt: Bool
         let isPing: Bool
         let kind: String
         let logDetails: Bool
         let sentAt: TimeInterval
+        let inputSession: USBInputSession?
     }
     private var pending: [UInt64: Pending] = [:]
 
-    init(diagnostics: USBDiagnosticsLog = USBDiagnosticsLog(), onProgress: @escaping @Sendable (USBConnectionStatus) -> Void = { _ in }) {
-        self.diagnostics = diagnostics; self.onProgress = onProgress
+    init(diagnostics: USBDiagnosticsLog = USBDiagnosticsLog(), onProgress: @escaping @Sendable (USBConnectionStatus) -> Void = { _ in },
+         makeConnection: @escaping @Sendable (USBDiagnosticsLog, UUID) throws -> NWConnection = { try USBCommandClient.ethernetConnection($0, $1) }) {
+        self.diagnostics = diagnostics; self.onProgress = onProgress; self.makeConnection = makeConnection
     }
 
-    func connect(attempt: UUID = UUID()) async throws {
-        fail(.stopped)
-        let token = attempt; generation = token
-        health.begin(token)
-        diagnostics.record("connect.begin target=192.168.7.1:28766 binding=explicitInterface setupDeadline=30s greetingDeadline=3s", attempt: token)
-        diagnostics.recordInterfaces(reason: "connect", attempt: token)
+    static func ethernetConnection(_ diagnostics: USBDiagnosticsLog, _ token: UUID) throws -> NWConnection {
         let binding: USBInterfaceBinding
         do {
             let rows = try USBInterfaceBinding.inventory()
@@ -343,12 +389,23 @@ actor USBCommandClient: USBCommandTransport {
             binding = try USBInterfaceBinding.resolve(rows)
         } catch {
             diagnostics.record("binding.rejected reason=\(error.localizedDescription)", attempt: token)
-            fail((error as? AppError) ?? .unavailable("USB 接口绑定失败")); throw error
+            throw error
         }
         let parameters = binding.parameters()
         diagnostics.record("binding.selected name=\(binding.interface.name) index=\(binding.interface.index) networkType=\(binding.interface.type) local=\(binding.localAddress) remote=\(binding.remoteAddress) requiredInterface=true; no unbound fallback", attempt: token)
+        return NWConnection(host: .ipv4(binding.remoteAddress), port: 28766, using: parameters)
+    }
+
+    func connect(attempt: UUID = UUID()) async throws {
+        fail(.stopped, publish: false)
+        let token = attempt; generation = token
+        health.begin(token)
+        diagnostics.record("connect.begin target=192.168.7.1:28766 binding=explicitInterface setupDeadline=30s greetingDeadline=3s", attempt: token)
+        diagnostics.recordInterfaces(reason: "connect", attempt: token)
+        let c: NWConnection
+        do { c = try makeConnection(diagnostics, token) }
+        catch { fail((error as? AppError) ?? .unavailable("USB 接口绑定失败")); throw error }
         startPathMonitors(token)
-        let c = NWConnection(host: .ipv4(binding.remoteAddress), port: 28766, using: parameters)
         connection = c
         c.pathUpdateHandler = { [weak self] path in
             Task { await self?.pathChanged(path, source: "connection", token: token) }
@@ -378,7 +435,7 @@ actor USBCommandClient: USBCommandTransport {
                     await self?.expireSetup(token)
                 }
             }
-        } onCancel: { Task { await self.cancel(token) } }
+        } onCancel: { Task { await self.cancelSetup(token) } }
         keepalive = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await self?.command("PING"); try await Task.sleep(nanoseconds: 200_000_000) }
@@ -419,7 +476,7 @@ actor USBCommandClient: USBCommandTransport {
         case .ready:
             guard !tcpReady else { return }
             tcpReady = true; lastWaitingError = nil
-            diagnostics.record("tcp.ready; PA2 greeting deadline started", attempt: token)
+            diagnostics.record("tcp.ready; PA3 greeting deadline started", attempt: token)
             onProgress(.awaitingGreeting)
             receive(token)
             timeout(token, id: nil, seconds: 3)
@@ -435,41 +492,83 @@ actor USBCommandClient: USBCommandTransport {
         diagnostics.recordInterfaces(reason: "setup-timeout", attempt: token)
         fail(.unavailable("USB 连接等待超过 30 秒。\(detail) 如出现本地网络提示，请允许后手动重试；没有提示时请保留这段路径诊断。"))
     }
-    func command(_ body: String) async throws {
-        try await command(body, permit: nil)
+    func openInputSession() async throws -> USBInputSession {
+        if let release = releasing {
+            await release.task.value
+            if releasing?.session == release.session { releasing = nil }
+        }
+        try Task.checkCancellation()
+        guard ready, supportsHID else { throw AppError.unavailable("USB HID 未连接") }
+        guard inputSession == nil else { throw AppError.unavailable("上一轮 USB 输入尚未释放") }
+        let session = USBInputSession(connection: generation, generation: inputGeneration)
+        inputSession = session
+        diagnostics.record("input.session.begin epoch=\(session.generation)", attempt: generation)
+        return session
     }
+    func command(_ body: String) async throws { try await command(body, permit: nil) }
     func command(_ body: String, permit: USBInputPermit?) async throws {
+        let isInput = body.hasPrefix("TAP ") || body.hasPrefix("DRAG ")
+        if isInput {
+            guard supportsHID, let session = permit?.inputSession,
+                  session == inputSession, session.connection == generation, releasing == nil else { throw AppError.stopped }
+            let parts = body.split(separator: " ", maxSplits: 1)
+            try await request("\(parts[0]) \(session.generation) \(parts[1])", permit: permit, session: session)
+        } else {
+            guard body == "PING" else { throw AppError.invalid("USB 控制命令只能通过连接生命周期调用") }
+            try await request(body)
+        }
+    }
+    private func request(_ body: String, permit: USBInputPermit? = nil, session: USBInputSession? = nil) async throws {
         try Task.checkCancellation()
         guard ready, !body.isEmpty, body.utf8.allSatisfy({ (32...126).contains($0) }), body.utf8.count < 128 else { throw AppError.unavailable("USB 未连接或命令格式错误") }
-        if body.hasPrefix("TAP ") || body.hasPrefix("DRAG ") {
-            guard supportsHID else { throw AppError.unavailable("当前固件仅 NCM；尚未启用 HID") }
-            guard permit != nil else { throw AppError.stopped }
-        }
-        guard pending.count < 8, nextID < UInt64(UInt32.max) else { throw AppError.unavailable("USB 请求达到上限") }
+        let kind = USBDiagnosticsLog.commandKind(body)
+        // Reserve a slot so cancellation can always send the release barrier.
+        guard pending.count < (kind == "STOP" ? 9 : 8), nextID < UInt64(UInt32.max) else { throw AppError.unavailable("USB 请求达到上限") }
         nextID += 1; let id = nextID, token = generation
         let payload = "\(id) \(body)"
-        let kind = USBDiagnosticsLog.commandKind(body)
         let logDetails = kind != "PING" || id <= 4 || id % 25 == 0
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 do {
+                    try Task.checkCancellation()
                     let enqueue = {
-                        self.pending[id] = Pending(continuation: continuation, needsReceipt: body.hasPrefix("TAP ") || body.hasPrefix("DRAG "), isPing: body == "PING", kind: kind, logDetails: logDetails, sentAt: ProcessInfo.processInfo.systemUptime)
+                        self.pending[id] = Pending(continuation: continuation, needsReceipt: session != nil, isPing: body == "PING", kind: kind, logDetails: logDetails, sentAt: ProcessInfo.processInfo.systemUptime, inputSession: session)
                         self.send(payload, token, id: id, logDetails: logDetails)
                     }
                     if let permit { try permit.enqueue(enqueue) } else { enqueue() }
-                    // Logging stays outside the final input permit's locked send fence.
                     if logDetails { diagnostics.record("send.enqueued id=\(id) kind=\(kind) bytes=\(payload.utf8.count + 1); arguments omitted", attempt: token) }
-                    timeout(token, id: id, seconds: body.hasPrefix("DRAG ") ? 3 : 1)
+                    timeout(token, id: id, seconds: kind == "DRAG" ? 3 : 1)
                 } catch { continuation.resume(throwing: error) }
             }
-        } onCancel: { Task { await self.cancel(token) } }
+        } onCancel: { Task { await self.cancelRequest(id, token: token) } }
     }
-    func stop() async {
-        diagnostics.record("client.stop requested tcpReady=\(tcpReady) greetingReady=\(ready) pending=\(pending.count)", attempt: generation)
-        // Best effort release. Disconnect also revokes the device's lease.
-        if ready { try? await command("STOP") }
-        fail(.stopped)
+    func stopInputs(_ session: USBInputSession) async {
+        if let releasing, releasing.session == session { await releasing.task.value; return }
+        guard session == inputSession, session.connection == generation else { return }
+        inputSession = nil // Revoke before the first suspension; late sends fail.
+        let task = Task { await self.release(session) }
+        releasing = (session, task)
+        await task.value
+        if releasing?.session == session { releasing = nil }
+    }
+    private func release(_ session: USBInputSession) async {
+        diagnostics.record("input.release.begin epoch=\(session.generation)", attempt: session.connection)
+        do {
+            try await request("STOP \(session.generation)")
+            guard generation == session.connection, ready else { return }
+            guard session.generation < UInt32.max else { throw AppError.unavailable("USB 输入代号已用尽") }
+            inputGeneration = session.generation + 1
+            diagnostics.record("input.release.completed connectionRetained=true nextEpoch=\(inputGeneration)", attempt: generation)
+        } catch {
+            if generation == session.connection { fail(.unavailable("无法确认 HID 已释放，USB 连接已关闭；请核对设备后重新连接")) }
+        }
+    }
+    func disconnect() async {
+        diagnostics.record("client.disconnect requested tcpReady=\(tcpReady) greetingReady=\(ready)", attempt: generation)
+        let token = generation
+        if let session = inputSession { await stopInputs(session) }
+        else if let releasing { await releasing.task.value }
+        if generation == token { fail(.stopped) }
     }
     private func send(_ line: String, _ token: UUID, id: UInt64, logDetails: Bool) {
         connection?.send(content: Data((line + "\n").utf8), completion: .contentProcessed { [weak self, diagnostics] error in
@@ -501,12 +600,15 @@ actor USBCommandClient: USBCommandTransport {
         receivedLines += 1
         if !ready {
             supportsHID = try USBWire.supportsHID(line); ready = true
-            diagnostics.record("greeting.valid protocol=PA2 hid=\(supportsHID)", attempt: token)
+            diagnostics.record("greeting.valid protocol=PA3 hid=\(supportsHID)", attempt: token)
             connectWaiter?.resume(); connectWaiter = nil; return
         }
         let (id, phase) = try USBWire.parseACK(line)
         guard var request = pending[id] else {
             throw AppError.protocolViolation("USB ACK 命令 ID 不匹配")
+        }
+        if phase == "cancelled", !request.needsReceipt, request.kind != "STOP" {
+            throw AppError.protocolViolation("PING 不能返回输入取消回执")
         }
         if request.logDetails {
             let elapsed = Int((ProcessInfo.processInfo.systemUptime - request.sentAt) * 1000)
@@ -514,7 +616,9 @@ actor USBCommandClient: USBCommandTransport {
         }
         if try USBWire.acceptACK(phase, needsReceipt: request.needsReceipt, received: &request.received) {
             if request.isPing { health.receivedPing(token); pingReplies += 1 }
-            pending.removeValue(forKey: id); request.continuation.resume()
+            pending.removeValue(forKey: id)
+            if phase == "cancelled" { request.continuation?.resume(throwing: AppError.stopped) }
+            else { request.continuation?.resume() }
         } else { pending[id] = request }
     }
     private func timeout(_ token: UUID, id: UInt64?, seconds: Double) {
@@ -530,7 +634,7 @@ actor USBCommandClient: USBCommandTransport {
             fail(USBWire.receiptTimeout(isPing: request.isPing, inputInFlight: pending.values.contains { $0.needsReceipt }))
         } else if id == nil, !ready {
             diagnostics.record("timeout.greeting 3s receivedBytes=\(receivedBytes)", attempt: token)
-            fail(.unavailable("TCP 已接通，但 3 秒内未收到 USB 设备的 PA2 应答。请检查固件版本。\(USBWire.pathDetails(lastPath))"))
+            fail(.unavailable("TCP 已接通，但 3 秒内未收到 USB 设备的 PA3 应答。请检查固件版本。\(USBWire.pathDetails(lastPath))"))
         }
     }
     private func transportFailed(_ token: UUID, error: NWError?) {
@@ -539,8 +643,17 @@ actor USBCommandClient: USBCommandTransport {
             fail(USBWire.transportError(error, inputInFlight: pending.values.contains { $0.needsReceipt }, path: lastPath))
         }
     }
-    private func cancel(_ token: UUID) { if generation == token { fail(.stopped) } }
-    private func fail(_ error: AppError) {
+    private func cancelSetup(_ token: UUID) { if generation == token, !ready { fail(.stopped) } }
+    private func cancelRequest(_ id: UInt64, token: UUID) async {
+        guard generation == token, var request = pending[id], let waiter = request.continuation else { return }
+        request.continuation = nil; pending[id] = request
+        waiter.resume(throwing: CancellationError())
+        diagnostics.record("request.cancel id=\(id) kind=\(request.kind) connectionRetained=true awaitingWireReceipt=true", attempt: token)
+        // Keep the receipt slot until the peer's terminal ACK, so late ACKs are
+        // consumed correctly. Cancelling an input also releases its whole task.
+        if let session = request.inputSession { await stopInputs(session) }
+    }
+    private func fail(_ error: AppError, publish: Bool = true) {
         health.invalidate(); keepalive?.cancel(); keepalive = nil
         if connection != nil {
             diagnostics.record("connection.close reason=\(error.localizedDescription) tcpReady=\(tcpReady) greetingReady=\(ready) sent=\(nextID) receivedBytes=\(receivedBytes) receivedLines=\(receivedLines) pingReplies=\(pingReplies) pending=\(pending.count)", attempt: generation)
@@ -551,11 +664,13 @@ actor USBCommandClient: USBCommandTransport {
         }
         for monitor in pathMonitors { monitor.cancel() }
         pathMonitors.removeAll()
+        inputSession = nil; inputGeneration = 1; releasing = nil
         generation = UUID(); ready = false; tcpReady = false; supportsHID = false; lastWaitingError = nil; lastPath = nil
         receivedBytes = 0; receivedLines = 0; pingReplies = 0
         connection?.cancel(); connection = nil; incoming.removeAll(); nextID = 0
         connectWaiter?.resume(throwing: error); connectWaiter = nil
         let waiting = pending; pending.removeAll()
-        for request in waiting.values { request.continuation.resume(throwing: error) }
+        for request in waiting.values { request.continuation?.resume(throwing: error) }
+        if publish { onProgress(error == .stopped ? .disconnected("连接已关闭") : .failed(error.localizedDescription)) }
     }
 }

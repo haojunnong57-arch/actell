@@ -1,8 +1,12 @@
+> 当前源码已升级为 [PA3 常连](PERSISTENT-USB.md)：停止任务释放 HID 并保留 TCP，App 与固件必须同时更新。本文 PA1/PA2 构建、烧录和测试结果是历史记录；PA3 已完成 COM 烧录和启动检查，iPhone 端仍待验收，见该升级说明。
+
+> 后续变更：图片的 2/5/45 秒年龄限制和模型工具 `based_on_image_id` 参数已移除。本文相关旧策略/测试是历史记录，当前行为见 [截图策略](IMAGE-POLICY.md)。
+
 > 后续主线集成已保留通用 BGContinuedProcessing 能力，并与 SCK 共用一个生命周期协调器；当前范围见 [集成记录](../integration/INTEGRATION.md)。本文保留该阶段的设计与验证历史。
 
 # iOS 27 ScreenCaptureKit + ESP32-S3 USB Device 实验分支
 
-> 2026-10-04 更新：本文保留初始 PA1 设计历史；其中 PSK/HMAC 章节已由用户选择的 [PA2 免 PSK 协议](PROTOCOL.md)取代。当前 USB 不访问 Keychain/NVS，不认证或加密；可访问 USB 网络的其他程序也能调用设备。本 App 的逐动作批准、帧校验、ACK、停止机制保留。旧 Host TLS 和模型 API key 不变。最新构建与实机状态见 [NO-PSK.md](NO-PSK.md) 和 [NCM-BRINGUP.md](NCM-BRINGUP.md)。
+> 2026-10-04 更新：本文保留初始 PA1 设计历史；其中 PSK/HMAC 章节已由用户选择的 [当前免 PSK 协议](PROTOCOL.md)取代。当前 USB 不访问 Keychain/NVS，不认证或加密；可访问 USB 网络的其他程序也能调用设备。本 App 的逐动作批准、帧校验、ACK、停止机制保留。旧 Host TLS 和模型 API key 不变。最新构建与实机状态见 [NO-PSK.md](NO-PSK.md) 和 [NCM-BRINGUP.md](NCM-BRINGUP.md)。
 
 本分支实现并编译了新的采集与同线 NCM/HID 路径；尚未烧录或验证 iPhone USB 枚举、屏幕授权或实际控制。原 `firmware/` USB Host 工程保留，新的工程在 `firmware-device/`。没有增加设备、Wi-Fi/BLE 通道、Broadcast Upload Extension、VPN 或静音音频保活。
 

@@ -5,6 +5,7 @@ protocol DeviceBridge: Sendable {
     func supportsBackgroundExecution(tool: String) async -> Bool
     func approvalContext(imageID: String) async throws -> String
     func acceptApproval(imageID: String) async throws
+    func authorizeTaskInput(imageID: String) async throws
     func screenshot() async throws -> FrameImage
     func tap(x: Int, y: Int, imageID: String) async throws
     func drag(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMS: Int, imageID: String) async throws
@@ -18,6 +19,9 @@ extension DeviceBridge {
     func supportsBackgroundExecution(tool: String) async -> Bool { false }
     func approvalContext(imageID: String) async throws -> String { "foreground-only" }
     func acceptApproval(imageID: String) async throws {}
+    func authorizeTaskInput(imageID: String) async throws {
+        throw AppError.unavailable("当前输入通道不支持任务内自动授权")
+    }
 }
 
 struct UnavailableBridge: DeviceBridge {
@@ -38,26 +42,36 @@ enum LiveDeviceBridgeRouter {
     }
     static func make(frames: LatestScreenFrame, captureActive: Bool,
                      usb: USBInput?, backgroundEnabled: Bool, legacy: (any DeviceBridge)? = nil,
-                     onLoss: @escaping @Sendable () -> Void = {}) throws -> any DeviceBridge {
+                     usbStatus: USBConnectionStatus = .idle, diagnostics: USBDiagnosticsLog? = nil,
+                     onLoss: @escaping @Sendable (USBBridgeStopReason) -> Void = { _ in }) throws -> any DeviceBridge {
+        func record(_ route: String, reason: String) {
+            diagnostics?.record("run.route selected=\(route) reason=\(reason) usbState=\(usbStatus.diagnosticState) hasClient=\(usb != nil) captureActive=\(captureActive) backgroundEnabled=\(backgroundEnabled)")
+        }
         guard captureActive else {
             // The explicitly started legacy Host service remains available.
-            if usb == nil, let legacy { return legacy }
+            if usb == nil, let legacy { record("legacy", reason: "explicitLegacyService"); return legacy }
+            record("unavailable", reason: "captureNotActive")
             return UnavailableBridge()
         }
-        var inputFailure = "屏幕由 App 采集；点击或拖动需要连接已启用 HID 的 USB 设备。"
+        var inputFailure = usbStatus.unavailableInputMessage
+        var reason = "usbClientMissing"
         if let usb {
+            reason = "firmwareNCMOnly"
             inputFailure = "当前 USB 固件仅支持 NCM；可以查看屏幕，点击或拖动还需启用 HID。"
             if usb.supportsHID {
                 do {
                     let context = try ScreenUSBExecutionContext(frames: frames, health: usb.health, backgroundEnabled: backgroundEnabled)
-                    return USBDeviceBridge(frames: frames, transport: usb.transport, context: context, onLoss: onLoss)
+                    record("usbHID", reason: "captureAndUSBHealthy")
+                    return USBDeviceBridge(frames: frames, transport: usb.transport, context: context, diagnostics: diagnostics, onLoss: onLoss)
                 } catch {
-                    // Never grant inputs on a stale capture/USB lease. The local
-                    // read path independently validates capture freshness below.
+                    // Never grant inputs on an invalid capture/USB lease. The
+                    // local read path independently validates its capture session.
                     inputFailure = "USB 输入条件已失效；重新连接并取得新画面后再开始控制任务。"
+                    reason = "inputConditionsInvalid"
                 }
             }
         }
+        record("localScreen", reason: reason)
         return try LocalScreenBridge(frames: frames, backgroundEnabled: backgroundEnabled, inputFailure: inputFailure)
     }
 }

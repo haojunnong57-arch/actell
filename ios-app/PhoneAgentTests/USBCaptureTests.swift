@@ -21,12 +21,123 @@ private actor USBSpy: USBCommandTransport {
             if failInput { throw AppError.unknownOutcome }
         }
     }
-    func stop() async { stopped = true }
+    func stopInputs(_ session: USBInputSession) async { stopped = true }
 }
 
 private struct ImmutableTestPixel: @unchecked Sendable { let pixel: CVPixelBuffer }
 
+private actor USBSessionFixture: USBConnectionSession {
+    nonisolated let health = USBTransportHealth()
+    let supportsHID = true
+    private var token = UUID()
+    private(set) var connections = 0
+    private(set) var stops = 0
+    private(set) var commands: [String] = []
+    func connect(attempt: UUID) async throws {
+        token = attempt; connections += 1; health.begin(token)
+    }
+    func command(_ body: String) async throws {
+        commands.append(body)
+        if body == "PING" { health.receivedPing(token) }
+    }
+    func stopInputs(_ session: USBInputSession) async {}
+    func disconnect() async { stops += 1; health.invalidate(token) }
+}
+
 final class USBCaptureTests: XCTestCase {
+    @MainActor private func waitUntil(_ predicate: @MainActor () -> Bool) async throws {
+        for _ in 0..<500 {
+            if predicate() { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Timed out waiting for USB view-model transition")
+    }
+    @MainActor func testIdleHIDConnectionSurvivesInactivePickerWithoutInputPermission() async throws {
+        let transport = USBSessionFixture()
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+                                  makeUSBClient: { _, _ in transport })
+        model.connectUSB()
+        try await waitUntil { !model.isListening }
+        XCTAssertEqual(model.usbConnectionStatus, .ready(hid: true))
+        model.setScene(.inactive)
+        XCTAssertFalse(model.stopping)
+        XCTAssertEqual(model.usbConnectionStatus, .ready(hid: true))
+        XCTAssertFalse(model.running)
+        model.setScene(.active)
+        let stops = await transport.stops, commands = await transport.commands
+        XCTAssertEqual(stops, 0)
+        XCTAssertEqual(commands, ["PING"], "Preserving an idle connection never sends input")
+        XCTAssertTrue(model.usbDiagnosticReport().contains("idleUSB.preserved reason=scene_inactive"))
+        model.disconnect()
+        try await waitUntil { !model.stopping }
+        let closed = await transport.stops; XCTAssertEqual(closed, 1)
+    }
+    @MainActor func testIdleConnectionSurvivesBackgroundAndRepeatedConnectIsNoOp() async throws {
+        let transport = USBSessionFixture()
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+                                  makeUSBClient: { _, _ in transport })
+        model.connectUSB(); try await waitUntil { !model.isListening }
+        model.setScene(.inactive); model.setScene(.background)
+        XCTAssertEqual(model.usbConnectionStatus, .ready(hid: true))
+        model.setScene(.active); model.connectUSB()
+        try await waitUntil { !model.isListening }
+        let connections = await transport.connections, stops = await transport.stops
+        XCTAssertEqual(connections, 1); XCTAssertEqual(stops, 0)
+        XCTAssertTrue(model.usbDiagnosticReport().contains("idleUSB.preserved reason=scene_background"))
+        model.disconnect(); try await waitUntil { !model.stopping }
+        let closed = await transport.stops; XCTAssertEqual(closed, 1)
+    }
+    @MainActor func testLockAndCaptureLossPreserveIdleConnectionWithoutGrantingInputs() async throws {
+        for locked in [true, false] {
+            let transport = USBSessionFixture()
+            let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+                                      makeUSBClient: { _, _ in transport })
+            model.connectUSB(); try await waitUntil { !model.isListening }
+            model.setScene(.inactive)
+            if locked { model.setProtectedDataAvailable(false) } else { model.capture.onLoss?() }
+            try await waitUntil { !model.stopping }
+            let stops = await transport.stops, commands = await transport.commands
+            XCTAssertEqual(stops, 0); XCTAssertEqual(commands, ["PING"])
+            XCTAssertEqual(model.usbConnectionStatus, .ready(hid: true))
+            model.disconnect(); try await waitUntil { !model.stopping }
+        }
+    }
+    @MainActor func testTwoCompletedTasksReuseConnectionAndUserStopDoesNotDisconnect() async throws {
+        let transport = USBSessionFixture()
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+                                  makeUSBClient: { _, _ in transport })
+        model.connectUSB(); try await waitUntil { !model.isListening }
+        for _ in 0..<2 {
+            model.start(); try await waitUntil { model.approval != nil }
+            model.approve(true); try await waitUntil { !model.running && !model.stopping }
+            XCTAssertEqual(model.activeRecord?.phase, .completed)
+            XCTAssertEqual(model.usbConnectionStatus, .ready(hid: true))
+        }
+        model.start(); model.stop(); try await waitUntil { !model.stopping }
+        XCTAssertEqual(model.usbConnectionStatus, .ready(hid: true))
+        let connections = await transport.connections, stops = await transport.stops
+        XCTAssertEqual(connections, 1); XCTAssertEqual(stops, 0)
+        model.disconnect(); try await waitUntil { !model.stopping }
+        let closed = await transport.stops; XCTAssertEqual(closed, 1)
+    }
+    func testMissingUSBRouteReportsReconnectAndLogsMetadataWithoutRawStatus() async throws {
+        let frames = LatestScreenFrame(), epoch = frames.begin()
+        frames.put(try pixel(), orientation: 1, presentationSeconds: 1, epoch: epoch)
+        let diagnostics = USBDiagnosticsLog(console: false)
+        let bridge = try LiveDeviceBridgeRouter.make(frames: frames, captureActive: true, usb: nil,
+            backgroundEnabled: true, usbStatus: .disconnected("private-task-text"), diagnostics: diagnostics)
+        let image = try await bridge.screenshot()
+        do { try await bridge.approvalContext(imageID: image.id); XCTFail("No USB cannot approve input") }
+        catch {
+            XCTAssertTrue(error.localizedDescription.contains("USB 已断开"))
+            XCTAssertTrue(error.localizedDescription.contains("重新连接"))
+            XCTAssertTrue(error.localizedDescription.contains("新任务"))
+            XCTAssertFalse(error.localizedDescription.contains("private-task-text"))
+        }
+        XCTAssertTrue(diagnostics.report().contains("selected=localScreen reason=usbClientMissing usbState=disconnected"))
+        XCTAssertFalse(diagnostics.report().contains("private-task-text"))
+        await bridge.stop()
+    }
     private func pixel() throws -> CVPixelBuffer {
         var pixel: CVPixelBuffer?
         XCTAssertEqual(CVPixelBufferCreate(kCFAllocatorDefault, 8, 4, kCVPixelFormatType_32BGRA,
@@ -56,15 +167,19 @@ final class USBCaptureTests: XCTestCase {
         frames.invalidate(epoch: epoch) // A late stop from the old stream cannot stop the new one.
         XCTAssertNoThrow(try frames.latestStamp())
     }
-    func testStaleOrInvalidOrientationCannotAuthorize() throws {
+    func testStaticFrameDoesNotExpireButInvalidOrientationAndCaptureLossStillFail() throws {
         let frames = LatestScreenFrame(), image = try pixel(), epoch = frames.begin()
         frames.put(image, orientation: 0, presentationSeconds: 1, epoch: epoch)
         XCTAssertThrowsError(try frames.latestStamp())
-        frames.put(image, orientation: 1, presentationSeconds: 1, epoch: epoch, now: ProcessInfo.processInfo.systemUptime - 3)
+        let arrived = ProcessInfo.processInfo.systemUptime - 3_600
+        frames.put(image, orientation: 1, presentationSeconds: 1, epoch: epoch, now: arrived)
+        XCTAssertEqual(try frames.latestStamp().uptime, arrived)
+        XCTAssertEqual(try frames.encoded().capture?.uptime, arrived, "Reading must not pretend an old sample just arrived")
+        XCTAssertNoThrow(try frames.requireSession(epoch))
+        frames.invalidate()
         XCTAssertThrowsError(try frames.latestStamp())
         XCTAssertThrowsError(try frames.encoded())
-        let stamp = CaptureStamp(sequence: 1, uptime: 100, presentationSeconds: 1, width: 8, height: 4, videoOrientation: 1)
-        XCTAssertFalse(stamp.isFresh(now: 99)); XCTAssertFalse(stamp.isFresh(now: 103))
+        XCTAssertThrowsError(try frames.requireSession(epoch))
     }
     func testLocalCaptureRoutesWithoutUSBAndTakesPrecedenceOverLegacy() async throws {
         let frames = LatestScreenFrame(), epoch = frames.begin()
@@ -284,9 +399,8 @@ final class USBCaptureTests: XCTestCase {
             onImage: { _, _ in }, onReceipt: { _ in })
         let shot = try await action.execute(name: "screenshot", parameters: [:], callID: "local-shot")
         XCTAssertEqual(shot.images.count, 1)
-        let frame = try await bridge.screenshot()
         do {
-            _ = try await action.execute(name: "tap", parameters: ["x": 1, "y": 1, "based_on_image_id": frame.id, "purpose": "fixture"], callID: "no-hid")
+            _ = try await action.execute(name: "tap", parameters: ["x": 1, "y": 1, "purpose": "fixture"], callID: "no-hid")
             XCTFail("NCM-only cannot send input")
         } catch { XCTAssertTrue(error.localizedDescription.contains("HID")) }
         let commands = await transport.commands
@@ -304,13 +418,14 @@ final class USBCaptureTests: XCTestCase {
         XCTAssertTrue(commands.isEmpty)
         await bridge.stop()
     }
-    func testCaptureReaderCannotSurviveCancellationStaleFrameOrNewCaptureEpoch() async throws {
+    func testCaptureReaderRetainsStaticFrameButRejectsCancellationOrNewCaptureEpoch() async throws {
         let frames = LatestScreenFrame(), image = try pixel(), epoch = frames.begin()
         frames.put(image, orientation: 1, presentationSeconds: 1, epoch: epoch)
         let bridge = try LiveDeviceBridgeRouter.make(frames: frames, captureActive: true, usb: nil, backgroundEnabled: false)
         _ = try await bridge.screenshot()
-        frames.put(image, orientation: 1, presentationSeconds: 2, epoch: epoch, now: ProcessInfo.processInfo.systemUptime - 3)
-        do { _ = try await bridge.screenshot(); XCTFail("Stale screen") } catch {}
+        frames.put(image, orientation: 1, presentationSeconds: 2, epoch: epoch, now: ProcessInfo.processInfo.systemUptime - 3_600)
+        let retained = try await bridge.screenshot()
+        XCTAssertEqual(retained.capture?.sequence, 2)
         let replacement = frames.begin()
         frames.put(image, orientation: 1, presentationSeconds: 3, epoch: replacement)
         do { _ = try await bridge.screenshot(); XCTFail("Must not cross system capture authorization epochs") } catch {}
@@ -336,6 +451,23 @@ final class USBCaptureTests: XCTestCase {
         do { _ = try await bridge.screenshot(); XCTFail("Input-capable runs still stop on USB loss") } catch {}
         await bridge.stop()
     }
+    func testUSBInputAcceptsUnchangedFrameOlderThanAllFormerImageDeadlines() async throws {
+        let frames = LatestScreenFrame(), epoch = frames.begin(), transport = USBSpy()
+        frames.put(try pixel(), orientation: 1, presentationSeconds: 1, epoch: epoch,
+                   now: ProcessInfo.processInfo.systemUptime - 3_600)
+        let health = USBTransportHealth(), token = UUID()
+        health.begin(token); health.receivedPing(token)
+        let context = try ScreenUSBExecutionContext(frames: frames, health: health, backgroundEnabled: false)
+        // Use the same protocol dispatch as ActionCoordinator, including the
+        // actor-isolated approval witness rather than the extension default.
+        let bridge: any DeviceBridge = USBDeviceBridge(frames: frames, transport: transport, context: context)
+        let frame = try await bridge.screenshot()
+        try await bridge.acceptApproval(imageID: frame.id)
+        try await bridge.tap(x: 1, y: 2, imageID: frame.id)
+        let commands = await transport.commands
+        XCTAssertEqual(commands, ["TAP 1 2"])
+        await bridge.stop()
+    }
     func testPostACKBarrierRejectsFrameThatArrivedDuringAction() async throws {
         let frames = LatestScreenFrame(), image = try pixel(), epoch = frames.begin()
         frames.put(image, orientation: 1, presentationSeconds: 1, epoch: epoch)
@@ -357,6 +489,7 @@ final class USBCaptureTests: XCTestCase {
         let frames = LatestScreenFrame(), image = try pixel(), epoch = frames.begin()
         frames.put(image, orientation: 1, presentationSeconds: 1, epoch: epoch)
         let transport = USBSpy(), bridge = USBDeviceBridge(frames: frames, transport: transport)
+        try await bridge.arm()
         let first = try await bridge.screenshot()
         frames.put(image, orientation: 6, presentationSeconds: 2, epoch: epoch)
         do { try await bridge.tap(x: 1, y: 1, imageID: first.id); XCTFail("rotation must fail") } catch {}
@@ -383,11 +516,11 @@ final class USBCaptureTests: XCTestCase {
         do { _ = try await bridge.screenshot(); XCTFail() } catch {}
         let commands = await transport.commands; XCTAssertTrue(commands.isEmpty)
     }
-    func testNoPSKGreetingRequiresExplicitPA2Version() throws {
-        XCTAssertFalse(try USBWire.supportsHID("PA2 READY 0"))
-        XCTAssertTrue(try USBWire.supportsHID("PA2 READY 1"))
+    func testPersistentGreetingRequiresPA3AndRejectsOldFirmware() throws {
+        XCTAssertFalse(try USBWire.supportsHID("PA3 READY 0"))
+        XCTAssertTrue(try USBWire.supportsHID("PA3 READY 1"))
         for line in ["PA1 LOCKED", "PA1 CHALLENGE " + String(repeating: "0", count: 64),
-                     "READY 1", "PA2 READY 2", "PA2 READY 1 ", " PA2 READY 1", "PA2  READY 1"] {
+                     "PA2 READY 0", "PA2 READY 1", "READY 1", "PA3 READY 2", "PA3 READY 1 ", " PA3 READY 1", "PA3  READY 1"] {
             XCTAssertThrowsError(try USBWire.supportsHID(line), line)
         }
     }
@@ -395,6 +528,7 @@ final class USBCaptureTests: XCTestCase {
         let ack = try USBWire.parseACK("4294967295 executed")
         XCTAssertEqual(ack.id, UInt64(UInt32.max)); XCTAssertEqual(ack.phase, "executed")
         XCTAssertEqual(try USBWire.parseACK("1 received").phase, "received")
+        XCTAssertEqual(try USBWire.parseACK("1 cancelled").phase, "cancelled")
         for line in ["0 executed", "01 executed", "+1 executed", "4294967296 executed", "1 EXECUTED",
                      "1 executed mac", "1  executed", "1 executed ", "1\texecuted", "1 rejected"] {
             XCTAssertThrowsError(try USBWire.parseACK(line), line)
@@ -551,5 +685,207 @@ final class USBCaptureTests: XCTestCase {
         XCTAssertTrue(report.contains("rejected=runningOrStopping"))
         XCTAssertFalse(report.contains("connect.begin"))
         XCTAssertFalse(report.contains(model.goal))
+    }
+}
+
+// Real NWConnection tests against a loopback-only scripted peer. No USB device,
+// Local Network permission, captured phone content or external service is used.
+private final class PersistentUSBPeer: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "phoneagent.tests.usb-peer")
+    private let lock = NSLock()
+    private let listener: NWListener
+    private var readyPort: NWEndpoint.Port?
+    private var peer: NWConnection?
+    private var buffer = Data() // Accessed only on queue.
+    private var heldInput: String?
+    private var rows: [String] = []
+    private var connections = 0
+    private var delayPings = false
+    let holdInput: Bool
+    let dropStop: Bool
+    init(holdInput: Bool = false, dropStop: Bool = false) throws {
+        self.holdInput = holdInput; self.dropStop = dropStop
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        listener = try NWListener(using: parameters)
+        listener.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            if case .ready = state { self.lock.withLock { self.readyPort = self.listener.port } }
+        }
+        listener.newConnectionHandler = { [weak self] connection in
+            guard let self else { connection.cancel(); return }
+            self.lock.withLock { self.connections += 1; self.peer = connection }
+            connection.stateUpdateHandler = { [weak self] state in
+                if case .ready = state {
+                    self?.send("PA3 READY 1", on: connection)
+                    self?.receive(on: connection)
+                }
+            }
+            connection.start(queue: self.queue)
+        }
+        listener.start(queue: queue)
+    }
+    func endpoint() async throws -> NWEndpoint.Port {
+        for _ in 0..<300 {
+            if let port = lock.withLock({ readyPort }) { return port }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        throw AppError.timeout
+    }
+    var lines: [String] { lock.withLock { rows } }
+    var connectionCount: Int { lock.withLock { connections } }
+    func delayPingReplies(_ value: Bool) { lock.withLock { delayPings = value } }
+    func closePeer() { lock.withLock { peer }?.cancel() }
+    func stop() { listener.cancel(); closePeer() }
+    private func send(_ line: String, on connection: NWConnection) {
+        connection.send(content: Data((line + "\n").utf8), completion: .contentProcessed { _ in })
+    }
+    private func receive(on connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) { [weak self] data, _, complete, error in
+            guard let self else { return }
+            if let data { self.buffer.append(data) }
+            while let end = self.buffer.firstIndex(of: 10) {
+                let line = String(decoding: self.buffer[..<end], as: UTF8.self)
+                self.buffer.removeSubrange(...end)
+                self.lock.withLock { self.rows.append(line) }
+                let fields = line.split(separator: " ").map(String.init)
+                guard fields.count >= 2 else { connection.cancel(); return }
+                let id = fields[0]
+                switch fields[1] {
+                case "PING":
+                    if self.lock.withLock({ self.delayPings }) {
+                        self.queue.asyncAfter(deadline: .now() + .milliseconds(250)) { self.send("\(id) executed", on: connection) }
+                    } else { self.send("\(id) executed", on: connection) }
+                case "TAP", "DRAG":
+                    self.send("\(id) received", on: connection)
+                    if self.holdInput { self.heldInput = id }
+                    else { self.send("\(id) executed", on: connection) }
+                case "STOP":
+                    if !self.dropStop {
+                        if let held = self.heldInput { self.send("\(held) cancelled", on: connection); self.heldInput = nil }
+                        self.send("\(id) executed", on: connection)
+                    }
+                default: connection.cancel()
+                }
+            }
+            if !complete, error == nil { self.receive(on: connection) }
+        }
+    }
+}
+
+final class USBPersistentConnectionTests: XCTestCase {
+    private func waitUntil(_ predicate: () -> Bool) async throws {
+        for _ in 0..<300 {
+            if predicate() { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        throw AppError.timeout
+    }
+    private func connected(_ peer: PersistentUSBPeer, diagnostics: USBDiagnosticsLog) async throws -> USBCommandClient {
+        let port = try await peer.endpoint()
+        let client = USBCommandClient(diagnostics: diagnostics, makeConnection: { _, _ in
+            NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+        })
+        try await client.connect()
+        try await client.command("PING")
+        return client
+    }
+    private func permit(_ client: USBCommandClient, session: USBInputSession) throws -> USBInputPermit {
+        let frames = LatestScreenFrame(), epoch = frames.begin()
+        var pixel: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(kCFAllocatorDefault, 8, 4, kCVPixelFormatType_32BGRA, nil, &pixel), kCVReturnSuccess)
+        frames.put(try XCTUnwrap(pixel), orientation: 1, presentationSeconds: 1, epoch: epoch)
+        let context = try ScreenUSBExecutionContext(frames: frames, health: client.health, backgroundEnabled: false)
+        return USBInputPermit(context: context, observation: try XCTUnwrap(context.observation()), sequence: try frames.latestStamp().sequence, inputSession: session)
+    }
+    func testTwoInputTasksReuseSocketAndLateOldStopCannotRevokeNextTask() async throws {
+        let peer = try PersistentUSBPeer(); defer { peer.stop() }
+        let log = USBDiagnosticsLog(console: false), client = try await connected(peer, diagnostics: log)
+        let first = try await client.openInputSession()
+        try await client.command("TAP 1 2", permit: permit(client, session: first))
+        await client.stopInputs(first)
+        let second = try await client.openInputSession()
+        XCTAssertEqual(second.connection, first.connection)
+        XCTAssertEqual(second.generation, first.generation + 1)
+        await client.stopInputs(first) // Late cleanup from a completed run.
+        do { try await client.command("TAP 3 4", permit: permit(client, session: first)); XCTFail("Old task sent input") } catch {}
+        try await client.command("TAP 5 6", permit: permit(client, session: second))
+        await client.stopInputs(second)
+        try await client.command("PING")
+        XCTAssertEqual(peer.connectionCount, 1)
+        XCTAssertEqual(peer.lines.filter { $0.contains(" TAP ") }.map { $0.split(separator: " ").dropFirst().joined(separator: " ") }, ["TAP 1 1 2", "TAP 2 5 6"])
+        XCTAssertEqual(peer.lines.filter { $0.contains(" STOP ") }.count, 2)
+        XCTAssertFalse(log.report().contains("connection.close"))
+        await client.disconnect()
+        XCTAssertTrue(log.report().contains("connection.close"))
+    }
+    func testCancelledPingConsumesLateReplyWithoutClosingConnection() async throws {
+        let peer = try PersistentUSBPeer(); defer { peer.stop() }
+        let log = USBDiagnosticsLog(console: false), client = try await connected(peer, diagnostics: log)
+        peer.delayPingReplies(true)
+        let before = peer.lines.count
+        let ping = Task { try await client.command("PING") }
+        try await waitUntil { peer.lines.count > before }
+        ping.cancel()
+        do { try await ping.value; XCTFail("Cancelled wait returned success") } catch { XCTAssertTrue(error is CancellationError) }
+        try await waitUntil { log.report().contains("request.cancel") }
+        try await Task.sleep(nanoseconds: 350_000_000)
+        peer.delayPingReplies(false)
+        try await client.command("PING")
+        XCTAssertNoThrow(try client.health.requireHealthy(now: ProcessInfo.processInfo.systemUptime))
+        XCTAssertEqual(peer.connectionCount, 1)
+        XCTAssertFalse(log.report().contains("connection.close"))
+        await client.disconnect()
+    }
+    func testCancelledInputReleasesOnceAndCoalescesTaskCleanup() async throws {
+        let peer = try PersistentUSBPeer(holdInput: true); defer { peer.stop() }
+        let log = USBDiagnosticsLog(console: false), client = try await connected(peer, diagnostics: log)
+        let session = try await client.openInputSession(), allowed = try permit(client, session: session)
+        let input = Task { try await client.command("DRAG 1 2 3 4 2000", permit: allowed) }
+        try await waitUntil { peer.lines.contains { $0.contains(" DRAG ") } }
+        input.cancel()
+        do { try await input.value; XCTFail("Cancelled input returned success") } catch { XCTAssertTrue(error is CancellationError) }
+        await client.stopInputs(session)
+        try await client.command("PING")
+        XCTAssertEqual(peer.lines.filter { $0.contains(" STOP ") }.count, 1)
+        XCTAssertFalse(log.report().contains("connection.close"))
+        let next = try await client.openInputSession()
+        XCTAssertEqual(next.generation, session.generation + 1)
+        await client.stopInputs(next)
+        await client.disconnect()
+    }
+    func testMissingReleaseACKClosesConnectionAndRevokesLease() async throws {
+        let peer = try PersistentUSBPeer(dropStop: true); defer { peer.stop() }
+        let log = USBDiagnosticsLog(console: false), client = try await connected(peer, diagnostics: log)
+        let session = try await client.openInputSession()
+        await client.stopInputs(session)
+        XCTAssertTrue(log.report().contains("connection.close"))
+        XCTAssertThrowsError(try client.health.requireHealthy(now: ProcessInfo.processInfo.systemUptime))
+        do { _ = try await client.openInputSession(); XCTFail("Failed release retained authority") } catch {}
+        await client.disconnect()
+    }
+    @MainActor func testPeerDisconnectUpdatesIdleViewModelStatus() async throws {
+        let peer = try PersistentUSBPeer(); defer { peer.stop() }
+        let port = try await peer.endpoint()
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+            makeUSBClient: { diagnostics, onProgress in
+                USBCommandClient(diagnostics: diagnostics, onProgress: onProgress, makeConnection: { _, _ in
+                    NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+                })
+            })
+        model.connectUSB()
+        for _ in 0..<300 {
+            if model.usbConnectionStatus.isReady { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(model.usbConnectionStatus.isReady)
+        peer.closePeer()
+        for _ in 0..<300 {
+            if model.usbConnectionStatus.isFailure { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(model.usbConnectionStatus.isFailure)
+        XCTAssertFalse(model.running)
+        model.disconnect()
     }
 }

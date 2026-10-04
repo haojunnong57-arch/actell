@@ -54,7 +54,7 @@ struct ControlDebugView: View {
                     }
                     if let warning = model.storageWarning { Label(warning, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange) }
                     if let error = model.errorMessage { Text(error).font(.callout).foregroundStyle(.red) }
-                    Text("后台执行需要有效采集会话或系统授予的有限片段；旧 TLS 设备工具仍仅前台可用。所有输入均需批准，真实跨 App 闭环尚未验证。")
+                    Text("采集有效时可在后台执行本次 USB 控制任务；旧 TLS 设备工具仍仅前台可用并逐次确认。真实跨 App 闭环仍需实测。")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(20)
             }
@@ -68,7 +68,7 @@ struct ControlDebugView: View {
                 Button("同意本次运行并开始") { model.start(resuming: resumeAfterConsent) }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("本次任务文字与后续截图会发送到 \(model.settings.baseURL)，使用模型 \(model.settings.model)。截图可能含个人信息；确认你有权发送，并先隐藏敏感内容。API 可能计费，最多 12 次模型调用、5 分钟，token 上限依赖服务报告，无法保证金额上限。每次输入动作仍需单独确认。")
+                Text("本次任务文字与后续截图会发送到 \(model.settings.baseURL)，使用模型 \(model.settings.model)。开始后，USB 控制会按本次任务自动执行普通点击和拖动，无需逐次确认；你可随时停止。截图可能含个人信息，请先隐藏敏感内容。API 可能计费，最多 12 次模型调用，token 上限依赖服务报告，无法保证金额上限。")
             }
     }
     private var bridgeCard: some View {
@@ -96,7 +96,7 @@ struct ControlDebugView: View {
         VStack(alignment: .leading, spacing: 12) {
             Label("确认一次动作", systemImage: "hand.raised.fill").font(.headline)
             Text(approval.detail)
-            Text("先核对上方截图。无法确定目标或操作涉及付款、账户安全、敏感内容、不可逆删除时，请拒绝并自行处理。审批超过 45 秒会要求新截图。")
+            Text("先核对上方截图。无法确定目标或操作涉及付款、账户安全、敏感内容、不可逆删除时，请拒绝并自行处理。本次确认请求 45 秒内有效，从请求出现时开始计时。")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("批准一次") { model.approve(true) }.buttonStyle(.borderedProminent)
@@ -125,8 +125,8 @@ private struct USBCapturePanel: View {
             }.buttonStyle(.bordered)
             Button("仅在本机预览截图") { model.previewCapture() }.disabled(!capture.active || model.running || model.stopping || model.previewingCapture)
             HStack {
-                Button(model.usbConnectionStatus.isConnecting ? "正在连接…" : "连接 USB NCM") { model.connectUSB() }
-                    .disabled(model.running || model.stopping || model.usbConnectionStatus.isConnecting).accessibilityIdentifier("connectUSBNCM")
+                Button(model.usbConnectionStatus.isReady ? "USB 已连接" : (model.usbConnectionStatus.isConnecting ? "正在连接…" : "连接 USB NCM")) { model.connectUSB() }
+                    .disabled(model.running || model.stopping || model.usbConnectionStatus.isConnecting || model.usbConnectionStatus.isReady).accessibilityIdentifier("connectUSBNCM")
                 if model.usbConnectionStatus.isConnecting {
                     ProgressView()
                     Button("取消") { model.disconnect() }.accessibilityIdentifier("cancelUSBConnection")
@@ -136,9 +136,9 @@ private struct USBCapturePanel: View {
                 .font(.callout).foregroundStyle(model.usbConnectionStatus.isFailure ? Color.red : Color.primary)
                 .accessibilityIdentifier("usbConnectionStatus")
             USBDiagnosticsControls(model: model)
-            Text("USB 免 PSK，无需配对。可访问此 USB 网络的其他程序也能发送命令；本 App 的输入仍需逐动作确认。")
+            Text("USB 免 PSK，无需配对。可访问此 USB 网络的其他程序也能发送命令；本 App 仅在你开始任务后执行该任务内的输入。")
                 .font(.caption).foregroundStyle(.secondary)
-            Text("采集任务已固定允许在切换 App 后继续，无需额外设置。后台每段最多 60 秒、任务总计 5 分钟，依赖系统继续提供画面。锁屏、采集失效或到期会停止；USB 控制还要求连接正常、返回前台逐次批准，并在 15 秒内切回匹配画面。真机后台执行仍待验证。")
+            Text("PhoneAgent 自身和其他 App 均可操作。普通点击和拖动按本次任务授权执行，不要求切到后台，也不比对画面是否保持不变。采集任务可在切换 App 后继续；锁屏、采集结束或 USB 故障会停止输入。")
                 .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("screenCaptureBackgroundHelp")
             Text(model.backgroundStatus).font(.caption)
             Text("先在 iPhone 的 USB 以太网设置中使用 192.168.7.2 / 255.255.255.0，路由器和 DNS 留空。采集授权不会自动发送图像；预览只在本机显示。")

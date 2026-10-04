@@ -1,3 +1,5 @@
+> 当前主分支已移除图片年龄检查和模型动作图片 ID 参数，见 [截图策略](../../docs/usb-device/IMAGE-POLICY.md)；本文 45 秒截图限制属于历史设计。
+
 > 后续主线集成已保留通用 BGContinuedProcessing 能力，并与 SCK 共用一个生命周期协调器；当前范围见 [集成记录](../../docs/integration/INTEGRATION.md)。本文保留该阶段的设计与验证历史。
 
 # 有限后台运行片段 · 2026-10-04

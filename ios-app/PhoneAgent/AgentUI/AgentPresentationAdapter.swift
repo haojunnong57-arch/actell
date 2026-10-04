@@ -124,8 +124,8 @@ struct ToolPresentation {
         let allowed: [String]
         switch call.name {
         case "screenshot": allowed = []
-        case "tap": allowed = ["x", "y", "based_on_image_id", "purpose"]
-        case "drag": allowed = ["from_x", "from_y", "to_x", "to_y", "duration_ms", "based_on_image_id", "purpose"]
+        case "tap": allowed = ["x", "y", "purpose"]
+        case "drag": allowed = ["from_x", "from_y", "to_x", "to_y", "duration_ms", "purpose"]
         case "wait": allowed = ["duration_ms"]
         case "finish": allowed = ["summary"]
         default: return "未注册工具；不展示原始参数"

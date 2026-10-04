@@ -1,5 +1,47 @@
 # 本地验证与真机验收边界 · 2026-10-04
 
+## 最新状态 · 2026-10-05（Asia/Shanghai）
+
+用户确认“开启辅助触控后可以了”，对应此前点击收到回执但无可见效果的问题。此前提供的真机日志显示 PA3/HID greeting 正常，两次 TAP 均收到 received → executed，任务结束释放 HID 后 TCP 与 PING 继续；开启辅助触控后点击生效是用户报告的真机结果，没有新增固件改动或烧录。使用前需打开“设置 → 辅助功能 → 触控 → 辅助触控”；出现“触控板与鼠标”设置或收到 executed 本身不等于已经产生可见点击。
+
+最新 App 另已移除强制 finish 收尾要求：设备任务可由模型最终文字结束，finish 不再要求持有截图，诊断版本 `usb-diag-pa3-input-4`。iPhoneOS 无签名编译通过，日志为 `.build/validation/optional-finish-20261005/ios-device-build.log`；此修复之后的 App 重装与真机复测尚未确认。按用户要求未更新或重跑测试，下面各阶段测试结果不代表最新放宽策略已完成全量回归。拖动、旋转、长期后台连续运行、锁屏/拔插恢复仍未完整验证。
+
+以下按实施阶段保留历史记录，“尚未验收”“未烧录”等表述仅描述对应阶段。
+
+> 2026-10-05 输入策略更新：按用户要求，允许在 PhoneAgent 自身及其他 App 输入，删除 PNG 内容比对、方向/尺寸变化拒绝、15 秒匹配等待和发送时新帧序号/场景一致性拦截。停止、锁屏、采集结束、USB 故障仍撤销输入。诊断为 `usb-diag-pa3-input-3`，本次只需更新 App。最终版本仅验证 iPhoneOS 无签名构建；按用户要求测试用例保留本轮开始状态，不更新或重跑，旧拒绝策略测试暂不代表当前行为。
+
+本轮最终构建：`.build/validation/input-preflight-20261005/ios-input-relaxed-build.log` 为 BUILD SUCCEEDED，既有 TLSBridge Swift 6 并发警告仍在。签名工程、Info.plist、固件源码和测试文件与本轮开始摘要一致，未烧录或安装真机 App。此前 `ios-tests.log` 的 169 单元及 1 UI 通过属于扩大修改范围之前的错误提示修正阶段，不作为最终放宽输入策略的测试结果。
+
+最新烧录（2026-10-04 17:24 UTC）：用户授权更新并确认仅 COM 接 Mac后，PA3 NCM+HID 冻结候选已烧录成功，三段设备摘要全部通过；复位后 15 秒 UART 检查确认 PA3/TinyUSB 启动、ELF 匹配且未观察到崩溃，COM 已释放。未重复备份旧固件，未写 NVS/PHY/eFuse；未安装 App 或验收 iPhone 常连/HID。执行日志仅存忽略目录 `.build/device-flashes/pa3-hid-20261004-70wnxwe3/`，详见 [实际烧录记录](PERSISTENT-USB.md#实际烧录--2026-10-04-1724-utc)。以下“未烧录”是准备阶段历史状态。
+
+最新 PA3 常连实现：USB 连接独立于 Agent 任务，任务结束/取消/采集失效只释放 HID；旧任务清理与迟到命令通过内部输入代号隔离。单条请求取消保留回执槽，真实传输/释放失败才关闭连接。App 与固件必须一起更新，不兼容 PA1/PA2。详见 [常连升级与镜像](PERSISTENT-USB.md) 和 [PA3 协议](PROTOCOL.md)。
+
+**最终 166 项 iOS 单元测试、1 项 UI 回归全部通过，iPhoneOS 27 无签名构建通过；C 协议/HID 时序检查与 24 项 TCP 回归通过，NCM-only/NCM+HID 固件构建及 ELF 描述符验证通过。** iOS 包含 5 项真实 NWConnection localhost 回归。日志在 `.build/validation/persistent-usb/`，HID 三段升级候选在 `.build/device-candidates/pa3-ncm-hid-persistent-20261004/`。原始日志/产物均由 Git 忽略。
+
+本轮未烧录、安装真机 App、上传屏幕、提交或推送。Xcode 签名配置、Info.plist 与依赖版本保留原状；之前的未提交修改仍在。下面按阶段保留历史记录，其中“结束后关闭 TCP”“本轮未实现常连”“无需烧录”只描述相应旧版本，不是 PA3 升级指引。
+
+上一轮截图策略：已移除工具层 45 秒、USB 输入层 5/45 秒、采集/执行资格层 2 秒图片年龄检查；模型 `tap` / `drag` 不再包含 `based_on_image_id`，由 App 自动关联最近截图。旧 Host/演示的确认请求改为从请求创建时计时，与截图年龄解耦。诊断版本为 `usb-diag-20261004-6`，见 [IMAGE-POLICY.md](IMAGE-POLICY.md)。
+
+**本轮最终完整 160 项单元测试、1 项诊断 UI 回归均通过，iPhoneOS 27 无签名构建通过。** 日志在 Git 忽略的 `.build/validation/no-image-expiry/ios-tests-final.log`、`ios-device.log`。覆盖无图片 ID 参数的 tap/drag、超过一小时的截图与静止后台帧、审批请求不随旧图片过期、停止/采集换代/USB 丢失及一次性许可和动作后观察屏障。
+
+首轮 `ios-unit.log` 为 159 通过、1 失败：新增旧帧输入夹具使用具体 actor 类型调用审批，落到协议扩展默认实现，没有真正授权。夹具改为与 ActionCoordinator 一致的 `any DeviceBridge` 协议分派；`ios-regression.log` 单项回归通过，随后完整测试通过。首次失败日志保留，没有改弱生产授权检查。构建仍有既有 TLSBridge 并发等警告，未声称零警告。
+
+本轮只改 App、测试与文档，未提交或推送；Xcode 工程、Info.plist、固件 main.c 与本轮开始摘要一致，保留原有未提交改动。工具链为 Xcode 27.0（27A266a）与 iOS 27.0 SDK，依赖未更新。未访问串口、烧录、安装真机 App 或上传屏幕。需用户重新构建安装 App 进行实际采集/HID 复测；本轮未实现 USB 常连。
+
+上一轮前台截图修复：两次真机失败日志均显示采集与 PING 正常，App 在约 15 秒后主动 STOP 并关闭连接。根因是 HID 桥截图错误复用了仅后台可用的输入观察条件；已改为前台/后台都可读取，保持输入场景及新帧保护。同时保存首次停止原因，避免 STOP ACK 等待期间被 watchdog 覆盖为笼统健康错误。诊断升级为 `usb-diag-20261004-5`，见 [FOREGROUND-CAPTURE.md](FOREGROUND-CAPTURE.md)。
+
+**最终完整 156 项单元测试通过，诊断 UI 回归 1 项通过，最终 iPhoneOS 27 无签名构建通过。** 证据位于 `.build/validation/foreground-capture/`：`ios-unit-release.log`、`ios-device-release.log`；UI 成功位于 `ios-tests-final.log`，该次组合运行的单元部分曾有一项失败，后续单元完整重跑通过。前序失败/进程异常与夹具调整均保留并在说明中记录，不将全程描述为一次通过。工程签名、Info.plist、固件 main.c 与本轮开始摘要一致，未操作设备、上传屏幕、提交或推送。后续另一条健康检查错误仍缺对应停止窗口及构建版本；静止画面超过 2 秒没有新帧时仍会停止输入，未声称该边界已在真机解决。
+
+最新 App 行为：按用户要求移除 USB 普通动作逐次回前台批准、后台每段 60 秒、任务总计 5 分钟。普通 USB tap/drag 由任务开始授权，持久记录标记 `task`，保留每次发送前校验及故障停止；旧 Host/演示仍逐动作批准，调用/输入/token 预算及停滞超时保持。SCK 后台采集此前已经启用，非 SCK 任务使用现有 BGContinuedProcessing；没有增加额外保活通道。机制和验收步骤见 [CONTINUOUS-RUNS.md](CONTINUOUS-RUNS.md)。
+
+**最终 151 项单元测试、1 项模拟器 UI 回归及 iPhoneOS 27 无签名构建通过。** 首轮有 1 项旧 Siri 用例因等待已移除的逐动作审批失败；更新为任务确认后直接后台完成，并保留导航/草稿隔离/旧请求防重放验证，随后完整回归通过。日志在 `.build/validation/background-continuous/`：`ios-unit.log`（首轮）、`ios-unit-final.log`、`ios-ui.log`、`ios-device-final.log`。UI 核实系统采集显式启动、新授权说明、旧时限和后台开关不存在，以及 `usb-diag-20261004-4` 诊断导出。Xcode 工程签名配置和 Info.plist 与本轮起始摘要一致；本轮未接触设备、上传屏幕、提交或推送。需重新安装 App；持续后台 HID/Agent 真机闭环尚未验收。
+
+上一轮 App 输入路由修正：HID 烧录后用户报告只读截图路由的点击错误；从错误原文可确定本轮开始时 USB 客户端为空，原始断开触发原因仍缺真机日志。已修复系统授权界面引起短暂 inactive 时误关空闲 USB 的代码路径。真正进入后台时关闭连接仅适用于 `!running` 的空闲状态；运行中的采集/HID 任务继续，锁屏/采集丢失等失效停止保持有效。新增路由与断开原因日志，版本 `usb-diag-20261004-3`。**147 项单元测试、1 项诊断导出 UI 回归及 iPhoneOS 27 无签名构建通过**，包含后台继续任务、回前台批准再返回目标发送输入并观察结果的回归；本轮首轮全部通过。日志在 `.build/validation/usb-input-route/`；工程签名及 Info.plist 摘要未变，未接触设备或上传屏幕，未提交/推送。详见 [输入路由说明](NO-PSK.md#hid-点击入口与空闲连接修正--2026-10-04)。需用户重新安装 App 验证，HID/Agent 真机闭环尚未验收。
+
+23:03（Asia/Shanghai）最新烧录：用户确认仅 COM 接 Mac、原生 USB 断开并批准 NCM+HID。冻结候选以 57600、ROM 无 stub/无压缩方式成功写入；三段设备摘要全部匹配。UART 15 秒观察确认 TinyUSB、PA2 NCM+HID 服务正常启动，冻结 ELF 摘要匹配，未观察到 panic/重启；监视器正常退出、COM 已释放。按用户约定未重复备份，没有触及 NVS/PHY 或 eFuse。详见 [实际烧录记录](HID-BRINGUP.md#本次实际烧录)。本次没有连接 iPhone 或验证真实 HID/Agent 闭环，App 签名未改，未提交/推送。
+
+最新用户反馈及 HID 准备：用户确认最新版 App 的“仅在本机预览截图”已正常显示画面；此前已确认 PA2 双向 PING。这是用户报告的真机结果，不代表 HID 输入或完整 Agent 闭环通过。已在 `with-esp/main` 基线 `dfa3d2d` 上修复固件 STOP 回执竞争：4 项新增用例在旧代码均失败，修复后 18 项 TCP 测试及 C 协议/HID 时序检查通过，NCM-only、NCM+HID 构建和 ELF 描述符检查通过。冻结候选、摘要及待验证项见 [HID 联调准备](HID-BRINGUP.md)。本轮没有烧录、打开串口、操作手机或上传屏幕；App 签名改动保留原状。
+
 2026-10-04 22:41（Asia/Shanghai）最新设置简化：按用户要求将采集任务后台继续能力固定开启，移除设置开关及 UserDefaults 偏好读写。旧的关闭值不再参与路由选择；生产 SCK 路由固定 `backgroundEnabled: true`。系统授权、用户开始任务、时限、采集失效停止和 HID 逐动作审批保留。详见 [固定后台行为](NO-PSK.md#采集任务固定允许后台继续--2026-10-04)。
 
 **最终 143 项单元测试、1 项采集设置 UI 测试和 iPhoneOS 27 无签名构建通过。** 删除了一项已失去适用对象的偏好持久化单元测试；更新现有 UI 测试，核实开关不存在、固定后台说明显示、系统采集仍需明确授权。首轮有一项既有后台 HID 审批往返用例提前中断（3 个断言失败）；补充断言的停止原因后完整单元回归通过，未复现原因，也未放宽输入检查。首次失败和重跑结果均保留在本地。

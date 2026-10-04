@@ -1,8 +1,14 @@
+> 当前源码已升级为 [PA3 常连](PERSISTENT-USB.md)：停止任务释放 HID 并保留 TCP，App 与固件必须同时更新。本文 PA1/PA2 构建、烧录和测试结果是历史记录；PA3 已完成 COM 烧录和启动检查，iPhone 端仍待验收，见该升级说明。
+
+> 后续变更：图片的 2/5/45 秒年龄限制和模型工具 `based_on_image_id` 参数已移除。本文相关旧策略/测试是历史记录，当前行为见 [截图策略](IMAGE-POLICY.md)。
+
 > 后续主线集成已保留通用 BGContinuedProcessing 能力，并与 SCK 共用一个生命周期协调器；当前范围见 [集成记录](../integration/INTEGRATION.md)。本文保留该阶段的设计与验证历史。
 
 # 有限后台执行与已有 worktree 复用 · 第二阶段
 
-> 历史记录：本文的 PSK 设计已被用户 2026-10-04 的“USB 免 PSK”选择取代。当前 USB 使用 [PA2 协议](PROTOCOL.md)，无需配置 NVS/Keychain，测试与升级状态见 [NO-PSK.md](NO-PSK.md)。本文旧测试数据与授权记录保留供追溯，不再作为当前配置指引。
+本页为第二阶段历史设计。当前主分支已移除 USB 逐动作回前台批准、每段后台 60 秒及总计 300 秒，改为开始任务时授权；最新机制、保留的停止条件和验证结果以 [CONTINUOUS-RUNS.md](CONTINUOUS-RUNS.md) 为准。
+
+> 历史记录：本文的 PSK 设计已被用户 2026-10-04 的“USB 免 PSK”选择取代。当前 USB 使用 [PA3 协议](PROTOCOL.md)，无需配置 NVS/Keychain，测试与升级状态见 [NO-PSK.md](NO-PSK.md)。本文旧测试数据与授权记录保留供追溯，不再作为当前配置指引。
 
 首阶段 `18fac1158b35951aa531cdf1b214087f93b4e990` 保留前台限制的原因是**尚未接入后台执行资格**，不是发现 ScreenCaptureKit 禁止该用途，也不是缺少用户对代码修改的授权。本阶段在同一 `feature/ios27-usb-device-capture` worktree 补齐衔接。没有烧录、签名、安装真机 App、读取或生成密钥、改变其它 worktree，或上传真实屏幕。
 

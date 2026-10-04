@@ -164,22 +164,13 @@ struct DemoProvider: LLMProvider {
         switch stage {
         case 0: call = LLMToolCall(name: "screenshot", arguments: "{}")
         case 1:
-            guard let id = latestImageID(request) else { throw AppError.invalid("演示截图缺少 ID") }
-            let arguments: [String: Any] = ["x": 195, "y": 380, "based_on_image_id": id, "purpose": "点击合成画面的演示计数器"]
+            let arguments: [String: Any] = ["x": 195, "y": 380, "purpose": "点击合成画面的演示计数器"]
             call = LLMToolCall(name: "tap", arguments: String(data: try JSONSerialization.data(withJSONObject: arguments), encoding: .utf8)!)
         case 2: call = LLMToolCall(name: "screenshot", arguments: "{}")
         default: call = LLMToolCall(name: "finish", arguments: "{\"summary\":\"离线演示完成：已确认一次合成点击并刷新合成截图。没有连接或控制真实设备。\"}")
         }
         let narration = ["这是离线脚本演示。我会先查看合成屏幕。", "接下来演示一次点击，请确认工具卡片中的动作。", "点击已返回。现在获取新的合成截图检查结果。", "演示流程已结束。没有连接模型或控制真实设备。"]
         return LLMResponse(text: narration[min(stage, 3)], finishReason: .toolCalls, toolCalls: [call], request: request, providerName: Self.name)
-    }
-    private func latestImageID(_ request: LLMRequest) -> String? {
-        for message in request.messages.reversed() where message.role == .tool {
-            if let start = message.content.firstIndex(of: "{"),
-               let data = String(message.content[start...]).data(using: .utf8),
-               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let id = object["image_id"] as? String { return id }
-        }
-        return nil
     }
 }
 

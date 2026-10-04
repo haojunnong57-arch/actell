@@ -15,6 +15,8 @@ import Foundation
         let digest: String
         let version: Int
         let expiresAt: Date
+        // Optional to decode existing archives. Missing means legacy per-action.
+        var authorizationMode: InputAuthorizationMode?
         var state: State
     }
     enum Failure: Error { case unavailable, invalid, expired }
@@ -48,12 +50,13 @@ import Foundation
         let data = try JSONSerialization.data(withJSONObject: ["tool": tool, "parameters": parameters], options: [.sortedKeys])
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
-    func register(_ request: Approval, run: RunIdentity, now: Date = Date()) throws {
+    func register(_ request: Approval, run: RunIdentity, now: Date = Date(), authorizationMode: InputAuthorizationMode = .perAction) throws {
         guard request.expiresAt > now, request.version == 1, !request.parametersDigest.isEmpty,
               let callID = request.callID, !records.contains(where: { $0.id == request.id || ($0.runID == run.runID && $0.callID == callID) }) else { throw Failure.invalid }
         var updated = records
         updated.append(Record(id: request.id, sessionID: run.conversationID, runID: run.runID, callID: callID,
-                              digest: request.parametersDigest, version: request.version, expiresAt: request.expiresAt, state: .pending))
+                              digest: request.parametersDigest, version: request.version, expiresAt: request.expiresAt,
+                              authorizationMode: authorizationMode, state: .pending))
         try commit(Array(updated.suffix(256)))
     }
     func isPending(_ request: Approval, run: RunIdentity, now: Date = Date()) -> Bool {
