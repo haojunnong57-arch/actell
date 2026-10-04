@@ -35,7 +35,7 @@ struct ContentView: View {
                         if let warning = sessions.warning { Label(warning, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange) }
                         ForEach(visible) { session in
                             NavigationLink(value: session.id) {
-                                VStack(alignment: .leading, spacing: 7) {
+                                VStack(alignment: .leading, spacing: 3) {
                                     HStack(spacing: 8) {
                                         Text(session.title).font(.headline).lineLimit(1)
                                         if session.phase == .awaitingApproval, model.approval(in: session.id) != nil {
@@ -46,12 +46,11 @@ struct ContentView: View {
                                                 .accessibilityIdentifier("conversation-needs-approval")
                                         }
                                         Spacer(minLength: 0)
-                                        Text(session.updatedAt, style: .date).font(.caption2).foregroundStyle(.tertiary)
-                                            .fixedSize()
                                     }
-                                    Text(session.preview).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
-                                }.padding(.vertical, 8)
+                                    Text(session.preview).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                                }
                             }
+                            .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 16))
                             .swipeActions { if !model.isRunning(in: session.id) { Button("删除", role: .destructive) { sessions.delete(session.id) } } }
                         }
                         if visible.isEmpty { ContentUnavailableView.search(text: search) }

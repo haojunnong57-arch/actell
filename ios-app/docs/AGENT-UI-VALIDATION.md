@@ -2,6 +2,14 @@
 
 范围：`with-esp/ios-app`，基于 `e183d6d` 的会话 UI 与工具错误处理改动。以下记录描述提交前的验证工作区。固定 Bundle ID `com.ja1chen.PhoneAgent`。未改 `app-only`、固件或 SwiftAgentKit 核心快照；验证期间未提交、推送、刷机或安装真机。本轮接续此前已存在的会话 UI 改动。
 
+## 后续调整：移除列表时间并压缩行高
+
+按后续反馈，将上下 inset 从各 6 pt 增加到各 **10 pt**，每行比前一版增加 8 pt 留白。最终增量编译和现有新建会话 UI 用例 **1/1 通过**，0 failures；日志见 [`list-balanced-spacing.log`](../.build/validation/list-balanced-spacing.log)。已实际查看[增加留白后的列表](../.build/validation/list-balanced-spacing-shots/456775A9-0EE0-4385-90E6-85000A9C54B8.png)，无日期、标题与单行预览布局正常。未新增测试、未重跑单元测试，`git diff --check` 通过。
+
+基于已提交的 `40fc17c` 调整会话列表：移除日期，预览限制为一行，标题与预览间距由 7 pt 改为 3 pt；移除额外的上下 padding，明确列表行上下 inset 各 6 pt。行高由内容及系统字号自然撑开，不固定高度。
+
+增量编译及已有“会话执行后重开历史”“新建真实会话”两条 UI 回归 **2/2 通过**，0 failures，日志见 [`dense-list-no-date.log`](../.build/validation/dense-list-no-date.log)。已实际查看[有消息的列表](../.build/validation/dense-list-no-date-shots/F24B39EB-C89C-4B7A-8C36-07AA6289513C.png)和[两条会话的列表](../.build/validation/dense-list-no-date-shots/5A86814F-9555-4148-9395-64902EA05690.png)，确认无日期、两行紧凑布局及正常截断。本次未新增测试，未重跑单元测试；使用已有模拟器与隔离数据，不调用真实模型或设备。`git diff --check` 通过，未提交本次样式改动。
+
 ## 后续调整：工具错误作为正常结果返回
 
 原“工具执行失败，后续动作已停止”来自 `AgentEventProjection` 的固定失败文案；现改为对应工具的具体错误结果。`DeviceTool` 对普通运行错误返回匹配 callID 的 `AgentToolResult.error`，不再设置停止标记。模型在下一次请求中收到 `role=tool` 的 ERROR 结果，可继续解释或选择有效步骤。该工具错误及拒绝说明不再重复插入 notice；配置/模型服务错误等没有对应工具的通知保持独立。
