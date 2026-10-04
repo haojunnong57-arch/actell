@@ -57,7 +57,7 @@ SCK/USB 路线需用户在系统 picker 授权全屏采集、前台允许 Local 
 
 USB 固件固定为无无线本地 netif / TCP 服务：S3 `192.168.7.1/24:28766`，初验手机手动 `192.168.7.2/24`，Router/DNS 留空。不桥接 Wi-Fi、不另建 Wi-Fi/BLE、不填假网关、不新建或修改 VPN。DHCP/发现后续再做。HID 与 NCM 共用原生 USB；没有额外 CDC。
 
-PSK 是输入服务的应用层 HMAC 认证，不是 Apple 配对文件或采集授权；命令、方向、会话与 ACK 均绑定认证。未配置则锁定，无默认密钥。此阶段没有读取、生成、打印或写入真实 PSK；将来配置会覆盖既有 bridge account，须单独确认目标设备和密钥。详见 [协议](../usb-device/PROTOCOL.md) 与 [PSK 配置范围](../usb-device/BACKGROUND.md#psk-为什么存在配置需要哪些授权)。
+PSK 是输入服务的应用层 HMAC 认证，不是 Apple 配对文件或采集授权；命令、方向、会话与 ACK 均绑定认证。未配置则锁定，无默认密钥。此阶段没有读取、生成、打印或写入真实 PSK；将来配置会覆盖既有 bridge account，须单独确认目标设备和密钥。详见 [协议](../../../../docs/usb-device/PROTOCOL.md) 与 [PSK 配置范围](../usb-device/BACKGROUND.md#psk-为什么存在配置需要哪些授权)。
 
 ## 本地验证
 

@@ -6,8 +6,8 @@
 
 | 文件 | Library ID / 版本 | 字节数 | SHA-256 |
 | --- | --- | ---: | --- |
-| [esp32-iphone-coredevice-protocol-v0.3.tar.gz](../archives/esp32-iphone-coredevice-protocol-v0.3.tar.gz) | `libfile_7db76be09f0c8191886db04b4e553b4e` / 2 | 362648 | `79702eba413323c38610d1b714e99b85137cfe5a0a13446790af50f643637420` |
-| [PhoneAgent-iOS-source.zip](../archives/PhoneAgent-iOS-source.zip) | `libfile_41f5d3e188988191a0712d42c21da5a8` / 2 | 54367 | `57922ed3703d6a0288e5a9dfb014440959d356fd16853faae68b3b9ce138e434` |
+| [esp32-iphone-coredevice-protocol-v0.3.tar.gz](../../esp32-iphone-coredevice-protocol-v0.3.tar.gz) | `libfile_7db76be09f0c8191886db04b4e553b4e` / 2 | 362648 | `79702eba413323c38610d1b714e99b85137cfe5a0a13446790af50f643637420` |
+| [PhoneAgent-iOS-source.zip](../../PhoneAgent-iOS-source.zip) | `libfile_41f5d3e188988191a0712d42c21da5a8` / 2 | 54367 | `57922ed3703d6a0288e5a9dfb014440959d356fd16853faae68b3b9ce138e434` |
 
 原始包完整保存在 `archives/`。解包前检查了路径和条目类型；恢复连接后重新比较解包内容与归档，每个文件完全一致。固件清单包含 158 个源文件，加清单自身共 159 个文件；iOS 清单包含 30 个源文件，加清单自身共 31 个文件。188 项原始清单哈希全部通过。
 

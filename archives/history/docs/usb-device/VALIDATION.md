@@ -12,9 +12,9 @@
 
 本轮最终构建：`.build/validation/input-preflight-20261005/ios-input-relaxed-build.log` 为 BUILD SUCCEEDED，既有 TLSBridge Swift 6 并发警告仍在。签名工程、Info.plist、固件源码和测试文件与本轮开始摘要一致，未烧录或安装真机 App。此前 `ios-tests.log` 的 169 单元及 1 UI 通过属于扩大修改范围之前的错误提示修正阶段，不作为最终放宽输入策略的测试结果。
 
-最新烧录（2026-10-04 17:24 UTC）：用户授权更新并确认仅 COM 接 Mac后，PA3 NCM+HID 冻结候选已烧录成功，三段设备摘要全部通过；复位后 15 秒 UART 检查确认 PA3/TinyUSB 启动、ELF 匹配且未观察到崩溃，COM 已释放。未重复备份旧固件，未写 NVS/PHY/eFuse；未安装 App 或验收 iPhone 常连/HID。执行日志仅存忽略目录 `.build/device-flashes/pa3-hid-20261004-70wnxwe3/`，详见 [实际烧录记录](PERSISTENT-USB.md#实际烧录--2026-10-04-1724-utc)。以下“未烧录”是准备阶段历史状态。
+最新烧录（2026-10-04 17:24 UTC）：用户授权更新并确认仅 COM 接 Mac后，PA3 NCM+HID 冻结候选已烧录成功，三段设备摘要全部通过；复位后 15 秒 UART 检查确认 PA3/TinyUSB 启动、ELF 匹配且未观察到崩溃，COM 已释放。未重复备份旧固件，未写 NVS/PHY/eFuse；未安装 App 或验收 iPhone 常连/HID。执行日志仅存忽略目录 `.build/device-flashes/pa3-hid-20261004-70wnxwe3/`，详见 [实际烧录记录](../../../../docs/usb-device/PERSISTENT-USB.md#实际烧录--2026-10-04-1724-utc)。以下“未烧录”是准备阶段历史状态。
 
-最新 PA3 常连实现：USB 连接独立于 Agent 任务，任务结束/取消/采集失效只释放 HID；旧任务清理与迟到命令通过内部输入代号隔离。单条请求取消保留回执槽，真实传输/释放失败才关闭连接。App 与固件必须一起更新，不兼容 PA1/PA2。详见 [常连升级与镜像](PERSISTENT-USB.md) 和 [PA3 协议](PROTOCOL.md)。
+最新 PA3 常连实现：USB 连接独立于 Agent 任务，任务结束/取消/采集失效只释放 HID；旧任务清理与迟到命令通过内部输入代号隔离。单条请求取消保留回执槽，真实传输/释放失败才关闭连接。App 与固件必须一起更新，不兼容 PA1/PA2。详见 [常连升级与镜像](../../../../docs/usb-device/PERSISTENT-USB.md) 和 [PA3 协议](../../../../docs/usb-device/PROTOCOL.md)。
 
 **最终 166 项 iOS 单元测试、1 项 UI 回归全部通过，iPhoneOS 27 无签名构建通过；C 协议/HID 时序检查与 24 项 TCP 回归通过，NCM-only/NCM+HID 固件构建及 ELF 描述符验证通过。** iOS 包含 5 项真实 NWConnection localhost 回归。日志在 `.build/validation/persistent-usb/`，HID 三段升级候选在 `.build/device-candidates/pa3-ncm-hid-persistent-20261004/`。原始日志/产物均由 Git 忽略。
 

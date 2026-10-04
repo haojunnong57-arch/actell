@@ -9,7 +9,8 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var path: [UUID] = []
     @State private var search = ""
-    @State private var settingsOpen = false
+    private enum Panel: String, Identifiable { case settings, providers, device; var id: String { rawValue } }
+    @State private var panel: Panel?
     init(model: AgentViewModel, statusPiP: StatusPiPController, commands: SessionCommandService) {
         self.commands = commands
         self.model = model; self.statusPiP = statusPiP; self.sessions = model.sessions
@@ -65,21 +66,32 @@ struct ContentView: View {
             .navigationTitle("会话")
             .searchable(text: $search, prompt: "搜索会话")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button { settingsOpen = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("设置") }
+                ToolbarItem(placement: .topBarLeading) { Button { panel = .settings } label: { Image(systemName: "gearshape") }.accessibilityLabel("设置") }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { panel = .providers } label: { Image(systemName: "server.rack") }
+                        .accessibilityLabel("服务商").accessibilityIdentifier("openProviders")
+                    Button { panel = .device } label: { Image(systemName: "iphone.gen3.radiowaves.left.and.right") }
+                        .accessibilityLabel("设备控制").accessibilityIdentifier("deviceControls")
+                }
                 ToolbarItem(placement: .topBarTrailing) { Button(action: createConversation) { Image(systemName: "square.and.pencil") }.accessibilityLabel("新建会话").accessibilityIdentifier("newConversationToolbar") }
             }
             .navigationDestination(for: UUID.self) { id in
-                ConversationView(model: model, conversationID: id) {
-                    if model.running { model.stop(message: "打开设置，本轮执行已中断", interrupted: true) }
-                    settingsOpen = true
-                }.id(id)
+                ConversationView(model: model, conversationID: id,
+                    openSettings: { panel = .settings }, openDevice: { panel = .device }, openProviders: { panel = .providers }).id(id)
             }
-            .sheet(isPresented: $settingsOpen) { SettingsView(model: model, statusPiP: statusPiP) }
+            .sheet(item: $panel) { item in
+                switch item {
+                case .settings: SettingsView(model: model)
+                case .providers: ProvidersView(model: model)
+                case .device: DeviceControlsView(model: model)
+                }
+            }
+
         }
         .onOpenURL { url in model.openActivityURL(url) }
         .onChange(of: model.activityNavigation) { _, destination in
             guard let destination else { return }
-            settingsOpen = false
+            panel = nil
             path = [destination.route.sessionID]
         }
         .alert("实时活动链接", isPresented: Binding(get: { model.activityLinkError != nil }, set: { if !$0 { model.activityLinkError = nil } })) {
@@ -92,10 +104,10 @@ struct ContentView: View {
         .onChange(of: model.running) { _, _ in routePreparedTask() }
         .onChange(of: model.stopping) { _, _ in routePreparedTask() }
         .onChange(of: scenePhase) { _, phase in if phase == .active { routePreparedTask() } }
-        .onChange(of: settingsOpen) { _, open in if !open { routePreparedTask() } }
+        .onChange(of: panel) { _, value in if value == nil { routePreparedTask() } }
     }
     private func routePreparedTask() {
-        guard scenePhase == .active, !settingsOpen, let id = commands.pendingRoute,
+        guard scenePhase == .active, panel == nil, let id = commands.pendingRoute,
               path.last != id else { return }
         if case .open(let destination) = try? commands.perform(SessionCommand(.open, sessionID: id, source: .app)) {
             path = [destination]

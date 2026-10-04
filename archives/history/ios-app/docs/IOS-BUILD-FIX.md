@@ -8,9 +8,9 @@
 无条件使用 `FileManager.default.homeDirectoryForCurrentUser`，该 API 在 iOS 不可用。
 即使 App 不调用这些便利方法，依赖库整体编译也会失败。
 
-现在工程使用 [Vendor/SwiftAgentKit](../Vendor/SwiftAgentKit/README.md)。这份 MIT 核心快照
+现在工程使用 [Vendor/SwiftAgentKit](../../../../ios-app/Vendor/SwiftAgentKit/README.md)。这份 MIT 核心快照
 来自已固定的 `84ddf324fd2a223834323537eb3f8746d669753b`，43 个 Swift 文件与许可证的原始
-SHA-256 记录在 [UPSTREAM.json](../Vendor/SwiftAgentKit/UPSTREAM.json)。仅三个方法增加平台分支：
+SHA-256 记录在 [UPSTREAM.json](../../../../ios-app/Vendor/SwiftAgentKit/UPSTREAM.json)。仅三个方法增加平台分支：
 移动平台使用 App 沙盒内的 Application Support，macOS/Linux 保留原目录行为。
 宏源码未修改。没有编辑 DerivedData 或 SPM checkout 中的依赖源码。
 

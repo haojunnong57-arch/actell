@@ -13,8 +13,13 @@ final class USBTransportHealth: @unchecked Sendable {
         lock.withLock { if token == nil || session == token { pingAt = nil } }
     }
     func requireHealthy(now: TimeInterval) throws {
+        try requireHealthy(clock: { now })
+    }
+    func requireHealthy(clock: @Sendable () -> TimeInterval) throws {
         try lock.withLock {
-            guard let pingAt, (0...0.75).contains(now - pingAt) else {
+            // Read the monotonic clock alongside the receipt. Sampling it
+            // before taking this lock can make a concurrent PING look future-dated.
+            guard let pingAt, (0...0.75).contains(clock() - pingAt) else {
                 throw AppError.unavailable("USB 心跳已失效，输入已停止")
             }
         }
@@ -53,6 +58,51 @@ final class ScreenUSBExecutionContext: @unchecked Sendable {
     private var scene = Scene.active
     private var revision: UInt64 = 0
     private var entered: TimeInterval
+
+    private var healthObservers: [UUID: @Sendable () -> Void] = [:]
+    private var healthMonitor: Task<Void, Never>?
+    private var monitorGeneration = UUID()
+    private(set) var healthMonitorStarts = 0
+
+    /// All owners share one timer. Enqueue still validates synchronously.
+    func observeHealth(_ onLoss: @escaping @Sendable () -> Void) -> UUID {
+        lock.withLock {
+            let id = UUID(); healthObservers[id] = onLoss
+            if healthMonitor == nil {
+                let token = UUID(); monitorGeneration = token; healthMonitorStarts += 1
+                healthMonitor = Task { [weak self] in
+                    while !Task.isCancelled {
+                        do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return }
+                        guard self?.pollHealth(token) == true else { return }
+                    }
+                }
+            }
+            return id
+        }
+    }
+    func removeHealthObserver(_ id: UUID) {
+        lock.withLock {
+            healthObservers.removeValue(forKey: id)
+            if healthObservers.isEmpty {
+                healthMonitor?.cancel(); healthMonitor = nil; monitorGeneration = UUID()
+            }
+        }
+    }
+    private func pollHealth(_ token: UUID) -> Bool {
+        let callbacks: [@Sendable () -> Void]? = lock.withLock {
+            guard token == monitorGeneration else { return [] }
+            do { try validate(); return nil }
+            catch {
+                let callbacks = Array(healthObservers.values)
+                healthObservers.removeAll(); healthMonitor = nil; monitorGeneration = UUID()
+                return callbacks
+            }
+        }
+        guard let callbacks else { return true }
+        for callback in callbacks { callback() }
+        return false
+    }
+    deinit { healthMonitor?.cancel() }
 
     init(frames: LatestScreenFrame, health: USBTransportHealth? = nil, backgroundEnabled: Bool,
          now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
@@ -99,7 +149,7 @@ final class ScreenUSBExecutionContext: @unchecked Sendable {
                 try frames.requireSession(epoch)
             }
             checking = .usbHeartbeat
-            try health?.requireHealthy(now: time)
+            try health?.requireHealthy(clock: now)
         } catch {
             revoked = true // A late frame/PING never revives an observed loss.
             failure = checking
@@ -170,21 +220,26 @@ final class USBInputPermit: @unchecked Sendable {
 }
 @MainActor private final class ScreenCaptureRunLease: RunBackgroundLease {
     var expirationHandler: (() -> Void)?
-    private var monitor: Task<Void, Never>?
+    private let context: ScreenUSBExecutionContext
+    private var observer: UUID?
     private var completed = false
     init(context: ScreenUSBExecutionContext) {
-        monitor = Task { [weak self] in
-            while !Task.isCancelled {
-                do { try context.requireHealthy(); try await Task.sleep(nanoseconds: 100_000_000) }
-                catch {
-                    guard !Task.isCancelled, let self, !self.completed else { return }
-                    self.expirationHandler?(); self.complete(success: false); return
-                }
+        self.context = context
+        observer = context.observeHealth { [weak self] in
+            Task { @MainActor in
+                guard let self, !self.completed else { return }
+                self.expirationHandler?()
+                self.complete(success: false)
             }
         }
     }
     func report(completed: Int, subtitle: String) {}
-    func complete(success: Bool) { completed = true; monitor?.cancel(); monitor = nil; expirationHandler = nil }
+    func complete(success: Bool) {
+        guard !completed else { return }
+        completed = true
+        if let observer { context.removeHealthObserver(observer) }
+        observer = nil; expirationHandler = nil
+    }
 }
 
 @MainActor enum RunLifecycleFactory {

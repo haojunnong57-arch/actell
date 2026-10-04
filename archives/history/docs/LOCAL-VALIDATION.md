@@ -1,6 +1,6 @@
 # 本次 Mac 验证（2026-10-03）
 
-执行目录为 `<workspace>/with-esp`。下述结果来自恢复连接后实际运行的命令，日志位于 [local-validation/](local-validation/)。它们与原归档中的云端 [test-results.txt](test-results.txt)、[build-results.txt](build-results.txt) 分开保存。
+执行目录为 `<workspace>/with-esp`。下述结果来自恢复连接后实际运行的命令，日志位于 [local-validation/](../../../docs/local-validation)。它们与原归档中的云端 [test-results.txt](test-results.txt)、[build-results.txt](build-results.txt) 分开保存。
 
 ## 环境
 

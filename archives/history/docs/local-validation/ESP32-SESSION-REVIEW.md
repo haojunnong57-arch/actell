@@ -1,6 +1,6 @@
 # ESP32-S3 首次实机测试与试错记录
 
-日期：2026-10-04。范围为本会话的本地工具链、首次 Flash 备份、双接口烧录和基础诊断；没有执行 iPhone Host 联调。机器可读结果见 `esp32-bringup-summary.json`（本地文件，已忽略），硬件分析见 [USB 与 Host 方案](../hardware/ESP32-S3-USB.md)。
+日期：2026-10-04。范围为本会话的本地工具链、首次 Flash 备份、双接口烧录和基础诊断；没有执行 iPhone Host 联调。机器可读结果见 `esp32-bringup-summary.json`（本地文件，已忽略），硬件分析见 [USB 与 Host 方案](../../../../docs/hardware/ESP32-S3-USB.md)。
 
 ## 已保留的证据
 

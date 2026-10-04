@@ -42,6 +42,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: PhoneAgent/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: PhoneAgent
+        INFOPLIST_KEY_NSSupportsLiveActivities: YES
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Connect to your explicitly paired development bridge while this app is open.
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES

@@ -112,15 +112,15 @@ import SwiftAgentKit
         XCTAssertEqual(store.conversation(id)?.messages.last?.tool?.state, .denied)
         XCTAssertEqual(store.conversation(id)?.messages.last?.tool?.result, "拒绝")
     }
-    func testSavingSettingsIsBlockedDuringRunAndCleanup() async throws {
+    func testSavingProviderIsBlockedDuringRunAndCleanup() async throws {
         let (model, ui, item) = try await pendingDemo()
         // This deliberately invalid configuration would fail before any secret
         // access even if the guard regressed. No real credential is read/written.
-        model.settings = ProviderSettings(baseURL: "invalid", model: "")
-        model.saveSettings(key: "", psk: "")
+        let profile = ProviderProfile(settings: ProviderSettings(baseURL: "invalid", model: ""))
+        XCTAssertFalse(model.saveProvider(profile, key: ""))
         XCTAssertNil(model.errorMessage)
         XCTAssertTrue(ui.dispatch(.stop(run: item.identity.run)))
-        model.saveSettings(key: "", psk: "")
+        XCTAssertFalse(model.saveProvider(profile, key: ""))
         XCTAssertNil(model.errorMessage)
         try await waitUntil { !model.stopping }
     }

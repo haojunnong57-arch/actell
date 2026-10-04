@@ -48,7 +48,7 @@ struct ToolStep: Codable, Sendable, Equatable {
         case "tap": return "点击"
         case "drag": return "拖动"
         case "wait": return "等待画面更新"
-        case "finish": return "提交执行结果"
+        case "finish": return "结束本轮"
         default: return name
         }
     }
@@ -70,6 +70,9 @@ struct AgentConversation: Identifiable, Codable, Sendable {
     var updatedAt = Date()
     var entry: SessionEntry?
     var draft = ""
+    var providerID: UUID?
+    var modelID: String?
+    var recoveryNotices: [String: String]?
     var phase: RunPhase = .idle
     var messages: [ChatMessage] = []
     var preview: String {

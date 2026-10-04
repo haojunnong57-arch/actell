@@ -1,4 +1,4 @@
-> 当前源码已升级为 [PA3 常连](PERSISTENT-USB.md)：停止任务释放 HID 并保留 TCP，App 与固件必须同时更新。本文 PA1/PA2 构建、烧录和测试结果是历史记录；PA3 已完成 COM 烧录和启动检查，iPhone 端仍待验收，见该升级说明。
+> 当前源码已升级为 [PA3 常连](../../../../docs/usb-device/PERSISTENT-USB.md)：停止任务释放 HID 并保留 TCP，App 与固件必须同时更新。本文 PA1/PA2 构建、烧录和测试结果是历史记录；PA3 已完成 COM 烧录和启动检查，iPhone 端仍待验收，见该升级说明。
 
 # NCM+HID 烧录与联调 · 2026-10-04
 
@@ -22,7 +22,7 @@
 
 烧录前准备工作位于 `with-esp`，分支 `main`，基线 `dfa3d2d`。只修改固件 STOP 接收逻辑、对应测试及说明；用户已有 Xcode 签名配置未动。以下为准备阶段验证，串口烧录结果见上节。
 
-此前 TCP 一次收到多条命令时，后来的 STOP 会覆盖首个 STOP 的回执 ID 并重新开始释放；相同 ID 的重复 STOP 还会错误返回 received。现在首个有效 STOP 固定其 ID 和 500 ms 释放期限，直到中性报告完成前不再接收/解析后续命令；释放完成返回该 ID 的 executed 并断开，超时关闭且不报成功。协议细节见 [PROTOCOL.md](PROTOCOL.md)。
+此前 TCP 一次收到多条命令时，后来的 STOP 会覆盖首个 STOP 的回执 ID 并重新开始释放；相同 ID 的重复 STOP 还会错误返回 received。现在首个有效 STOP 固定其 ID 和 500 ms 释放期限，直到中性报告完成前不再接收/解析后续命令；释放完成返回该 ID 的 executed 并断开，超时关闭且不报成功。协议细节见 [PROTOCOL.md](../../../../docs/usb-device/PROTOCOL.md)。
 
 - 新增四项回归，在旧实现全部失败：不同 ID 连续 STOP、相同 ID 重复 STOP、STOP 后的 PING/TAP、NCM-only 连续 STOP。修复后 18 项生产 C server localhost TCP 测试全部通过。
 - 严格 C 编译及 ASan/UBSan 下，协议解析/去重、点击拖动释放顺序、取消和超时检查通过。USB 平台层为夹具，不代表真实总线传输通过。

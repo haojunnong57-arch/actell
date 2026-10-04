@@ -167,6 +167,19 @@ import Combine
         else if [.approved, .executing, .succeeded, .failed].contains(state) { conversations[index].phase = .running }
         touch(index); saveNow()
     }
+    func addRecoveryNotice(_ checkpoint: RunCheckpoint) {
+        guard !checkpoint.message.isEmpty, let index = index(checkpoint.conversationID),
+              conversations[index].recoveryNotices?[checkpoint.recoveryKey] != checkpoint.message else { return }
+        if conversations[index].recoveryNotices == nil { conversations[index].recoveryNotices = [:] }
+        conversations[index].recoveryNotices?[checkpoint.recoveryKey] = checkpoint.message
+        addNotice(checkpoint.message, in: checkpoint.conversationID)
+    }
+    func selectProvider(_ providerID: UUID?, model: String?, in id: UUID) {
+        guard let index = index(id), activeRun?.conversationID != id else { return }
+        conversations[index].providerID = providerID
+        conversations[index].modelID = model
+        touch(index); saveNow()
+    }
     func addNotice(_ text: String, in id: UUID) {
         guard let index = index(id) else { return }
         conversations[index].messages.append(ChatMessage(role: .notice, text: String(text.prefix(1_000))))

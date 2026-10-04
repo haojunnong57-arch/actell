@@ -46,16 +46,18 @@ private struct ScreenOnlyProvider: LLMProvider {
     let configuration = LLMProviderConfiguration(name: Self.name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
     func complete(_ request: LLMRequest) async throws -> LLMResponse {
         let observed = request.messages.contains { $0.role == .tool && $0.toolCallId == "read-screen" && !$0.images.isEmpty }
-        let call = observed
-            ? LLMToolCall(id: "finish-screen", name: "finish", arguments: "{\"summary\":\"已查看本机画面\"}")
-            : LLMToolCall(id: "read-screen", name: "screenshot", arguments: "{}")
-        return LLMResponse(text: "", finishReason: .toolCalls, toolCalls: [call], request: request, providerName: Self.name)
+        if observed {
+            return LLMResponse(text: "已查看本机画面", finishReason: .stop, request: request, providerName: Self.name)
+        }
+        return LLMResponse(text: "", finishReason: .toolCalls,
+            toolCalls: [LLMToolCall(id: "read-screen", name: "screenshot", arguments: "{}")], request: request, providerName: Self.name)
     }
     func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let response = try await complete(request)
+                    if !response.text.isEmpty { continuation.yield(.text(response.text)) }
                     for call in response.toolCalls { continuation.yield(.toolCall(call)) }
                     continuation.yield(.finish(reason: response.finishReason, usage: nil))
                     continuation.finish()
@@ -161,19 +163,21 @@ final class ScreenUSBPermitTests: XCTestCase {
         source.push(now: clock.now())
         XCTAssertThrowsError(try context.requireHealthy(), "Elapsed-time removal must not restore a stopped session")
     }
-    func testNewerFrameSceneChangeAndOneShotConsumptionAreFencedAtEnqueue() throws {
+    func testNewerFrameCannotReviveRevokedPermitAndConsumptionRemainsOneShot() throws {
         let source = try SyntheticCapture()
         let context = try ScreenUSBExecutionContext(frames: source.frames, health: source.health, backgroundEnabled: false)
         let scope = try XCTUnwrap(context.observation())
         var sent = 0
         let stale = USBInputPermit(context: context, observation: scope, sequence: try source.frames.latestStamp().sequence)
+        context.revoke()
         source.push(alternate: true)
         XCTAssertThrowsError(try stale.enqueue { sent += 1 })
-        let once = USBInputPermit(context: context, observation: scope, sequence: try source.frames.latestStamp().sequence)
+        let fresh = try ScreenUSBExecutionContext(frames: source.frames, health: source.health, backgroundEnabled: false)
+        let once = USBInputPermit(context: fresh, observation: scope, sequence: try source.frames.latestStamp().sequence)
         try once.enqueue { sent += 1 }
         XCTAssertThrowsError(try once.enqueue { sent += 1 })
-        let changing = USBInputPermit(context: context, observation: scope, sequence: try source.frames.latestStamp().sequence)
-        context.setScene(.inactive)
+        let changing = USBInputPermit(context: fresh, observation: scope, sequence: try source.frames.latestStamp().sequence)
+        fresh.setScene(.inactive)
         XCTAssertThrowsError(try changing.enqueue { sent += 1 })
         XCTAssertEqual(sent, 1)
     }
@@ -215,7 +219,9 @@ final class ScreenUSBPermitTests: XCTestCase {
         defer { ticker.cancel(); timeout.cancel(); read.cancel() }
         let frame = try await read.value
         XCTAssertNotNil(frame.capture); XCTAssertFalse(frame.png.isEmpty)
-        do { try await bridge.authorizeTaskInput(imageID: frame.id); XCTFail("Reading PhoneAgent must not authorize an input to it") } catch {}
+        // Observation metadata is NOT an input grant. Do not call the explicit
+        // authorizeTaskInput API in a test for *ungranted* screenshot access.
+        _ = try await bridge.approvalContext(imageID: frame.id)
         do { try await bridge.tap(x: 1, y: 2, imageID: frame.id); XCTFail("Foreground read is not input permission") } catch {}
         let inputs = await transport.inputs, stopped = await transport.stopped
         XCTAssertTrue(inputs.isEmpty); XCTAssertFalse(stopped, "A healthy foreground screenshot must not send STOP")
@@ -289,9 +295,7 @@ final class ScreenUSBPermitTests: XCTestCase {
         model.mode = .live // Real routing policy; provider and USB remain offline fixtures.
         var presentedApproval = false
         let observation = model.$approval.sink { if $0 != nil { presentedApproval = true } }
-        // This success case supplies a stable observation through dispatch.
-        // A newer sequence between validation and enqueue is deliberately denied
-        // by separate permit-race tests, even if its fixture pixels are identical.
+        // Keep delivering frames and heartbeats through dispatch and observation.
         let ticker = Task {
             while !Task.isCancelled {
                 if model.activitySnapshot?.state.phase == .executing { source.health.receivedPing(source.token) }
@@ -350,7 +354,7 @@ final class ScreenUSBPermitTests: XCTestCase {
         XCTAssertThrowsError(try scheduler.submit(identifier: "opt-out", launched: { _ in XCTFail() }))
         XCTAssertEqual(system.submissions, 0)
     }
-    func testRealAgentRequiresForegroundApprovalThenReturnsToMatchingTarget() async throws {
+    func testPerActionRouteRequiresForegroundApprovalAndExecutesOnlyOnce() async throws {
         let source = try SyntheticCapture(), transport = GuardedUSBFixture(stopDelay: 350_000_000)
         let model = try model(source, transport: transport)
         let ticker = Task { while !Task.isCancelled { source.push(); try? await Task.sleep(nanoseconds: 90_000_000) } }
@@ -364,8 +368,9 @@ final class ScreenUSBPermitTests: XCTestCase {
         XCTAssertNotNil(model.approval)
         let beforeApproval = await transport.inputs; XCTAssertTrue(beforeApproval.isEmpty)
         model.setScene(.active); model.approve(true)
-        try await Task.sleep(nanoseconds: 250_000_000)
-        let stillInPhoneAgent = await transport.inputs; XCTAssertTrue(stillInPhoneAgent.isEmpty)
+        // PA3 baseline 80b1c8f permits input in PhoneAgent after approval.
+        // Leaving foreground is no longer an additional authorization step.
+        try await waitUntil { model.lifecycle.checkpoint?.tools.contains { $0.name == "tap" && $0.delivery == .acknowledged } == true }
         model.setScene(.inactive); model.setScene(.background)
         try await waitUntil { !model.running }
         let inputs = await transport.inputs
@@ -439,8 +444,8 @@ final class ScreenUSBPermitTests: XCTestCase {
         try await waitUntil { !another.running && !another.stopping }
         XCTAssertEqual(another.activeRecord?.phase, .interrupted)
     }
-    func testDifferentTargetCannotSendAndCaptureLossCancelsPendingReturn() async throws {
-        let source = try SyntheticCapture(), transport = GuardedUSBFixture()
+    func testCaptureLossBeforeEnqueueStopsInputEvenWhenFramesChange() async throws {
+        let source = try SyntheticCapture(), transport = GuardedUSBFixture(delay: 500_000_000)
         let model = try model(source, transport: transport)
         let target = TargetState()
         let ticker = Task { while !Task.isCancelled { source.push(alternate: target.changed); try? await Task.sleep(nanoseconds: 90_000_000) } }
@@ -449,7 +454,7 @@ final class ScreenUSBPermitTests: XCTestCase {
         try await waitUntil { model.approval != nil }
         model.setScene(.active); model.approve(true)
         target.changed = true; source.push(alternate: true); model.setScene(.background)
-        try await Task.sleep(nanoseconds: 400_000_000)
+        try await Task.sleep(nanoseconds: 100_000_000)
         let inputs = await transport.inputs; XCTAssertTrue(inputs.isEmpty)
         source.frames.invalidate()
         try await waitUntil { !model.running && !model.stopping }

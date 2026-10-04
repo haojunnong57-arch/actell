@@ -1,6 +1,6 @@
 # PhoneAgent USB Device 固件（实验）
 
-入口是 `main/main.c`，ESP32-S3 原生 USB Device。默认仅 NCM；HID 需要独立构建。当前源码使用 **PA3 免 PSK、跨任务复用 TCP**，无需设备或 App 密钥配置。App 与固件需要一起更新，不兼容 PA1/PA2。两种固件已本机构建；PA3 NCM+HID 已完成 COM 烧录、三段摘要校验和启动检查，iPhone 常连/HID 仍待验收，见 [PA3 升级说明](../docs/usb-device/PERSISTENT-USB.md)。以下为历史设备记录：2026-10-04 19:34 已通过 COM 烧录 PA2 NCM-only；用户随后确认 iPhone PA2 双向 PING、最新版 App 本机截图预览正常。23:03 经用户明确批准烧录已修复 STOP 竞争的 NCM+HID 候选，三段设备摘要、UART 启动检查通过，真实 HID 输入仍待验证，见 [HID 烧录与联调](../docs/usb-device/HID-BRINGUP.md)。历史记录见[首次实机记录](../docs/usb-device/NCM-BRINGUP.md)及[免 PSK 验证与烧录记录](../docs/usb-device/NO-PSK.md)。
+入口是 `main/main.c`，ESP32-S3 原生 USB Device。默认仅 NCM；HID 需要独立构建。当前源码使用 **PA3 免 PSK、跨任务复用 TCP**，无需设备或 App 密钥配置。App 与固件需要一起更新，不兼容 PA1/PA2。两种固件已本机构建；PA3 NCM+HID 已完成 COM 烧录、三段摘要校验和启动检查，iPhone 常连/HID 仍待验收，见 [PA3 升级说明](../docs/usb-device/PERSISTENT-USB.md)。以下为历史设备记录：2026-10-04 19:34 已通过 COM 烧录 PA2 NCM-only；用户随后确认 iPhone PA2 双向 PING、最新版 App 本机截图预览正常。23:03 经用户明确批准烧录已修复 STOP 竞争的 NCM+HID 候选，三段设备摘要、UART 启动检查通过，真实 HID 输入仍待验证，见 [HID 烧录与联调](../archives/history/docs/usb-device/HID-BRINGUP.md)。历史记录见[首次实机记录](../archives/history/docs/usb-device/NCM-BRINGUP.md)及[免 PSK 验证与烧录记录](../archives/history/docs/usb-device/NO-PSK.md)。
 
 从仓库根目录：
 
@@ -38,4 +38,4 @@ USB 没有通信密钥，能访问 USB 网络的其他程序也能调用协议�
 
 固定 IP 验证：设备 `192.168.7.1/24`，iPhone `192.168.7.2/24`，Router/DNS 留空。如果 iOS 不接受空 Router 或不枚举以太网，不填假网关，记录现象后停止。现有蜂窝/系统 VPN 是否仍能访问模型必须单独测试，不修改 VPN。
 
-详细协议、架构和验收顺序见 [架构](../docs/usb-device/ARCHITECTURE.md)、[协议](../docs/usb-device/PROTOCOL.md)、[验证记录](../docs/usb-device/VALIDATION.md)。
+详细协议、架构和验收顺序见 [架构](../archives/history/docs/usb-device/ARCHITECTURE.md)、[协议](../docs/usb-device/PROTOCOL.md)、[验证记录](../archives/history/docs/usb-device/VALIDATION.md)。

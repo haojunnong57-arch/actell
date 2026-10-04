@@ -265,7 +265,7 @@ import LLMProviderKit
         try c.waitForApproval(callID: "tap", generation: token)
         let restored = RunLifecycleCoordinator(scheduler: scheduler, storage: try RunCheckpointStore(directory: directory))
         XCTAssertEqual(restored.checkpoint?.phase, .waitingApproval)
-        XCTAssertEqual(restored.checkpoint?.pendingApproval, "tap")
+        XCTAssertNil(restored.checkpoint?.pendingApproval, "Old approval identity is evidence, never reusable authority")
         XCTAssertFalse(restored.hasLease); XCTAssertEqual(scheduler.identifiers.count, 1)
         XCTAssertThrowsError(try restored.resumeApproved(callID: "tap", digest: "digest", generation: token))
         try restored.begin(identity: RunIdentity(conversationID: identity.conversationID, runID: UUID()), generation: UUID())

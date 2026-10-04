@@ -59,8 +59,8 @@ actor ActionCoordinator {
     private let onExecuting: @Sendable (String, String) async -> Void
     private let onReceipt: @Sendable (String) async -> Void
     private var image: FrameImage?
-    private var actions = 0
     private var stopped = false
+    private var stopTask: Task<Void, Never>?
     private(set) var finishSummary: String?
     private var inputFailureMessage: String?
     private let lifecycle: RunLifecycleCoordinator?
@@ -104,7 +104,6 @@ actor ActionCoordinator {
         case "tap", "drag":
             if let inputFailureMessage { throw AppError.unavailable(inputFailureMessage) }
             let frame = try currentImage()
-            guard actions < limits.maxActions else { throw AppError.unavailable("动作次数达到上限") }
             let purpose = try string(p, "purpose", max: 160)
             let x = try integer(p, name == "tap" ? "x" : "from_x"), y = try integer(p, name == "tap" ? "y" : "from_y")
             let nx = try Wire.normalized(pixel: x, dimension: frame.width), ny = try Wire.normalized(pixel: y, dimension: frame.height)
@@ -136,7 +135,6 @@ actor ActionCoordinator {
                 try await bridge.authorizeTaskInput(imageID: frame.id)
             }
             pendingCallID = nil; authorizationStage = "none"
-            actions += 1
             // Invalidate before the await: a second/reentrant call cannot reuse
             // an approved frame, even if the result is lost or cancellation wins.
             image = nil
@@ -209,7 +207,13 @@ actor ActionCoordinator {
         // remote responses, credentials or arbitrary NSError diagnostics.
         String(((error as? AppError)?.localizedDescription ?? "工具执行失败；未自动重试，请检查设备连接或调整请求").prefix(1_000))
     }
-    func stop() async { stopped = true; image = nil; await bridge.stop() }
+    func stop() async {
+        if let stopTask { await stopTask.value; return }
+        stopped = true; image = nil
+        let task = Task { await bridge.stop() }
+        stopTask = task
+        await task.value
+    }
     private func checkActive() throws {
         try Task.checkCancellation()
         guard !stopped else { throw AppError.stopped }

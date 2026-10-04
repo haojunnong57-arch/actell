@@ -6,12 +6,12 @@
 
 ## 可打开的工程
 
-- 入口：[`PhoneAgent.xcodeproj`](../PhoneAgent.xcodeproj)，共享 scheme：`PhoneAgent`。
+- 入口：[`PhoneAgent.xcodeproj`](../../../../ios-app/PhoneAgent.xcodeproj)，共享 scheme：`PhoneAgent`。
 - 主 target：`PhoneAgent`，Bundle ID 固定为 **`com.ja1chen.PhoneAgent`**；测试 target：`PhoneAgentTests`，ID 为 `com.ja1chen.PhoneAgentTests`。
 - iOS 17+，Swift 5 language mode，complete concurrency checking。主 target 包含 16 个 Swift 文件、PrivacyInfo.xcprivacy；测试 target 包含 3 个 Swift 文件，共 17 项 XCTest。
 - 主 target 的既有本地网络用途说明被保留，没有添加麦克风、相机、通知、后台模式或其他 entitlement。Team 留空，未注册 App ID、签名、安装或启动设备。
-- 使用 Python 标准库[生成脚本](../scripts/generate_xcode_project.py)，不要求 XcodeGen。`project.yml` 的主 Bundle ID 同步更新；生成脚本包含源文件、资源、包依赖、测试 host 和共享 scheme。
-- SwiftAgentKit 仍固定 revision `84ddf324fd2a223834323537eb3f8746d669753b`；LLMProviderKit 仍固定 `0.1.0-alpha.35`。真实解析产生的 [Package.resolved](../PhoneAgent.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved) 锁定 10 个包，没有伪造锁文件或替换为 mock 依赖。
+- 使用 Python 标准库[生成脚本](../../../../ios-app/scripts/generate_xcode_project.py)，不要求 XcodeGen。`project.yml` 的主 Bundle ID 同步更新；生成脚本包含源文件、资源、包依赖、测试 host 和共享 scheme。
+- SwiftAgentKit 仍固定 revision `84ddf324fd2a223834323537eb3f8746d669753b`；LLMProviderKit 仍固定 `0.1.0-alpha.35`。真实解析产生的 [Package.resolved](../../../../ios-app/PhoneAgent.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved) 锁定 10 个包，没有伪造锁文件或替换为 mock 依赖。
 
 ## PiP 能力与边界
 

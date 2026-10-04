@@ -48,7 +48,7 @@ SwiftAgentKit Agent + PrivateVisionProvider / DemoProvider
 | [MarkdownUI 2.4.1](https://github.com/gonzalezreal/swift-markdown-ui/tree/2.4.1) · MIT · Guillermo Gonzalez | SPM MarkdownUI，渲染模型公开回复；禁用外部 inline/block 图片自动下载 | 仓库已说明维护模式。没有迁移其推荐的另一个新库或提高最低 iOS 版本 |
 | SwiftAgentKit 本地兼容快照 | 保留真实执行循环、工具系统、运行限制与已固定依赖 | 无第二套 Agent runtime；本次没有改 Vendor/SwiftAgentKit |
 
-[完整 Manifold 来源和改动清单](../Vendor/ManifoldPresentation/README.md)；许可见 [ManifoldKit-MIT.txt](../Licenses/ManifoldKit-MIT.txt) 和 [MarkdownUI-MIT.txt](../Licenses/MarkdownUI-MIT.txt)。会话列表、输入框、消息壳、导航、事件投影、意图路由、截图关联和持久化均为应用自有代码，不能称为整套 Manifold ChatUI 的复用。
+[完整 Manifold 来源和改动清单](../../../../ios-app/Vendor/ManifoldPresentation/README.md)；许可见 [ManifoldKit-MIT.txt](../../../../ios-app/Licenses/ManifoldKit-MIT.txt) 和 [MarkdownUI-MIT.txt](../../../../ios-app/Licenses/MarkdownUI-MIT.txt)。会话列表、输入框、消息壳、导航、事件投影、意图路由、截图关联和持久化均为应用自有代码，不能称为整套 Manifold ChatUI 的复用。
 
 之前也评估了 [Exyte Chat](https://github.com/exyte/Chat)（媒体依赖较多）与 [assistant-ui](https://github.com/assistant-ui/assistant-ui)（React 技术栈）；未加入它们的源码或依赖。本次选择针对真实 Agent 工具状态的独立展示组件，并保留 SwiftUI 会话布局。
 

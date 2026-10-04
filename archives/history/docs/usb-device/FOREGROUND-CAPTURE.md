@@ -1,4 +1,4 @@
-> 当前源码已升级为 [PA3 常连](PERSISTENT-USB.md)：停止任务释放 HID 并保留 TCP，App 与固件必须同时更新。本文 PA1/PA2 构建、烧录和测试结果是历史记录；PA3 已完成 COM 烧录和启动检查，iPhone 端仍待验收，见该升级说明。
+> 当前源码已升级为 [PA3 常连](../../../../docs/usb-device/PERSISTENT-USB.md)：停止任务释放 HID 并保留 TCP，App 与固件必须同时更新。本文 PA1/PA2 构建、烧录和测试结果是历史记录；PA3 已完成 COM 烧录和启动检查，iPhone 端仍待验收，见该升级说明。
 
 > 后续变更：图片的 2/5/45 秒年龄限制和模型工具 `based_on_image_id` 参数已移除。本文相关旧策略/测试是历史记录，当前行为见 [截图策略](IMAGE-POLICY.md)。
 

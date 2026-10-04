@@ -122,9 +122,10 @@ final class SafetyTests: XCTestCase {
         do { _ = try await c.execute(name: "screenshot", parameters: [:], callID: "s"); XCTFail("Stopped session must fail") } catch {}
         let value = await bridge.stopped; XCTAssertTrue(value)
     }
-    func testFinishRequiresFreshObservation() async throws {
+    func testLegacyFinishCanEndWithoutAnExtraObservation() async throws {
         let c = ActionCoordinator(bridge: SpyBridge(), limits: AgentLimits(), approve: { _ in true }, onImage: { _, _ in }, onReceipt: { _ in })
-        do { _ = try await c.execute(name: "finish", parameters: ["summary": "done"], callID: "f"); XCTFail("No image means no finish") } catch {}
+        _ = try await c.execute(name: "finish", parameters: ["summary": "done"], callID: "f")
+        let summary = await c.finishSummary; XCTAssertEqual(summary, "done")
     }
     func testBooleansCannotBecomePixelCoordinates() async throws {
         let bridge = SpyBridge()

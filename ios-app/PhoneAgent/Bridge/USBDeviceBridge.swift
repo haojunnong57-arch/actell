@@ -20,6 +20,7 @@ actor USBDeviceBridge: DeviceBridge {
     private var barrierSequence: UInt64 = 0
     private var barrierTime: TimeInterval = 0
     private var monitor: Task<Void, Never>?
+    private var healthObserver: UUID?
     private var inputInFlight = false
     private var approvedImageID: String?
     private var inputSession: USBInputSession?
@@ -68,7 +69,7 @@ actor USBDeviceBridge: DeviceBridge {
             openingSession = opening
         }
         let session = try await opening.value
-        guard !stopped else { await transport.stopInputs(session); throw AppError.stopped }
+        guard !stopped else { throw AppError.stopped }
         inputSession = session; openingSession = nil
         return session
     }
@@ -77,6 +78,14 @@ actor USBDeviceBridge: DeviceBridge {
         try executionContext?.requireHealthy()
         guard !stopped else { throw AppError.stopped }
         _ = try await requireInputSession()
+        if let context = executionContext {
+            if healthObserver == nil {
+                healthObserver = context.observeHealth { [weak self] in
+                    Task { await self?.lost(.sessionInvalid) }
+                }
+            }
+            return
+        }
         monitor?.cancel()
         monitor = Task { [weak self] in
             while !Task.isCancelled {
@@ -161,6 +170,8 @@ actor USBDeviceBridge: DeviceBridge {
     }
     func stop() async {
         if let stopTask { await stopTask.value; return }
+        if let healthObserver { executionContext?.removeHealthObserver(healthObserver) }
+        healthObserver = nil
         executionContext?.revoke()
         stopped = true; image = nil; monitor?.cancel(); monitor = nil
         let session = inputSession, opening = openingSession

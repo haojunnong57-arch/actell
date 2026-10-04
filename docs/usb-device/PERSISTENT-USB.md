@@ -1,6 +1,6 @@
 # USB 连接跨任务复用 · PA3
 
-> 最新真机反馈（2026-10-05）：用户确认开启辅助触控后点击生效；此前日志已显示 PA3 TAP 的 received/executed 以及任务结束后 TCP 保持。完整后台连续运行仍待验证。最新 App 收尾修复版本为 `usb-diag-pa3-input-4`，见 [验证记录](VALIDATION.md) 和 [截图/收尾策略](IMAGE-POLICY.md)。
+> 最新真机反馈（2026-10-05）：用户确认开启辅助触控后点击生效；此前日志已显示 PA3 TAP 的 received/executed 以及任务结束后 TCP 保持。完整后台连续运行仍待验证。最新 App 收尾修复版本为 `usb-diag-pa3-input-4`，见 [验证记录](../../archives/history/docs/usb-device/VALIDATION.md) 和 [截图/收尾策略](../../archives/history/docs/usb-device/IMAGE-POLICY.md)。
 
 > 2026-10-05 输入策略更新：按用户要求，允许在 PhoneAgent 自身及其他 App 输入，删除 PNG 内容比对、方向/尺寸变化拒绝、15 秒匹配等待和发送时新帧序号/场景一致性拦截。停止、锁屏、采集结束、USB 故障仍撤销输入。诊断为 `usb-diag-pa3-input-3`，本次只需更新 App。最终版本仅验证 iPhoneOS 无签名构建；按用户要求测试用例保留本轮开始状态，不更新或重跑，旧拒绝策略测试暂不代表当前行为。
 

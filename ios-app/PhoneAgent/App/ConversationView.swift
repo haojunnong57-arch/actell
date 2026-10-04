@@ -4,11 +4,15 @@ import MarkdownUI
 struct ConversationView: View {
     @StateObject private var presentation: AgentPresentationAdapter
     let openSettings: () -> Void
-    init(model: AgentViewModel, conversationID: UUID, openSettings: @escaping () -> Void) {
+    let openDevice: () -> Void
+    let openProviders: () -> Void
+    init(model: AgentViewModel, conversationID: UUID, openSettings: @escaping () -> Void, openDevice: @escaping () -> Void, openProviders: @escaping () -> Void) {
         _presentation = StateObject(wrappedValue: AgentPresentationAdapter(model: model, sessionID: conversationID))
-        self.openSettings = openSettings
+        self.openSettings = openSettings; self.openDevice = openDevice; self.openProviders = openProviders
     }
     @State private var draft = ""
+    @State private var choosingModel = false
+    @State private var customModel = ""
     @State private var followLatest = true
     @State private var focused = false
     private var session: AgentConversation? { presentation.session }
@@ -22,7 +26,8 @@ struct ConversationView: View {
                 VStack(spacing: 0) {
                     HStack(spacing: 8) {
                         Circle().fill(session.mode == .demo ? .teal : .blue).frame(width: 6, height: 6)
-                        Text(session.mode == .demo ? "离线脚本 · 合成屏幕" : presentation.modelName).lineLimit(1)
+                        if session.mode == .demo { Text("历史演示 · 合成屏幕") }
+                        else { modelPicker }
                         Spacer()
                         Text(session.phase.label).foregroundStyle(session.phase == .awaitingApproval ? .orange : .secondary)
                     }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20).padding(.vertical, 10)
@@ -76,12 +81,48 @@ struct ConversationView: View {
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) { composer }
                 .navigationTitle(session.title).navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .topBarTrailing) { Button(action: openSettings) { Image(systemName: "gearshape") }.accessibilityLabel("设置") } }
+                 .toolbar {
+                    ToolbarItemGroup(placement: .topBarTrailing) {
+                        Button(action: openDevice) { Image(systemName: "iphone.gen3.radiowaves.left.and.right") }
+                            .accessibilityLabel("设备控制").accessibilityIdentifier("deviceControls")
+                        Button(action: openSettings) { Image(systemName: "gearshape") }.accessibilityLabel("设置")
+                    }
+                }
+                .alert("选择模型", isPresented: $choosingModel) {
+                    TextField("模型 ID", text: $customModel).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Button("使用") { presentation.selectModel(customModel.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                    Button("取消", role: .cancel) {}
+                } message: { Text("使用当前服务商的模型 ID。") }
                 .onAppear { presentation.open(); draft = session.draft }
                 .onDisappear { presentation.close() }
                 .onChange(of: draft) { _, text in presentation.saveDraft(text) }
             } else { ContentUnavailableView("会话已删除", systemImage: "bubble.left") }
         }
+    }
+    private var modelPicker: some View {
+        Menu {
+            Section("服务商") {
+                ForEach(presentation.providers) { provider in
+                    Button { presentation.selectProvider(provider.id) } label: {
+                        if provider.id == presentation.providerID { Label(provider.name, systemImage: "checkmark") }
+                        else { Text(provider.name) }
+                    }
+                }
+            }
+            Section("模型") {
+                ForEach(presentation.availableModels, id: \.self) { name in
+                    Button { presentation.selectModel(name) } label: {
+                        if name == presentation.selectedModel { Label(name, systemImage: "checkmark") }
+                        else { Text(name) }
+                    }
+                }
+                Button("其他模型…") { customModel = presentation.selectedModel; choosingModel = true }
+                    .disabled(presentation.providerID == nil)
+            }
+            Button("管理服务商", action: openProviders)
+        } label: {
+            Label(presentation.modelName, systemImage: "chevron.down").lineLimit(1)
+        }.disabled(running || presentation.stopping).accessibilityIdentifier("conversationModelPicker")
     }
     private func welcome(_ mode: RunMode) -> some View {
         VStack(alignment: .leading, spacing: 18) {

@@ -37,7 +37,13 @@ struct ToolPresentation {
     var stopping: Bool { model.stopping }
     var status: String { running ? model.status : session?.phase.label ?? "" }
     var warning: String? { model.errorMessage ?? model.sessions.warning }
-    var modelName: String { model.settings.model.isEmpty ? "真实模型 · 尚未配置" : model.settings.model }
+    var providers: [ProviderProfile] { model.providers.profiles }
+    var providerID: UUID? { model.selectedProvider(in: sessionID)?.id }
+    var selectedModel: String { model.selectedModel(in: sessionID) }
+    var availableModels: [String] { model.selectedProvider(in: sessionID)?.availableModels ?? [] }
+    var modelName: String { selectedModel.isEmpty ? "选择服务商和模型" : selectedModel }
+    func selectProvider(_ id: UUID) { model.selectProvider(id, in: sessionID) }
+    func selectModel(_ name: String) { model.selectModel(name, in: sessionID) }
     var approvalID: UUID? { model.approval(in: sessionID)?.id }
     var pendingApproval: ToolPresentation? {
         guard let messages = session?.messages else { return nil }

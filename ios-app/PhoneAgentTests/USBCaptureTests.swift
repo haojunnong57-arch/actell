@@ -485,14 +485,15 @@ final class USBCaptureTests: XCTestCase {
         XCTAssertEqual(commands, ["TAP 65535 0"])
         await bridge.stop()
     }
-    func testRotationBetweenApprovalAndInputStopsWithoutSending() async throws {
+    func testRotationCannotReviveStoppedInputSession() async throws {
         let frames = LatestScreenFrame(), image = try pixel(), epoch = frames.begin()
         frames.put(image, orientation: 1, presentationSeconds: 1, epoch: epoch)
         let transport = USBSpy(), bridge = USBDeviceBridge(frames: frames, transport: transport)
         try await bridge.arm()
         let first = try await bridge.screenshot()
+        await bridge.stop()
         frames.put(image, orientation: 6, presentationSeconds: 2, epoch: epoch)
-        do { try await bridge.tap(x: 1, y: 1, imageID: first.id); XCTFail("rotation must fail") } catch {}
+        do { try await bridge.tap(x: 1, y: 1, imageID: first.id); XCTFail("New pixels cannot revive a stopped session") } catch {}
         let commands = await transport.commands, stopped = await transport.stopped
         XCTAssertTrue(commands.isEmpty); XCTAssertTrue(stopped)
     }

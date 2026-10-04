@@ -10,19 +10,15 @@ final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
     let urlSession: URLSession
     private let encoder: OpenAIProvider
     private let redirectGuard: NoRedirectDelegate
-    private let meter = RequestMeter()
-    private let limits: AgentLimits
     init(settings: ProviderSettings, apiKey: String, limits: AgentLimits) throws {
         let endpoint = try settings.validatedURL()
         guard !apiKey.isEmpty else { throw AppError.invalid("请先设置模型 API 密钥") }
         let config = LLMProviderConfiguration(name: Self.name, baseURL: endpoint, apiKey: apiKey, defaultModel: settings.model)
         configuration = config
         encoder = OpenAIProvider(configuration: config)
-        self.limits = limits
         let delegate = NoRedirectDelegate(); redirectGuard = delegate
         let session = URLSessionConfiguration.ephemeral
         session.urlCache = nil; session.httpCookieStorage = nil
-        session.timeoutIntervalForRequest = 45; session.timeoutIntervalForResource = 60
         urlSession = URLSession(configuration: session, delegate: delegate, delegateQueue: nil)
     }
     func cancel() { urlSession.invalidateAndCancel() }
@@ -49,7 +45,6 @@ final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
             let task = Task {
                 do {
                     try Task.checkCancellation()
-                    try await meter.reserve(limits: limits)
                     let (bytes, response) = try await urlSession.bytes(for: prepareRequest(request, stream: true))
                     guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                         throw AppError.unavailable("模型服务返回 HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)；请检查配置与余额")
@@ -72,7 +67,6 @@ final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
                         for chunk in try decoder.consume(line: value, request: request, encoder: encoder) { continuation.yield(chunk) }
                     }
                     let final = try decoder.finish()
-                    try await meter.account(decoder.usage?.totalTokens, limits: limits)
                     for chunk in final { continuation.yield(chunk) }
                     continuation.finish()
                 } catch {
@@ -96,7 +90,6 @@ final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
     }
     private func completeOnce(_ request: LLMRequest) async throws -> LLMResponse {
         try Task.checkCancellation()
-        try await meter.reserve(limits: limits)
         let urlRequest = try prepareRequest(request, stream: false)
         let bytes: URLSession.AsyncBytes, response: URLResponse
         do { (bytes, response) = try await urlSession.bytes(for: urlRequest) }
@@ -114,7 +107,6 @@ final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
         let parsed: LLMResponse
         do { parsed = try encoder.parseResponse(data, request: request) }
         catch { throw AppError.invalid("模型响应格式与 Chat Completions 协议不兼容") }
-        try await meter.account(parsed.usage?.totalTokens, limits: limits)
         guard parsed.toolCalls.count <= 1 else { throw AppError.invalid("模型一次请求多个动作，已阻止；请选择遵循单工具调用的模型") }
         return LLMResponse(text: parsed.text, finishReason: parsed.finishReason, usage: parsed.usage, toolCalls: parsed.toolCalls, request: request, providerName: Self.name)
     }
@@ -124,18 +116,6 @@ private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unche
         completionHandler(nil)
     }
 }
-private actor RequestMeter {
-    private var calls = 0, reportedTokens = 0
-    func reserve(limits: AgentLimits) throws {
-        guard calls < limits.maxTurns, reportedTokens < limits.maxReportedTokens else { throw AppError.unavailable("模型调用次数或已报告 token 用量达到上限") }
-        calls += 1
-    }
-    func account(_ tokens: Int?, limits: AgentLimits) throws {
-        if let tokens { reportedTokens += max(0, tokens) }
-        guard reportedTokens <= limits.maxReportedTokens else { throw AppError.unavailable("模型已报告 token 用量超过上限，停止后续请求；本次请求费用可能已发生") }
-    }
-}
-
 // Deterministic in-process test provider. It does not make HTTP requests and
 // only controls DemoBridge's synthetic image. Never presents itself as a model.
 struct DemoProvider: LLMProvider {
@@ -160,6 +140,9 @@ struct DemoProvider: LLMProvider {
         try Task.checkCancellation(); try await Task.sleep(nanoseconds: 350_000_000)
         let calls = request.messages.flatMap { $0.toolCalls ?? [] }
         let stage = calls.count
+        if stage >= 3, !request.tools.contains(where: { $0.name == "finish" }) {
+            return LLMResponse(text: "合成测试已完成。", finishReason: .stop, request: request, providerName: Self.name)
+        }
         let call: LLMToolCall
         switch stage {
         case 0: call = LLMToolCall(name: "screenshot", arguments: "{}")
