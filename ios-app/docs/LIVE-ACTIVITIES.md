@@ -72,8 +72,8 @@
 使用原已启动的 iPhone 18 Pro / iOS 27 模拟器，Xcode 27.0。所有输出、依赖副本、DerivedData 和测试证据均在本 worktree 的 `ios-app/.build/`。使用 `CODE_SIGNING_ALLOWED=NO`，实际 App 没有 `_CodeSignature`；产物验证两个固定 Bundle ID、`NSSupportsLiveActivities = true`、Widget 扩展点、URL scheme 和 iOS 17 最低版本均正确，无 `UIBackgroundModes`。
 
 - 首轮无签名单元：57/57 通过；随后补充同轮不同动作链接和运行时自动过期用例。
-- 完整无签名回归 **59/59 单元 + 9/9 UI** 通过（0 failures）；结果见 [测试日志](../.build/validation/full-unsigned.log) 与 [xcresult](../.build/validation/full-unsigned.xcresult)。
-- 最终生命周期调整后，相关 **20/20 单元 + 1/1 系统 UI** 再次通过，见 [island-final.log](../.build/validation/island-final.log)。增加紧凑岛文字和长按展开断言后，系统 UI **1/1** 通过，见 [island-expanded.log](../.build/validation/island-expanded.log)。首次显示许可兼容逻辑补齐后，最终系统 UI **1/1** 再次通过，见 [island-permission-ready.log](../.build/validation/island-permission-ready.log)。本机实际复验走已允许分支，首次许可分支的每个系统操作在此前运行中分别验证过，未重置用户模拟器权限来重跑整段首次安装流程。没有把先前完整回归冒充为最终代码下再跑全部测试。
+- 完整无签名回归 **59/59 单元 + 9/9 UI** 通过（0 failures）；结果见 测试日志（本地文件 `../.build/validation/full-unsigned.log`，已忽略） 与 xcresult（本地文件 `../.build/validation/full-unsigned.xcresult`，已忽略）。
+- 最终生命周期调整后，相关 **20/20 单元 + 1/1 系统 UI** 再次通过，见 island-final.log（本地文件 `../.build/validation/island-final.log`，已忽略）。增加紧凑岛文字和长按展开断言后，系统 UI **1/1** 通过，见 island-expanded.log（本地文件 `../.build/validation/island-expanded.log`，已忽略）。首次显示许可兼容逻辑补齐后，最终系统 UI **1/1** 再次通过，见 island-permission-ready.log（本地文件 `../.build/validation/island-permission-ready.log`，已忽略）。本机实际复验走已允许分支，首次许可分支的每个系统操作在此前运行中分别验证过，未重置用户模拟器权限来重跑整段首次安装流程。没有把先前完整回归冒充为最终代码下再跑全部测试。
 - Python wire contract：12/12 通过，`python3 scripts/test_contract.py`。
 - 审批单测覆盖重复、过期、参数/版本/截止时间变化、跨 session/run、拒绝/取消、进程恢复、损坏文件及持久化失败。
 - 真实 SwiftAgentKit 离线运行覆盖状态映射、批准接收与执行的先后、实际返回步数、后台取消、截图过期自动中断；原未知输入结果不重发、会话及 PiP 测试保留。
@@ -86,7 +86,7 @@
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   xcodebuild -project PhoneAgent.xcodeproj -scheme PhoneAgent \
   -configuration Debug \
-  -destination 'platform=iOS Simulator,id=CBC53192-188D-4FC1-818C-36EC433418FF' \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro,OS=27.0' \
   -derivedDataPath .build/DerivedData \
   -clonedSourcePackagesDirPath .build/SourcePackages \
   -scmProvider system -disablePackageRepositoryCache -skipPackageUpdates \

@@ -7,7 +7,7 @@
 ## 隔离与构建基线
 
 - 分支：`feature/background-runs`
-- 工作树：`/Users/developer/Developer/AI/ios-use/with-esp-background-runs`
+- 工作树：`<workspace>/with-esp-background-runs`
 - 基线：主仓库已提交 `b3724382d5161555f0130fa984f72f251e7a07d8`
 - 主线 ESP 未提交文件、`feature/siri-agent-entry` 和 `feature/live-activities` 工作树未修改；没有 merge/push、账户资源注册、真机安装或设备烧录。
 - Xcode 27.0 (`27A266a`)，iPhoneSimulator 27 SDK，最低部署 iOS 17。BackgroundTasks adapter 使用 SDK 中标注 iOS 26.0 可用的 API；更旧系统仅前台执行。
@@ -63,7 +63,7 @@ UI 历史继续使用完全文件保护；锁屏期间历史写入可能失败�
 
 ## 已完成验证
 
-最终结果与可复现命令见 [验证摘要](background-runs/validation.txt)。新增 `RunLifecycleTests` 和 `BackgroundRunIntegrationTests` 使用 fake lease/model/ESP，并通过真实 SwiftAgentKit run loop 测试：申请拒绝、submit != lease、无租约暂停、工具能力门禁、过期/停止、重复/迟到回调、新 run 隔离、审批等待/拒绝/设备变更、进度冻结/超时、模型断网、dispatch 失联、磁盘失败、恢复不重放、completion 一次。ModelStreamTests 另验证 SSE 心跳不释放工具或响应。
+最终结果与可复现命令见 验证摘要（本地文件 `background-runs/validation.txt`，已忽略）。新增 `RunLifecycleTests` 和 `BackgroundRunIntegrationTests` 使用 fake lease/model/ESP，并通过真实 SwiftAgentKit run loop 测试：申请拒绝、submit != lease、无租约暂停、工具能力门禁、过期/停止、重复/迟到回调、新 run 隔离、审批等待/拒绝/设备变更、进度冻结/超时、模型断网、dispatch 失联、磁盘失败、恢复不重放、completion 一次。ModelStreamTests 另验证 SSE 心跳不释放工具或响应。
 
 UI 截图：[等待审批且片段已结束](background-runs/waiting-approval.png)。这是 Simulator 的离线合成演示界面，与 ESP 的远程截图工具无关。
 

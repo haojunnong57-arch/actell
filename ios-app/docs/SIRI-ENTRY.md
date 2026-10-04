@@ -2,7 +2,7 @@
 
 ## 基线与范围
 
-- 独立 worktree：`/Users/developer/Developer/AI/ios-use/with-esp-siri`。
+- 独立 worktree：`<workspace>/with-esp-siri`。
 - 分支：`feature/siri-agent-entry`，基于当前已提交 main `b3724382d5161555f0130fa984f72f251e7a07d8`。
 - 核查时 main 已提交会话列表微调；未跟踪 ESP 探测记录留在主仓。Live Activities worktree 基于 `40fc17c`，本功能不依赖它。
 - 主 Bundle 保持 `com.ja1chen.PhoneAgent`，显示名统一为 `PhoneAgent`，供 `.applicationName` 替换和 Siri 识别。
@@ -84,10 +84,10 @@ Prepare / Status / Stop AppIntent
 所有构建和依赖检出位于本 worktree 的 `ios-app/.build/`。本机默认 xcode-select 指向 CommandLineTools，XcodeBuildMCP 因此无法发现 simctl；使用下列进程级环境，不修改全局开发目录。
 
 ```sh
-cd /Users/developer/Developer/AI/ios-use/with-esp-siri/ios-app
+cd <workspace>/with-esp-siri/ios-app
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   xcodebuild -project PhoneAgent.xcodeproj -scheme PhoneAgent \
-  -destination 'platform=iOS Simulator,id=4105EC0E-1638-46A6-9E87-FB57B4A3E739' \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro,OS=27.0' \
   -derivedDataPath .build/SiriEntry -clonedSourcePackagesDirPath .build/SiriPackages \
   -parallel-testing-enabled NO \
   -only-testing:PhoneAgentTests -only-testing:PhoneAgentUITests/SiriEntryUITests \

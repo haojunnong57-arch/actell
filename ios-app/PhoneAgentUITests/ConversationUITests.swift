@@ -118,12 +118,31 @@ import XCTest
         XCTAssertTrue(app.segmentedControls.buttons["真实模型"].waitForExistence(timeout: 5))
         app.segmentedControls.buttons["真实模型"].tap()
         XCTAssertTrue(app.buttons["connectUSBNCM"].waitForExistence(timeout: 5))
+        let usbStatus = app.staticTexts["usbConnectionStatus"]
+        XCTAssertTrue(usbStatus.exists)
+        XCTAssertEqual(usbStatus.label, "USB 尚未连接")
+        XCTAssertGreaterThanOrEqual(usbStatus.frame.minY, app.buttons["connectUSBNCM"].frame.maxY)
+        XCTAssertLessThan(usbStatus.frame.minY - app.buttons["connectUSBNCM"].frame.maxY, 40)
         XCTAssertTrue(app.staticTexts["此 Simulator SDK 不含 ScreenCaptureKit；需 iOS 27 真机授权"].exists)
         XCTAssertEqual(app.switches["screenUploadConsent"].value as? String, "0")
         XCTAssertEqual(app.switches["usbBackgroundConsent"].value as? String, "0")
         XCTAssertFalse(app.buttons["仅在本机预览截图"].isEnabled)
         XCTAssertFalse(app.buttons["startScreenCapture"].isEnabled)
         capture("usb-capture-simulator-unavailable")
+        let copy = app.buttons["copyUSBDiagnostics"]
+        XCTAssertTrue(copy.isHittable)
+        copy.tap()
+        XCTAssertTrue(app.staticTexts["usbDiagnosticsCopied"].waitForExistence(timeout: 3))
+        app.buttons["showUSBDiagnostics"].tap()
+        let report = app.staticTexts["usbDiagnosticsReport"]
+        XCTAssertTrue(report.waitForExistence(timeout: 5))
+        XCTAssertTrue(report.label.contains("PhoneAgent USB Diagnostics v1"))
+        XCTAssertTrue(report.label.contains("usb-diag-20261004-2"))
+        XCTAssertTrue(report.label.contains("interfaces reason=export"))
+        XCTAssertFalse(report.label.contains("connect.begin"), "Exporting diagnostics must not connect")
+        XCTAssertTrue(app.buttons["refreshUSBDiagnostics"].exists)
+        XCTAssertTrue(app.buttons["copyUSBReport"].exists)
+        capture("usb-diagnostics-export")
     }
     private func pendingDemo(_ app: XCUIApplication) {
         XCTAssertTrue(app.staticTexts["新会话"].waitForExistence(timeout: 10))

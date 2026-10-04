@@ -1,397 +1,541 @@
 {
-  "sourceLanguage": "en",
-  "strings": {
-    "Create a task": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Create a task"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "创建任务"
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ × %@ · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ × %2$@ · %3$@"
           }
         }
       }
     },
-    "Check task status": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Check task status"
+    "12 次模型调用 · 16 次输入 · 5 分钟\n每次模型输出最多 1024 tokens\n已报告累计 20,000 tokens 后停止\n图片最长 45 秒有效 · 每次输入均需批准" : {
+
+    },
+    "A task draft is waiting for your confirmation in PhoneAgent. It has not started." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A task draft is waiting for your confirmation in PhoneAgent. It has not started."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "查询任务状态"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有任务草稿等待你在 PhoneAgent 中确认，尚未开始。"
           }
         }
       }
     },
-    "Stop the current task": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stop the current task"
+    "A task is running." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A task is running."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "停止当前任务"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有任务正在运行。"
           }
         }
       }
     },
-    "Task status": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Task status"
+    "A task is waiting for your approval in PhoneAgent." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A task is waiting for your approval in PhoneAgent."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "任务状态"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有任务等待你在 PhoneAgent 中批准动作。"
           }
         }
       }
     },
-    "Stop task": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stop task"
+    "Check task status" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check task status"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "停止任务"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查询任务状态"
           }
         }
       }
     },
-    "Task": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Task"
+    "Create a task" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create a task"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "任务"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建任务"
           }
         }
       }
     },
-    "What would you like PhoneAgent to do?": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "What would you like PhoneAgent to do?"
+    "Create a task: ${task}" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create a task: ${task}"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你想让 PhoneAgent 做什么？"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建任务：${task}"
           }
         }
       }
     },
-    "Create a task: ${task}": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Create a task: ${task}"
+    "Draft saved. Review it in PhoneAgent and tap Confirm and start. If another task is active, this draft will wait." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Draft saved. Review it in PhoneAgent and tap Confirm and start. If another task is active, this draft will wait."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "创建任务：${task}"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "草稿已保存。请在 PhoneAgent 核对后点击“确认开始”。如有任务正在运行，草稿会等待。"
           }
         }
       }
     },
-    "Save a task draft and open PhoneAgent for confirmation. This does not start the agent.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Save a task draft and open PhoneAgent for confirmation. This does not start the agent."
+    "Enter a task of 1–2,000 characters." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter a task of 1–2,000 characters."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保存任务草稿并打开 PhoneAgent 等待确认。不会自动启动 Agent。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入 1 至 2000 字的任务。"
           }
         }
       }
     },
-    "Read only a general task state, without task text or results.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Read only a general task state, without task text or results."
+    "iOS 27 · USB Device" : {
+
+    },
+    "No matching task is currently running." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No matching task is currently running."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "仅查询概括状态，不读取任务文本或结果。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前没有匹配的运行任务。"
           }
         }
       }
     },
-    "Stop the current run through PhoneAgent. Actions already sent may have happened.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stop the current run through PhoneAgent. Actions already sent may have happened."
+    "No task is currently running." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No task is currently running."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "通过 PhoneAgent 停止当前运行。已发出的动作可能已经执行。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前没有正在运行的任务。"
           }
         }
       }
     },
-    "Draft saved. Review it in PhoneAgent and tap Confirm and start. If another task is active, this draft will wait.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Draft saved. Review it in PhoneAgent and tap Confirm and start. If another task is active, this draft will wait."
+    "Read only a general task state, without task text or results." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read only a general task state, without task text or results."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "草稿已保存。请在 PhoneAgent 核对后点击“确认开始”。如有任务正在运行，草稿会等待。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅查询概括状态，不读取任务文本或结果。"
           }
         }
       }
     },
-    "No task is currently running.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No task is currently running."
+    "Save a task draft and open PhoneAgent for confirmation. This does not start the agent." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save a task draft and open PhoneAgent for confirmation. This does not start the agent."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "当前没有正在运行的任务。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存任务草稿并打开 PhoneAgent 等待确认。不会自动启动 Agent。"
           }
         }
       }
     },
-    "A task draft is waiting for your confirmation in PhoneAgent. It has not started.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "A task draft is waiting for your confirmation in PhoneAgent. It has not started."
+    "Stop requested. Actions already sent may have happened; check your device." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop requested. Actions already sent may have happened; check your device."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "有任务草稿等待你在 PhoneAgent 中确认，尚未开始。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已请求停止。已发出的动作可能已经执行，请核对设备。"
           }
         }
       }
     },
-    "A task is running.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "A task is running."
+    "Stop task" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop task"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "有任务正在运行。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止任务"
           }
         }
       }
     },
-    "A task is waiting for your approval in PhoneAgent.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "A task is waiting for your approval in PhoneAgent."
+    "Stop the current run through PhoneAgent. Actions already sent may have happened." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop the current run through PhoneAgent. Actions already sent may have happened."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "有任务等待你在 PhoneAgent 中批准动作。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过 PhoneAgent 停止当前运行。已发出的动作可能已经执行。"
           }
         }
       }
     },
-    "The current task is stopping.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The current task is stopping."
+    "Stop the current task" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop the current task"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "当前任务正在停止。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止当前任务"
           }
         }
       }
     },
-    "Stop requested. Actions already sent may have happened; check your device.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stop requested. Actions already sent may have happened; check your device."
+    "Task" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Task"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已请求停止。已发出的动作可能已经执行，请核对设备。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任务"
           }
         }
       }
     },
-    "No matching task is currently running.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No matching task is currently running."
+    "Task status" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Task status"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "当前没有匹配的运行任务。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任务状态"
           }
         }
       }
     },
-    "Enter a task of 1–2,000 characters.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enter a task of 1–2,000 characters."
+    "The current task is stopping." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The current task is stopping."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "请输入 1 至 2000 字的任务。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前任务正在停止。"
           }
         }
       }
     },
-    "The draft could not be saved. Open PhoneAgent and check storage.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The draft could not be saved. Open PhoneAgent and check storage."
+    "The draft could not be saved. Open PhoneAgent and check storage." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The draft could not be saved. Open PhoneAgent and check storage."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "草稿未能保存，请打开 PhoneAgent 检查存储。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "草稿未能保存，请打开 PhoneAgent 检查存储。"
           }
         }
       }
     },
-    "This draft is no longer available.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This draft is no longer available."
+    "This draft is no longer available." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This draft is no longer available."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "这份草稿已不可用。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这份草稿已不可用。"
           }
         }
       }
     },
-    "This request identifier has already been used.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This request identifier has already been used."
+    "This request identifier has already been used." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This request identifier has already been used."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "这个请求标识已使用。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个请求标识已使用。"
           }
         }
       }
+    },
+    "USB NCM 无需通信密钥或配对。连接后在“控制调试”中点“连接 USB NCM”。全屏采集和本地网络权限仍由 iOS 确认。" : {
+
+    },
+    "USB 免 PSK，无需配对。可访问此 USB 网络的其他程序也能发送命令；本 App 的输入仍需逐动作确认。" : {
+
+    },
+    "USB 日志已复制" : {
+
+    },
+    "What would you like PhoneAgent to do?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What would you like PhoneAgent to do?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你想让 PhoneAgent 做什么？"
+          }
+        }
+      }
+    },
+    "不要输入密钥或验证码。任务文字与结果仅在本机保留最近 20 项；截图只在内存中保留。" : {
+
+    },
+    "与 Agent 对话，查看执行过程，\n在需要时确认下一步。" : {
+
+    },
+    "仅显示状态和工具进度，不展示或记录模型的内部推理。费用由模型服务决定，缺失的用量不能估为零。" : {
+
+    },
+    "仅用于旧 Host TLS 通道，不影响 USB NCM。" : {
+
+    },
+    "从一个想法开始" : {
+
+    },
+    "任务" : {
+
+    },
+    "任务已保存，尚未开始。请核对或编辑下方识别文本，再点“确认开始”。确认后会发送给当前模型；设备动作仍需逐次批准。" : {
+
+    },
+    "会话保留最近 200 条消息与工具记录，包含用户消息和模型公开回复。截图不写入磁盘，会话文件开启完整文件保护并排除备份。打开历史不会自动执行工具；锁屏即停。本次启用的全屏采集 / USB 路线可在切换 App 后有限继续；普通模型任务也可申请系统有限片段。旧 TLS 设备工具仍仅前台可用，后台资格不代替动作批准。" : {
+
+    },
+    "保留本次 App 运行最近 600 条 USB 诊断；连接失败后可直接复制。重启 App 会清空，不含截图、任务正文或密钥。" : {
+
+    },
+    "先在 iPhone 的 USB 以太网设置中使用 192.168.7.2 / 255.255.255.0，路由器和 DNS 留空。采集授权不会自动发送图像；预览只在本机显示。" : {
+
+    },
+    "先核对上方截图。无法确定目标或操作涉及付款、账户安全、敏感内容、不可逆删除时，请拒绝并自行处理。审批超过 45 秒会要求新截图。" : {
+
+    },
+    "最新截图" : {
+
+    },
+    "动作记录" : {
+
+    },
+    "只显示任务类别、阶段和需确认状态；隐藏任务正文、截图和密钥。画中画不能确认动作，离开前台仍会停止 agent。" : {
+
+    },
+    "合成画面" : {
+
+    },
+    "后台执行需要有效采集会话或系统授予的有限片段；旧 TLS 设备工具仍仅前台可用。所有输入均需批准，真实跨 App 闭环尚未验证。" : {
+
+    },
+    "启用后，请开始任务并在 15 秒内切到目标 App。每次动作仍需返回前台批准，再在 15 秒内切回目标画面；画面变化会阻止发送。每段后台最多 60 秒，总计 5 分钟。锁屏、停止采集、2 秒无新帧、USB 失联或到期都会停止。真机闭环尚待验证。" : {
+
+    },
+    "回复已中断" : {
+
+    },
+    "密钥仅保存到本机钥匙串，并绑定此 API 地址；不会同步或写进任务记录。更改地址后需另行保存对应密钥。没有调用模型列表或测试接口。" : {
+
+    },
+    "已报告 tokens：%@%@。这是用量观察值，不是费用硬上限。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "已报告 tokens：%1$@%2$@。这是用量观察值，不是费用硬上限。"
+          }
+        }
+      }
+    },
+    "已隐藏任务与截图" : {
+
+    },
+    "待确认" : {
+
+    },
+    "截图预览已释放；保留工具记录。" : {
+
+    },
+    "操作详情" : {
+
+    },
+    "旧 USB Host 方案的实验 TLS-PSK 入口；Device NCM 方案使用上方连接按钮。" : {
+
+    },
+    "有什么可以一起完成？" : {
+
+    },
+    "本次任务文字与后续截图会发送到 %@，使用模型 %@。截图可能含个人信息；确认你有权发送，并先隐藏敏感内容。API 可能计费，最多 12 次模型调用、5 分钟，token 上限依赖服务报告，无法保证金额上限。每次输入动作仍需单独确认。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "本次任务文字与后续截图会发送到 %1$@，使用模型 %2$@。截图可能含个人信息；确认你有权发送，并先隐藏敏感内容。API 可能计费，最多 12 次模型调用、5 分钟，token 上限依赖服务报告，无法保证金额上限。每次输入动作仍需单独确认。"
+          }
+        }
+      }
+    },
+    "正在准备回复…" : {
+
+    },
+    "结果" : {
+
+    },
+    "结果说明" : {
+
+    },
+    "设备连接、截图、逐步控制和状态画中画预览。" : {
+
+    },
+    "请求参数" : {
+
+    },
+    "请求参数 · %@" : {
+
+    },
+    "随心输入" : {
+
+    },
+    "需要授权" : {
+
     }
   },
-  "version": "1.0"
+  "version" : "1.0"
 }

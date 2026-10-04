@@ -5,19 +5,19 @@
 ## 环境与已完成检查
 
 - Xcode 27.0（27A266a），deployment target iOS 17.0。
-- 独立使用现有 iPhone 17 / iOS 27 模拟器 `4105EC0E-1638-46A6-9E87-FB57B4A3E739`。
+- 独立使用现有 iPhone 17 / iOS 27 模拟器 `<SIMULATOR_ID>`。
 - DerivedData：`ios-app/.build/SiriEntry`；依赖检出：`.build/SiriPackages`。
 - `CODE_SIGNING_ALLOWED=NO`；未安装真机、创建开发者资源或改变全局 xcode-select。
 - 构建成功；App Intents 元数据包含三个动作、创建任务的必填 String、明确的本机认证和主 App 执行目标。
 - zh-Hans/en App Shortcut 字符串及 NLU 语料生成成功。Bundle ID 保持 `com.ja1chen.PhoneAgent`，显示名为 `PhoneAgent`。
-- [提取元数据摘要](siri-validation/intent-metadata.json)来自构建产物，另有 XCTest 对认证与运行模式的语义断言。
+- 提取元数据摘要（本地文件 `siri-validation/intent-metadata.json`，已忽略）来自构建产物，另有 XCTest 对认证与运行模式的语义断言。
 
 ## 自动测试
 
 导航与可访问性修复后，定向测试 **12 个命令单元测试 + 5 个 Siri UI 测试全部通过**，进程退出码 0。
 
-- [定向日志](../.build/SiriEvidence/route-fixes.log)
-- [定向 xcresult](../.build/SiriEvidence/route-fixes.xcresult)
+- 定向日志（本地文件 `../.build/SiriEvidence/route-fixes.log`，已忽略）
+- 定向 xcresult（本地文件 `../.build/SiriEvidence/route-fixes.xcresult`，已忽略）
 
 覆盖：
 
@@ -37,9 +37,9 @@
 
 最终代码的完整回归：**57 个单元测试 + 13 个 UI 测试，共 70 项全部通过，0 失败**。`test-without-building` 复用导航修复后已成功编译的相同二进制，进程退出码 0，日志结束为 `TEST EXECUTE SUCCEEDED`。
 
-- [最终 XCTest 摘要](siri-validation/final-test-summary.json)
-- [最终完整日志](../.build/SiriEvidence/final-regression.log)
-- [最终完整 xcresult](../.build/SiriEvidence/final-regression.xcresult)
+- 最终 XCTest 摘要（本地文件 `siri-validation/final-test-summary.json`，已忽略）
+- 最终完整日志（本地文件 `../.build/SiriEvidence/final-regression.log`，已忽略）
+- 最终完整 xcresult（本地文件 `../.build/SiriEvidence/final-regression.xcresult`，已忽略）
 
 13 个 UI 用例包括全部 8 个原有会话回归和 5 个新增 Siri 用例；57 个单元用例包括 12 个新增命令测试。截图来自同一最终实现此前已通过的定向测试，不把早期失败截图当作通过证据。
 
@@ -55,7 +55,7 @@
 - [忙碌时原审批保留](siri-validation/siri-06-busy-keeps-approval.png)
 - [停止旧 run 后打开延期草稿](siri-validation/siri-07-deferred-draft.png)
 
-[来源、设备、测试名称和 SHA-256 清单](siri-validation/screenshots.json)。
+来源、设备、测试名称和 SHA-256 清单（本地文件 `siri-validation/screenshots.json`，已忽略）。
 
 ## 验证中发现并处理的问题
 

@@ -30,8 +30,8 @@ SwiftSyntax `603.0.2` 保持原来解析的版本。Xcode 工程、Python 生成
 - 保留原有 Swift 并发/捕获警告：TLSBridge 的泛型 continuation、AgentViewModel 的 runner 捕获、SafetyTests 的字典跨 actor 传递。当前 Swift 5 language mode 下不阻断构建；尚未做 Swift 6 迁移。
 - 未使用 `-skipMacroValidation` 或修改全局宏信任。未增加后台能力、签名 Team、真实设备安装或配对操作。
 
-验证摘要见 [ios-compat-summary.json](xcode-validation/ios-compat-summary.json)，构建诊断节选见
-[ios-compat-diagnostics.log](xcode-validation/ios-compat-diagnostics.log)。完整日志在本地忽略目录
+验证摘要见 ios-compat-summary.json（本地文件 `xcode-validation/ios-compat-summary.json`，已忽略），构建诊断节选见
+ios-compat-diagnostics.log（本地文件 `xcode-validation/ios-compat-diagnostics.log`，已忽略）。完整日志在本地忽略目录
 `.build/validation/ios-compat-build.log`，历史失败日志保留为此前的证据。
 
 ## 在 Xcode 中重试
@@ -59,6 +59,6 @@ destination，先成功复现相同的三个 `Unable to resolve module dependenc
 `TEST BUILD SUCCEEDED`。App 和测试已按 arm64 编译，三个模块错误均不再出现。
 本阶段未执行 XCTest 或启动 App。原有非致命 Swift 警告仍按前文记录。
 
-证据：[修复前诊断](xcode-validation/simulator-architecture-before.log)、
-[修复后诊断](xcode-validation/simulator-architecture-after.log)、
-[结果及完整日志哈希](xcode-validation/simulator-architecture-summary.json)。
+证据：修复前诊断（本地文件 `xcode-validation/simulator-architecture-before.log`，已忽略）、
+修复后诊断（本地文件 `xcode-validation/simulator-architecture-after.log`，已忽略）、
+结果及完整日志哈希（本地文件 `xcode-validation/simulator-architecture-summary.json`，已忽略）。

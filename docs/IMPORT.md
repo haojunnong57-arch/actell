@@ -1,6 +1,6 @@
 # 源码导入记录
 
-导入日期：2026-10-03。目标为 `/Users/developer/Developer/AI/ios-use/with-esp`。使用此前已在该 Mac 下载并解包的源码，没有再次下载，也没有更换执行环境。
+导入日期：2026-10-03。目标为 `<workspace>/with-esp`。使用此前已在该 Mac 下载并解包的源码，没有再次下载，也没有更换执行环境。
 
 ## 原始包
 
@@ -32,7 +32,7 @@
 
 正式导入前，`with-esp` 只有本任务的下载暂存目录及 Finder 的 `.DS_Store`。没有同名源码冲突，`.DS_Store` 保留。所有新增源码、文档、校验脚本与测试输出都在 `with-esp`；没有写入 `app-only`，也没有操作其他本地 Codex 会话。
 
-本次两轮检查均未发现工程/祖先 AGENTS.md，工程根目录没有 README 或 `.agents/skills`。`git status --short` 确认这里不是 Git 仓库。本次没有初始化仓库，无法生成正常工作树 Git diff；另将原包按正式路径映射，与导入文件运行 `git diff --no-index --exit-code`，返回 0，无内容或执行权限差异。见 [source-diff.log](local-validation/source-diff.log)。
+本次两轮检查均未发现工程/祖先 AGENTS.md，工程根目录没有 README 或 `.agents/skills`。`git status --short` 确认这里不是 Git 仓库。本次没有初始化仓库，无法生成正常工作树 Git diff；另将原包按正式路径映射，与导入文件运行 `git diff --no-index --exit-code`，返回 0，无内容或执行权限差异。见 source-diff.log（本地文件 `local-validation/source-diff.log`，已忽略）。
 
 完成比较后，已清除本任务创建且逐项核对过的 `.library-import-hwelziyz` 暂存目录；两份原始归档及下载时记录的文件元数据随原文件移动至 `archives/`。
 

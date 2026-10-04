@@ -4,7 +4,7 @@
 
 ## 工作树、基线和合并
 
-实际主仓库为 `/Users/developer/Developer/AI/ios-use/with-esp`，主分支 `main`。临时集成位于同级 `with-esp-integration`，分支 `integration/phoneagent-features-20261004`，从干净的 `main@45f0186c9e7808c104822a7e23e9a738938fe329` 创建，没有从较旧 feature 覆盖主线。
+实际主仓库为 `<workspace>/with-esp`，主分支 `main`。临时集成位于同级 `with-esp-integration`，分支 `integration/phoneagent-features-20261004`，从干净的 `main@45f0186c9e7808c104822a7e23e9a738938fe329` 创建，没有从较旧 feature 覆盖主线。
 
 | 来源 | 集成的 feature HEAD | 合并提交 |
 | --- | --- | --- |
@@ -13,15 +13,15 @@
 | Siri | `e5b1aca72e1d2c9bedec23b613f4c3dbc584660f` | `458b89728962d81f163331b823ab5dac852f6390` |
 | 通用后台片段 | `2509d7098fc8a3af4c62bd8fc20e911df4aa4933` | `b0e9a7b234982de99607ea33f88b8736e0dceef8` |
 
-[开始时的状态](baseline.json)记录所有 HEAD、工作区状态和差异摘要。USB feature 的 `project.pbxproj` 和 `Info.plist` 有用户未提交的 Xcode 格式/签名选择改动；保留在原 worktree，未带入集成、未 stash 或提交。其他 feature 和 `app-only` 未修改。未推送。
+开始时的状态（本地文件 `baseline.json`，已忽略）记录所有 HEAD、工作区状态和差异摘要。USB feature 的 `project.pbxproj` 和 `Info.plist` 有用户未提交的 Xcode 格式/签名选择改动；保留在原 worktree，未带入集成、未 stash 或提交。其他 feature 和 `app-only` 未修改。未推送。
 
-当前主线提交、快进结果、各来源最终状态及后台分支归档参见 [交接记录](handoff.json)。
+当前主线提交、快进结果、各来源最终状态及后台分支归档参见 交接记录（本地文件 `handoff.json`，已忽略）。
 
 ## 旧后台分支退役与恢复
 
 旧后台源码已完整合并，通用能力和回归测试已复用。相关任务处于 idle；删除前再次核对 HEAD、干净状态、合并祖先关系及归档摘要。已使用不带 force 的 `git worktree remove` 删除 `with-esp-background-runs`，并用 `git branch -d` 删除 `feature/background-runs`。其他 feature 工作树保留。
 
-恢复点为 `archive/background-runs-20261004`，指向 `2509d7098fc8a3af4c62bd8fc20e911df4aa4933`。完整归档位于 `/Users/developer/Developer/AI/ios-use/worktree-archives/background-runs-20261004.tar.gz`，330,080,348 bytes，保留忽略的 DerivedData 等构建输出；9,013 个文件/链接均与原工作树逐项核对。见 [归档哈希](background-archive.json)。没有强删未提交内容。
+恢复点为 `archive/background-runs-20261004`，指向 `2509d7098fc8a3af4c62bd8fc20e911df4aa4933`。完整归档位于 `<workspace>/worktree-archives/background-runs-20261004.tar.gz`，330,080,348 bytes，保留忽略的 DerivedData 等构建输出；9,013 个文件/链接均与原工作树逐项核对。见 归档哈希（本地文件 `background-archive.json`，已忽略）。没有强删未提交内容。
 
 需要恢复源码时，在主仓库运行：
 
@@ -63,13 +63,13 @@ PSK 是输入服务的应用层 HMAC 认证，不是 Apple 配对文件或采集
 
 **114 项单元测试、16 项 UI、10 项 USB Device 协议测试、12 项 App Python 协议测试通过，完整 Host suite 和四种固件配置编译通过，最终无签名 iPhoneOS 27 build 通过。** UI 回归之后补充了冷恢复取消旧系统请求的内部修复，随后重跑全部 114 单元及设备 build；UI 源码未再改变。
 
-最终结果和日志摘要见 [验证清单](validation.json) 与 `evidence/`。完整日志和 xcresult 留在 `with-esp-integration/.build/validation`、`.build/ios/Logs/Test`。
+最终结果和日志摘要见 验证清单（本地文件 `validation.json`，已忽略） 与 `evidence/`。完整日志和 xcresult 留在 `with-esp-integration/.build/validation`、`.build/ios/Logs/Test`。
 
 - 单元测试覆盖实际 Agent loop、系统片段拒绝/到期、SCK 与系统来源互斥、Siri 草稿/停止、Live Activity 一次审批、深链跳转、审批后回到目标、旧检查点迁移、断连/锁屏/采集丢失及未知结果不重放。
 - UI 测试使用合成屏幕、离线 provider 和隔离状态，涵盖 Siri 冷/热入口、运行中草稿延后、确认与拒绝、停止/历史、Live Activity 系统展示和精确历史链接、控制调试退出、模拟器采集不可用提示。
 - USB Device 协议测试编译生产 C 代码，平台层为宿主夹具；原 App Python wire-contract 测试保留。完整 Host suite 包含实际 mbedTLS↔独立 OpenSSL、本地 TCP、固定上游 HTTP/2/XPC/RSD、实际 lwIP packet tests、zlib、分配故障及 ASan/UBSan；没有连接实体设备。
 - 修复宿主测试的 Darwin 编译参数、ASan Python 注入、pthread 特性宏和 GNU linker wrap 替代方案。Darwin 对测试静态对象编译时重定向分配函数，独立真实分配器 translation unit，保留故障注入而非跳过；Linux 原 GNU wrap 仍保留。补齐固定提交/哈希的 RSD 公开 oracle，去除对未跟踪 research 目录的依赖。
-- 两种 Device 固件、原 Host 默认固件和 Host USB-enable compile-only 配置均已编译。真实 bootloader、partition-table、app bin / ELF / flash_args 保存在 `.build`；[镜像大小及哈希](firmware-artifacts.json)。Host compile-only 的 GPIO 配置是编译占位值，不是确认过的板级接线，不能直接刷写。
+- 两种 Device 固件、原 Host 默认固件和 Host USB-enable compile-only 配置均已编译。真实 bootloader、partition-table、app bin / ELF / flash_args 保存在 `.build`；镜像大小及哈希（本地文件 `firmware-artifacts.json`，已忽略）。Host compile-only 的 GPIO 配置是编译占位值，不是确认过的板级接线，不能直接刷写。
 
 工具链：Xcode 27.0 (`27A266a`)、iPhoneOS 27.0 (`24A430`)、Swift 6.4 (`swiftlang-6.4.0.34.1`)，App 仍为 Swift 5 language mode + complete concurrency。iPhoneSimulator 27 SDK 没有 ScreenCaptureKit，UI 明确禁用，真机分支通过无签名设备 build 验证编译。ESP-IDF 5.5.5 (`b774170ff46c393eeb5e495ea37936038d3f4f4f`)、Xtensa GCC 14.2.0 (`esp-14.2.0_20260121`)、Python 3.12.13；esp_tinyusb 2.2.0、TinyUSB 0.21.0~2，组件哈希在 lockfile。Host oracle 独立 venv 固定 construct 2.10.70、hyperframe 6.1.0。
 
@@ -77,14 +77,14 @@ PSK 是输入服务的应用层 HMAC 认证，不是 Apple 配对文件或采集
 
 ## 打开与复现
 
-集成完成后应打开 **`/Users/developer/Developer/AI/ios-use/with-esp/ios-app/PhoneAgent.xcodeproj`**，共享 scheme `PhoneAgent`。旧 feature 工程是独立快照。Simulator 不需 Team；此阶段未改签名账户或安装真机。
+集成完成后应打开 **`<workspace>/with-esp/ios-app/PhoneAgent.xcodeproj`**，共享 scheme `PhoneAgent`。旧 feature 工程是独立快照。Simulator 不需 Team；此阶段未改签名账户或安装真机。
 
 在集成 worktree 根目录，可复现：
 
 ```sh
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
   -project ios-app/PhoneAgent.xcodeproj -scheme PhoneAgent \
-  -destination 'platform=iOS Simulator,id=CBC53192-188D-4FC1-818C-36EC433418FF' \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro,OS=27.0' \
   -derivedDataPath .build/ios -clonedSourcePackagesDirPath .build/SourcePackages \
   -skipPackageUpdates -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO test
 # 设备 SDK 编译：destination 改 generic/platform=iOS，动作改 build。

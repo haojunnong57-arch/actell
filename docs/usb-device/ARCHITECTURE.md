@@ -2,14 +2,16 @@
 
 # iOS 27 ScreenCaptureKit + ESP32-S3 USB Device 实验分支
 
+> 2026-10-04 更新：本文保留初始 PA1 设计历史；其中 PSK/HMAC 章节已由用户选择的 [PA2 免 PSK 协议](PROTOCOL.md)取代。当前 USB 不访问 Keychain/NVS，不认证或加密；可访问 USB 网络的其他程序也能调用设备。本 App 的逐动作批准、帧校验、ACK、停止机制保留。旧 Host TLS 和模型 API key 不变。最新构建与实机状态见 [NO-PSK.md](NO-PSK.md) 和 [NCM-BRINGUP.md](NCM-BRINGUP.md)。
+
 本分支实现并编译了新的采集与同线 NCM/HID 路径；尚未烧录或验证 iPhone USB 枚举、屏幕授权或实际控制。原 `firmware/` USB Host 工程保留，新的工程在 `firmware-device/`。没有增加设备、Wi-Fi/BLE 通道、Broadcast Upload Extension、VPN 或静音音频保活。
 
 ## 基线与隔离
 
-- worktree：`/Users/developer/Developer/AI/ios-use/with-esp-usb-device-capture`
+- worktree：`<workspace>/with-esp-usb-device-capture`
 - branch：`feature/ios27-usb-device-capture`
 - parent：`b3724382d5161555f0130fa984f72f251e7a07d8`
-- 创建时主 worktree 有硬件文档/构建入口的未提交改动；原始状态保存在 [baseline.json](baseline.json)。未复制这些改动，未合并其他分支。
+- 创建时主 worktree 有硬件文档/构建入口的未提交改动；原始状态保存在 `baseline.json`（本地文件，已忽略）。未复制这些改动，未合并其他分支。
 - 实施期间主 worktree 自行推进到 `45f0186`，Live Activities 自行推进到 `57acc61`；本分支仍以原 parent 为基线，没有重置它们。
 - 原提交没有跟踪 `SecretStore.swift`，因为 `ios-app/.gitignore` 的 `secrets*` 在该环境误匹配。这里从已跟踪的 `archives/PhoneAgent-iOS-source.zip` 恢复相同源码到 `Storage/KeychainStorage.swift`；未读取用户钥匙串、增加 entitlement 或更改 service/account。
 

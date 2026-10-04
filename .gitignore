@@ -18,3 +18,26 @@ firmware-device/managed_components/
 firmware-device/sdkconfig
 firmware-device/sdkconfig.old
 firmware-device/build/
+
+# Local diagnostics can include device identifiers, network details and host paths.
+# Keep reviewed conclusions in Markdown; retain raw output locally, outside Git.
+*.log
+*.log.*
+*.xcactivitylog
+*.xcresult/
+*.trace/
+*.pcap
+*.pcapng
+/attachments/
+/logs/
+/diagnostics/
+
+# Generated validation output and machine-specific session inventories.
+/docs/**/evidence/
+/docs/local-validation/*
+!/docs/local-validation/*.md
+/docs/integration/*.json
+/docs/usb-device/baseline.json
+/ios-app/docs/xcode-validation/
+/ios-app/docs/background-runs/validation.txt
+/ios-app/docs/siri-validation/*.json

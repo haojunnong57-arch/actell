@@ -23,12 +23,16 @@ struct SettingsView: View {
                         .font(.caption)
                     Button("删除当前地址的 API 密钥", role: .destructive) { model.deleteProviderKey() }
                 }
-                Section("实验桥接 · 独立 PSK") {
-                    SecureField("32 字节随机 PSK 的 64 位十六进制", text: $psk).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Text("通过可信渠道给 USB Device 固件配置相同 PSK。USB TCP 28766 使用 HMAC 认证；旧 Host TLS 入口使用 28765。不是 Apple 配对文件、证书或设备密码。App 不自动生成或传出密钥。")
+                Section("USB 连接") {
+                    Text("USB NCM 无需通信密钥或配对。连接后在“控制调试”中点“连接 USB NCM”。全屏采集和本地网络权限仍由 iOS 确认。")
                         .font(.caption)
-                    Button("仅保存桥接 PSK") { model.saveUSBPSK(psk); psk = "" }.disabled(psk.isEmpty || model.running || model.stopping)
-                    Button("删除桥接 PSK", role: .destructive) { model.deleteBridgeKey() }
+                    DisclosureGroup("旧 Host 通道 · PSK") {
+                        SecureField("32 字节随机 PSK 的 64 位十六进制", text: $psk).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Text("仅用于旧 Host TLS 通道，不影响 USB NCM。")
+                            .font(.caption)
+                        Button("仅保存桥接 PSK") { model.saveBridgePSK(psk); psk = "" }.disabled(psk.isEmpty || model.running || model.stopping)
+                        Button("删除桥接 PSK", role: .destructive) { model.deleteBridgeKey() }
+                    }
                 }
                 Section("运行限制") {
                     Text("12 次模型调用 · 16 次输入 · 5 分钟\n每次模型输出最多 1024 tokens\n已报告累计 20,000 tokens 后停止\n图片最长 45 秒有效 · 每次输入均需批准")

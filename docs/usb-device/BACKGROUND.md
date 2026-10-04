@@ -2,11 +2,13 @@
 
 # 有限后台执行与已有 worktree 复用 · 第二阶段
 
+> 历史记录：本文的 PSK 设计已被用户 2026-10-04 的“USB 免 PSK”选择取代。当前 USB 使用 [PA2 协议](PROTOCOL.md)，无需配置 NVS/Keychain，测试与升级状态见 [NO-PSK.md](NO-PSK.md)。本文旧测试数据与授权记录保留供追溯，不再作为当前配置指引。
+
 首阶段 `18fac1158b35951aa531cdf1b214087f93b4e990` 保留前台限制的原因是**尚未接入后台执行资格**，不是发现 ScreenCaptureKit 禁止该用途，也不是缺少用户对代码修改的授权。本阶段在同一 `feature/ios27-usb-device-capture` worktree 补齐衔接。没有烧录、签名、安装真机 App、读取或生成密钥、改变其它 worktree，或上传真实屏幕。
 
 ## 只读比较与选择性复用
 
-来源：`/Users/developer/Developer/AI/ios-use/with-esp-background-runs`，`feature/background-runs`，提交 `2509d7098fc8a3af4c62bd8fc20e911df4aa4933`，共同基线 `b3724382d5161555f0130fa984f72f251e7a07d8`。比较时源 worktree 干净；通过读取该提交的文件选择性移植，未合并分支、切换源分支或改动源文件。
+来源：`<workspace>/with-esp-background-runs`，`feature/background-runs`，提交 `2509d7098fc8a3af4c62bd8fc20e911df4aa4933`，共同基线 `b3724382d5161555f0130fa984f72f251e7a07d8`。比较时源 worktree 干净；通过读取该提交的文件选择性移植，未合并分支、切换源分支或改动源文件。
 
 | 已有模块 / 行为 | 本阶段处理 |
 | --- | --- |
@@ -64,7 +66,7 @@ PSK 不是 USB NCM 或 iOS ScreenCaptureKit 的系统要求，是这个 HID 输�
 
 工具链沿用首阶段：Xcode 27.0 (27A266a)、iPhoneOS 27.0 (24A430)、Swift 6.4 / Swift 5 language mode。Simulator SDK 没有 ScreenCaptureKit，因此全屏授权 / SCStream 真正回调不能在模拟器测试。固件与依赖未变更，首阶段两种真实 bin 和 ESP-IDF / TinyUSB 锁定版本仍有效；本阶段未重新包装或烧录固件。
 
-最终设备目标无签名 build 成功；**75 项单元测试（含 12 项移植协调器测试、10 项新适配测试）和全部 9 项 UI 回归通过，0 失败**。摘要见 [测试日志](evidence/ios-background-tests-summary.log) 与 [设备构建日志](evidence/ios-background-device-build-summary.log)，[模拟器 UI 截图](evidence/simulator-usb-background.png) 显示两个许可开关均默认关闭。完整日志及 `.xcresult` 位于当前 worktree `.build/validation`、`.build/ios/Logs/Test`。新增用例只使用 CoreVideo 合成像素、DemoProvider 的内存脚本和假 USB transport，不访问外部模型、用户屏幕或真实 S3。
+最终设备目标无签名 build 成功；**75 项单元测试（含 12 项移植协调器测试、10 项新适配测试）和全部 9 项 UI 回归通过，0 失败**。摘要见 测试日志（本地文件 `evidence/ios-background-tests-summary.log`，已忽略） 与 设备构建日志（本地文件 `evidence/ios-background-device-build-summary.log`，已忽略），模拟器 UI 截图（本地文件 `evidence/simulator-usb-background.png`，已忽略） 显示两个许可开关均默认关闭。完整日志及 `.xcresult` 位于当前 worktree `.build/validation`、`.build/ios/Logs/Test`。新增用例只使用 CoreVideo 合成像素、DemoProvider 的内存脚本和假 USB transport，不访问外部模型、用户屏幕或真实 S3。
 
 测试日志仍出现已有界面路径的 SwiftUI “Modifying state during view update” 警告，尚未定位；UI 用例通过并不消除该运行时警告。Xcode 在测试完成后收集额外模拟器诊断时提示其子进程找不到 simctl（全局 xcode-select 为 CommandLineTools），主 xcodebuild 返回 0 / TEST SUCCEEDED，xcresult 与截图均成功导出；未为此更改全局 Xcode 配置。设备 build 仅提示无 AppIntents 元数据可提取。
 

@@ -2,7 +2,7 @@
 
 记录日期：2026-10-03。本文区分归档交付时的证据、本次 Mac 检查与尚未完成的工作。原始源码文档保留其 2026-10-02 交付时间语境，本文及 [LOCAL-VALIDATION.md](LOCAL-VALIDATION.md) 补充本次结果。
 
-2026-10-04 板级补充：实体 ESP32-S3-WROOM-1-N16R8 已完成首次烧录前的完整 Flash 备份及设备端摘要校验、本地 ESP-IDF v5.5.5 构建、Hello World 实机运行、原生 USB 与 COM 烧录，以及 16 MB Flash / 8 MB Octal PSRAM 80 MHz 的初始化和基础自测。备份逐字节核验为全 `0xFF`，记录的是当时空白 Flash 状态，不含厂家演示程序。COM 烧录使用已验证的 115200；高速传输错误尚未定位。见[操作说明](../README.md#esp32-s3-本地构建与基础实测2026-10-04)和[实测摘要](local-validation/esp32-bringup-summary.json)。USB Host 保持关闭，iPhone 全链路仍未测试。
+2026-10-04 板级补充：实体 ESP32-S3-WROOM-1-N16R8 已完成首次烧录前的完整 Flash 备份及设备端摘要校验、本地 ESP-IDF v5.5.5 构建、Hello World 实机运行、原生 USB 与 COM 烧录，以及 16 MB Flash / 8 MB Octal PSRAM 80 MHz 的初始化和基础自测。备份逐字节核验为全 `0xFF`，记录的是当时空白 Flash 状态，不含厂家演示程序。COM 烧录使用已验证的 115200；高速传输错误尚未定位。见[操作说明](../README.md#esp32-s3-本地构建与基础实测2026-10-04)和实测摘要（本地文件 `local-validation/esp32-bringup-summary.json`，已忽略）。USB Host 保持关闭，iPhone 全链路仍未测试。
 
 厂家原理图已核对：原生 USB 的 CC1/CC2 均通过 5.1 kΩ 下拉到地，J4 仅旁路 VBUS 二极管 D1，不负责 USB-C 角色切换。用户随后报告 USB-OTG 两焊盘的双向电阻均为 1.7 Ω，与表笔互碰读数一致，表明已有低阻通路；COM 单独供电的测量安排下，两焊盘各自对 GND 均为 4.95 V。无需再短接。接口 VBUS 与实物焊盘的对应、CC 角色、反向电流保护及负载供电能力仍待确认，暂不将 COM 接电脑供电与原生 USB 接 iPhone 同时使用。厂家图片的“需要短接 OTG 焊盘才能使用”说明与图纸所示供电路径之间仍有适用条件未明；不能把低阻连通或下载成功当作已验证的 iPhone 接法。详见[板级接线依据](hardware/ESP32-S3-USB.md)。
 

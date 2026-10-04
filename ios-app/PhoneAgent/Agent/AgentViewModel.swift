@@ -21,6 +21,8 @@ struct AgentRunServices {
     @Published var stopping = false
     @Published var status = "离线演示不会联网，也不会控制真实设备"
     @Published var bridgeStatus = "真实桥接未启动"
+    @Published private(set) var usbConnectionStatus: USBConnectionStatus = .idle
+    let usbDiagnostics = USBDiagnosticsLog()
     let capture = ScreenCaptureController()
     @Published var allowCapturedScreenUpload = false
     @Published var allowUSBBackgroundRun = false
@@ -128,19 +130,25 @@ struct AgentRunServices {
         } catch { errorMessage = error.localizedDescription }
     }
     func deleteProviderKey() { do { try SecretStore.delete(settings.keyAccount); status = "当前模型地址的密钥已删除" } catch { errorMessage = error.localizedDescription } }
-    func saveUSBPSK(_ psk: String) {
+    func saveBridgePSK(_ psk: String) {
         guard !running, !stopping else { return }
         do {
-            _ = try USBWire.key(psk)
+            guard psk.count == 64, psk.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) || (65...70).contains($0) }) else { throw AppError.invalid("旧 Host PSK 需为 64 位十六进制随机密钥") }
             try SecretStore.save(psk.lowercased(), account: "bridge-psk-v1")
-            status = "USB PSK 已保存到本机钥匙串"
+            status = "旧 Host PSK 已保存到本机钥匙串；USB NCM 不使用此密钥"
         } catch { errorMessage = Self.safeError(error) }
     }
     func deleteBridgeKey() { stop(); do { try SecretStore.delete("bridge-psk-v1"); status = "桥接密钥已删除" } catch { errorMessage = error.localizedDescription } }
     func setForeground(_ active: Bool) {
         setScene(active ? .active : .background)
     }
+    private var currentScene = ScreenUSBExecutionContext.Scene.active
+    private var canContinueUSBSetup: Bool { usbConnectionStatus.allowsSetup(in: currentScene) }
     func setScene(_ scene: ScreenUSBExecutionContext.Scene) {
+        if usbClient != nil || usbConnectionStatus.isConnecting {
+            usbDiagnostics.record("scene \(currentScene) -> \(scene) connecting=\(usbConnectionStatus.isConnecting) running=\(running)", attempt: listenerGeneration)
+        }
+        currentScene = scene
         let active = scene == .active
         foreground = active
         liveActivities.setForeground(active)
@@ -149,7 +157,10 @@ struct AgentRunServices {
         if active { sessions.saveNow(); persist() }
         // System CPU/network time does not authorize the legacy TLS tools.
         if !active, usbExecutionContext == nil { bridge?.cancelTransport(); liveBridge?.cancelTransport() }
-        if !active, !stopping, !running, listenerTask != nil || liveBridge != nil || usbClient != nil {
+        // Preserve only initial USB setup under a permission sheet. Existing
+        // sessions/legacy bridges and a real background transition still stop.
+        let preserveUSBSetup = !active && canContinueUSBSetup && bridge == nil && liveBridge == nil
+        if !active, !stopping, !running, !preserveUSBSetup, listenerTask != nil || liveBridge != nil || usbClient != nil {
             stop(message: "空闲桥接已关闭；返回后需手动连接", interrupted: true)
         }
         if !active, running, approval != nil, !lifecycle.canAwaitApprovalInBackground {
@@ -157,6 +168,9 @@ struct AgentRunServices {
         }
     }
     func setProtectedDataAvailable(_ available: Bool) {
+        if available != protectedDataAvailable, usbClient != nil {
+            usbDiagnostics.record("protectedDataAvailable=\(available)", attempt: listenerGeneration)
+        }
         protectedDataAvailable = available
         if !available {
             usbExecutionContext?.revoke()
@@ -182,23 +196,51 @@ struct AgentRunServices {
             }
         }
     }
-    func disconnect() { stop(message: "桥接已断开；若有已发送动作，请核对设备") }
+    func disconnect() {
+        usbDiagnostics.record("ui.disconnect requested", attempt: listenerGeneration)
+        stop(message: "桥接已断开；若有已发送动作，请核对设备")
+    }
+    func usbDiagnosticReport() -> String {
+        usbDiagnostics.record("export requested scene=\(currentScene) foreground=\(foreground) protectedData=\(protectedDataAvailable) running=\(running) stopping=\(stopping) connecting=\(usbConnectionStatus.isConnecting)")
+        usbDiagnostics.recordInterfaces(reason: "export")
+        return usbDiagnostics.report()
+    }
     func connectUSB() {
-        guard foreground, !running, !stopping, listenerTask == nil else { return }
-        let operation = UUID(); listenerGeneration = operation
+        let operation = UUID()
+        usbDiagnostics.record("ui.connect requested scene=\(currentScene) foreground=\(foreground) running=\(running) stopping=\(stopping) listenerBusy=\(listenerTask != nil)", attempt: operation)
+        guard foreground else { usbDiagnostics.record("ui.connect rejected=notForeground", attempt: operation); usbConnectionStatus = .failed("请保持 App 在前台后重试"); return }
+        guard !running, !stopping else { usbDiagnostics.record("ui.connect rejected=runningOrStopping", attempt: operation); usbConnectionStatus = .failed("请等待当前任务停止后再连接"); return }
+        guard listenerTask == nil else { usbDiagnostics.record("ui.connect rejected=listenerBusy", attempt: operation); usbConnectionStatus = .failed("已有桥接连接操作正在进行，请稍后重试"); return }
+        listenerGeneration = operation
+        errorMessage = nil; usbConnectionStatus = .connecting
         listenerTask = Task { [weak self] in
             guard let self else { return }
             defer { if self.listenerGeneration == operation { self.listenerTask = nil } }
             do {
-                guard let secret = try SecretStore.load("bridge-psk-v1") else { throw AppError.invalid("请先保存与 USB 固件相同的独立 PSK") }
                 await self.usbClient?.stop()
-                let client = USBCommandClient(); self.usbClient = client
-                try await client.connect(pskHex: secret)
+                guard self.listenerGeneration == operation, self.canContinueUSBSetup, !Task.isCancelled else { return }
+                let client = USBCommandClient(diagnostics: self.usbDiagnostics) { [weak self] progress in
+                    Task { @MainActor in
+                        guard let self, self.listenerGeneration == operation, self.usbConnectionStatus.isConnecting else { return }
+                        self.usbConnectionStatus = progress
+                    }
+                }
+                self.usbClient = client
+                try await client.connect(attempt: operation)
+                guard self.listenerGeneration == operation, self.canContinueUSBSetup, !Task.isCancelled else { await client.stop(); return }
+                self.usbConnectionStatus = .checking
                 try await client.command("PING")
-                guard self.listenerGeneration == operation, self.foreground, !Task.isCancelled else { await client.stop(); return }
-                self.bridgeStatus = await client.supportsHID ? "USB NCM + HID 已认证；屏幕控制尚需逐动作确认" : "USB NCM 双向 PING 已验证；固件未启用 HID"
+                let supportsHID = await client.supportsHID
+                guard self.listenerGeneration == operation, self.canContinueUSBSetup, !Task.isCancelled else { await client.stop(); return }
+                try client.health.requireHealthy(now: ProcessInfo.processInfo.systemUptime)
+                self.usbConnectionStatus = .ready(hid: supportsHID)
+                self.usbDiagnostics.record("connect.verified explicitPING=true hid=\(supportsHID)", attempt: operation)
             } catch {
-                if self.listenerGeneration == operation { self.errorMessage = Self.safeError(error); self.usbClient = nil }
+                if self.listenerGeneration == operation {
+                    let message = Self.safeError(error)
+                    self.usbDiagnostics.record("connect.failed reason=\(message)", attempt: operation)
+                    self.usbConnectionStatus = .failed(message); self.errorMessage = message; self.usbClient = nil
+                }
             }
         }
     }
@@ -369,6 +411,10 @@ struct AgentRunServices {
         generation = UUID() // Fence late callbacks before cancelling anything.
         finishingRun = false
         usbExecutionContext?.revoke(); usbExecutionContext = nil; executionScheduler.configure(context: nil, allowSystemProcessing: false)
+        if usbClient != nil || usbConnectionStatus.isConnecting {
+            // The caller's message may refer to a task; do not export it.
+            usbDiagnostics.record("viewmodel.stop phase=\(phase) scene=\(currentScene) running=\(running) stopping=\(stopping)", attempt: listenerGeneration)
+        }
         runTask?.cancel(); watchdog?.cancel(); agent?.requestCancel(); provider?.cancel()
         bridge?.cancelTransport(); liveBridge?.cancelTransport()
         lifecycle.stop(message: message)
@@ -382,6 +428,7 @@ struct AgentRunServices {
         runTask?.cancel(); watchdog?.cancel(); agent?.requestCancel(); provider?.cancel()
         approvalContinuation?.resume(returning: false); approvalContinuation = nil; approval = nil
         let old = coordinator, oldBridge = bridge, oldLive = liveBridge, oldTask = runTask, oldUSB = usbClient
+        if oldUSB != nil || usbConnectionStatus.isConnecting { usbConnectionStatus = .disconnected(message) }
         usbClient = nil; allowCapturedScreenUpload = false; allowUSBBackgroundRun = false
         stopping = true
         Task {

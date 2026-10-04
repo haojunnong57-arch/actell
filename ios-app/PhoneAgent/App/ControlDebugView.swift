@@ -122,7 +122,20 @@ private struct USBCapturePanel: View {
                 Button("停止采集", role: .destructive) { model.stopCapture() }
             }.buttonStyle(.bordered)
             Button("仅在本机预览截图") { model.previewCapture() }.disabled(!capture.active || model.running || model.stopping)
-            Button("连接 USB NCM") { model.connectUSB() }.disabled(model.running || model.stopping).accessibilityIdentifier("connectUSBNCM")
+            HStack {
+                Button(model.usbConnectionStatus.isConnecting ? "正在连接…" : "连接 USB NCM") { model.connectUSB() }
+                    .disabled(model.running || model.stopping || model.usbConnectionStatus.isConnecting).accessibilityIdentifier("connectUSBNCM")
+                if model.usbConnectionStatus.isConnecting {
+                    ProgressView()
+                    Button("取消") { model.disconnect() }.accessibilityIdentifier("cancelUSBConnection")
+                }
+            }
+            Text(model.usbConnectionStatus.message)
+                .font(.callout).foregroundStyle(model.usbConnectionStatus.isFailure ? Color.red : Color.primary)
+                .accessibilityIdentifier("usbConnectionStatus")
+            USBDiagnosticsControls(model: model)
+            Text("USB 免 PSK，无需配对。可访问此 USB 网络的其他程序也能发送命令；本 App 的输入仍需逐动作确认。")
+                .font(.caption).foregroundStyle(.secondary)
             Toggle("允许本次 Agent 运行发送全屏截图到模型", isOn: $model.allowCapturedScreenUpload).disabled(model.running || model.stopping).accessibilityIdentifier("screenUploadConsent")
             Toggle("允许本次采集 / USB 任务切换 App 继续", isOn: $model.allowUSBBackgroundRun).disabled(model.running || model.stopping).accessibilityIdentifier("usbBackgroundConsent")
             Text("启用后，请开始任务并在 15 秒内切到目标 App。每次动作仍需返回前台批准，再在 15 秒内切回目标画面；画面变化会阻止发送。每段后台最多 60 秒，总计 5 分钟。锁屏、停止采集、2 秒无新帧、USB 失联或到期都会停止。真机闭环尚待验证。")
@@ -130,6 +143,51 @@ private struct USBCapturePanel: View {
             Text(model.backgroundStatus).font(.caption)
             Text("先在 iPhone 的 USB 以太网设置中使用 192.168.7.2 / 255.255.255.0，路由器和 DNS 留空。采集授权不会自动发送图像；预览只在本机显示。")
                 .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+
+private struct USBDiagnosticsControls: View {
+    @ObservedObject var model: AgentViewModel
+    @State private var showingLog = false
+    @State private var report = ""
+    @State private var copied = false
+
+    private func refresh() { report = model.usbDiagnosticReport() }
+    private func copy() {
+        refresh()
+        // Only this explicit button writes the clipboard; never read it.
+        UIPasteboard.general.string = report
+        copied = true
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Button("复制 USB 日志", action: copy).accessibilityIdentifier("copyUSBDiagnostics")
+                Button("查看日志") { refresh(); showingLog = true }.accessibilityIdentifier("showUSBDiagnostics")
+            }.buttonStyle(.bordered)
+            if copied { Text("USB 日志已复制").font(.caption).accessibilityIdentifier("usbDiagnosticsCopied") }
+            Text("保留本次 App 运行最近 600 条 USB 诊断；连接失败后可直接复制。重启 App 会清空，不含截图、任务正文或密钥。")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .sheet(isPresented: $showingLog) {
+            NavigationStack {
+                ScrollView {
+                    Text(report).font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding()
+                        .accessibilityIdentifier("usbDiagnosticsReport")
+                }
+                .navigationTitle("USB 诊断日志")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) { Button("完成") { showingLog = false } }
+                    ToolbarItemGroup(placement: .topBarTrailing) {
+                        Button("刷新", action: refresh).accessibilityIdentifier("refreshUSBDiagnostics")
+                        Button("复制", action: copy).accessibilityIdentifier("copyUSBReport")
+                    }
+                }
+            }
         }
     }
 }

@@ -2,7 +2,7 @@
 
 记录日期：2026-10-04。电路分析、用户报告的测量与待组装方案分别记录；本文件不表示 iPhone 已接入或通过测试。
 
-用户提供了[信路 ESP32S3 开发板资料页](https://www.xinlucity.com/?s=resourcedetail/index/id/61.html)。其附件中的[开发板原理图](xinlu-esp32s3-schematic.pdf)已按原文件保存，来源及 SHA-256 见[实测摘要](../local-validation/esp32-bringup-summary.json)。用户另附的 `1783913303242785.pdf` 是 ESP32-S3 芯片数据手册，不能单独说明开发板的供电布线。以下电路结论来自原理图的逐线检查，用户报告的实物测量另列于下文。
+用户提供了[信路 ESP32S3 开发板资料页](https://www.xinlucity.com/?s=resourcedetail/index/id/61.html)。其附件中的[开发板原理图](xinlu-esp32s3-schematic.pdf)已按原文件保存，来源及 SHA-256 见实测摘要（本地文件 `../local-validation/esp32-bringup-summary.json`，已忽略）。用户另附的 `1783913303242785.pdf` 是 ESP32-S3 芯片数据手册，不能单独说明开发板的供电布线。以下电路结论来自原理图的逐线检查，用户报告的实物测量另列于下文。
 
 ESP32-S3 本身支持 USB Host / Device，并有内置 PHY，作为 USB 主机不需要另加 USB Host 控制器。[ESP-IDF v5.5.5 Host 驱动](https://docs.espressif.com/projects/esp-idf/en/v5.5.5/esp32s3/api-reference/peripherals/usb_host.html)可在初始化时选择内部 PHY 和 Host 模式。芯片资料中的 `USB_SERIAL_JTAG_DP/DM_PULLUP` 控制的是 GPIO20/19 上的 **D+/D- 数据线**上拉，不是 Type-C 插座 **CC1/CC2** 的 Rp/Rd；修改这些寄存器不会改变图中 R16/R17 的固定接法。“自带主机控制器”和“本板可用普通 C-to-C 线直接枚举 USB-C iPhone”是两个需要分别确认的问题，不应把后者的接线限制说成 S3 不支持 Host。
 
@@ -15,7 +15,7 @@ ESP32-S3 本身支持 USB Host / Device，并有内置 PHY，作为 USB 主机�
 
 根据 [TI USB-C 说明的 source/sink 电路章节](https://www.ti.com/lit/pdf/slyy228)，两个 CC 下拉 Rd 表示受电端，供电端需要 Rp 及相应供电控制。**据此推断，这块板不能仅靠打开 Host 配置、短接 USB-OTG 焊盘，再用普通 C-to-C 线，就实现我们需要的 S3 Host → USB-C iPhone Device 接法。** 原理图也未画出 Host VBUS 限流开关；实际供电能力与负载电压尚未测量。
 
-2026-10-04 用户实物测量补充：目标 iPhone 为 USB-C，万用表无二极管档，改用断电电阻测量。用户报告表笔互碰、USB-OTG 焊盘 A→B、交换表笔后 B→A 三次读数均为 1.7 Ω。两方向均等于表笔短接基线，说明两焊盘间在该表分辨率内已有低阻通路；不能据此判断是内部铜箔、焊锡或其他并联路径。用户随后按只接 COM 供电、原生 USB 留空的测量安排，报告 A/B 各自对 GND 均为 4.95 V。该结果确认两个被测焊盘节点均带电，与二极管被低阻路径旁路的情况一致，但没有直接测量接口 VBUS，也未验证 CC 角色、反向电流保护或负载供电能力。无需再短接该焊盘，暂不采用 COM 接电脑供电同时原生 USB 接 iPhone 的接法。读数为用户报告，并非自动采集；见[实测摘要](../local-validation/esp32-bringup-summary.json)中的 `user_reported_board_measurements`。
+2026-10-04 用户实物测量补充：目标 iPhone 为 USB-C，万用表无二极管档，改用断电电阻测量。用户报告表笔互碰、USB-OTG 焊盘 A→B、交换表笔后 B→A 三次读数均为 1.7 Ω。两方向均等于表笔短接基线，说明两焊盘间在该表分辨率内已有低阻通路；不能据此判断是内部铜箔、焊锡或其他并联路径。用户随后按只接 COM 供电、原生 USB 留空的测量安排，报告 A/B 各自对 GND 均为 4.95 V。该结果确认两个被测焊盘节点均带电，与二极管被低阻路径旁路的情况一致，但没有直接测量接口 VBUS，也未验证 CC 角色、反向电流保护或负载供电能力。无需再短接该焊盘，暂不采用 COM 接电脑供电同时原生 USB 接 iPhone 的接法。读数为用户报告，并非自动采集；见实测摘要（本地文件 `../local-validation/esp32-bringup-summary.json`，已忽略）中的 `user_reported_board_measurements`。
 
 厂家资料页的 Type-C 介绍图片确实写有“需要短接 OTG 焊盘才能使用”。图纸中 J4 只旁路供电二极管，D+/D- 和 CC 不经过 J4；若实物完整采用图中 D1 电路，J4 断开时也应存在 USB 向板上供电的路径。因此，此前只接原生 USB 时亮灯、运行或烧录成功，均不能证明 J4 已短接。厂家这句说明的具体适用条件与实物装配版本尚未确认，不能据此把 J4 当作下载模式开关，或把下载成功当作连接 iPhone 的电气安全验证。
 

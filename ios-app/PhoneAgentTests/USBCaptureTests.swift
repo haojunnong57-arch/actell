@@ -1,6 +1,7 @@
 import XCTest
 import CoreVideo
-import CryptoKit
+import Network
+import Darwin
 @testable import PhoneAgent
 
 private actor USBSpy: USBCommandTransport {
@@ -110,15 +111,22 @@ final class USBCaptureTests: XCTestCase {
         do { _ = try await bridge.screenshot(); XCTFail() } catch {}
         let commands = await transport.commands; XCTAssertTrue(commands.isEmpty)
     }
-    func testHMACVectorAndSessionDirectionTampering() throws {
-        let key = try USBWire.key((0..<32).map { String(format: "%02x", $0) }.joined())
-        let payload = "client|" + String(repeating: "0", count: 64) + "|1 TAP 32768 65535"
-        let signature = "29e0e0535051be9c63b095eb44a7266f7d919f684df9158a1ab5b14bce5e491b"
-        XCTAssertEqual(USBWire.mac(payload, key: key), signature)
-        XCTAssertTrue(USBWire.verify(payload, signature: signature, key: key))
-        XCTAssertFalse(USBWire.verify(payload + "0", signature: signature, key: key))
-        XCTAssertFalse(USBWire.verify(payload.replacingOccurrences(of: "client", with: "server"), signature: signature, key: key))
-        XCTAssertThrowsError(try USBWire.key(String(repeating: "z", count: 64)))
+    func testNoPSKGreetingRequiresExplicitPA2Version() throws {
+        XCTAssertFalse(try USBWire.supportsHID("PA2 READY 0"))
+        XCTAssertTrue(try USBWire.supportsHID("PA2 READY 1"))
+        for line in ["PA1 LOCKED", "PA1 CHALLENGE " + String(repeating: "0", count: 64),
+                     "READY 1", "PA2 READY 2", "PA2 READY 1 ", " PA2 READY 1", "PA2  READY 1"] {
+            XCTAssertThrowsError(try USBWire.supportsHID(line), line)
+        }
+    }
+    func testACKRequiresCanonicalIDAndExactPhase() throws {
+        let ack = try USBWire.parseACK("4294967295 executed")
+        XCTAssertEqual(ack.id, UInt64(UInt32.max)); XCTAssertEqual(ack.phase, "executed")
+        XCTAssertEqual(try USBWire.parseACK("1 received").phase, "received")
+        for line in ["0 executed", "01 executed", "+1 executed", "4294967296 executed", "1 EXECUTED",
+                     "1 executed mac", "1  executed", "1 executed ", "1\texecuted", "1 rejected"] {
+            XCTAssertThrowsError(try USBWire.parseACK(line), line)
+        }
     }
     func testReceivedIsNotExecutedAndOutOfOrderACKFails() throws {
         var received = false
@@ -128,5 +136,148 @@ final class USBCaptureTests: XCTestCase {
         XCTAssertThrowsError(try USBWire.acceptACK("received", needsReceipt: true, received: &received))
         XCTAssertTrue(try USBWire.acceptACK("executed", needsReceipt: true, received: &received))
         XCTAssertThrowsError(try USBWire.acceptACK("rejected", needsReceipt: true, received: &received))
+    }
+    func testTransportFailureReportsNetworkErrorBeforeInputButPreservesUnknownInputOutcome() {
+        let error = NWError.posix(.ENETUNREACH)
+        let beforeInput = USBWire.transportError(error, inputInFlight: false)
+        guard case .unavailable(let message) = beforeInput else { return XCTFail("A failed connection is not a sent HID action") }
+        XCTAssertTrue(message.contains(String(POSIXErrorCode.ENETUNREACH.rawValue)))
+        XCTAssertEqual(USBWire.transportError(error, inputInFlight: true), .unknownOutcome)
+        XCTAssertEqual(USBWire.transportError(nil, inputInFlight: true), .unknownOutcome)
+    }
+    func testHeartbeatTimeoutKeepsConcurrentInputOutcomeUnknown() {
+        XCTAssertEqual(USBWire.receiptTimeout(isPing: true, inputInFlight: true), .unknownOutcome)
+        XCTAssertEqual(USBWire.receiptTimeout(isPing: false, inputInFlight: true), .unknownOutcome)
+        guard case .unavailable(let message) = USBWire.receiptTimeout(isPing: true, inputInFlight: false) else { return XCTFail() }
+        XCTAssertTrue(message.contains("PING"))
+        var received = false
+        XCTAssertThrowsError(try USBWire.acceptACK("received", needsReceipt: false, received: &received)) { error in
+            XCTAssertEqual(error as? AppError, .protocolViolation("USB ACK 阶段不匹配"))
+        }
+    }
+    func testPermissionSheetOnlyPreservesInitialUSBSetupAndNeverBackground() {
+        let setup: [USBConnectionStatus] = [.connecting, .waiting("localNetworkDenied"), .awaitingGreeting, .checking]
+        for state in setup {
+            XCTAssertTrue(state.allowsSetup(in: .active))
+            XCTAssertTrue(state.allowsSetup(in: .inactive), "An initial permission sheet must not cancel setup")
+            XCTAssertFalse(state.allowsSetup(in: .background), "Leaving the app must still cancel setup")
+        }
+        for state in [USBConnectionStatus.idle, .ready(hid: false), .ready(hid: true), .failed("down"), .disconnected("stopped")] {
+            XCTAssertFalse(state.allowsSetup(in: .inactive), "Existing input sessions must retain the old stop policy")
+            XCTAssertFalse(state.allowsSetup(in: .background))
+        }
+    }
+    private func interfaceRow(name: String = "en77", index: UInt32 = 77,
+                              address: String = "192.168.7.2", mask: String = "255.255.255.0",
+                              flags: UInt32 = UInt32(IFF_UP | IFF_RUNNING | IFF_BROADCAST),
+                              linkType: UInt8? = UInt8(IFT_ETHER)) -> USBInterfaceBinding.Row {
+        USBInterfaceBinding.Row(name: name, index: index, address: address, mask: mask, flags: flags, linkType: linkType)
+    }
+    func testUSBInterfaceSelectionUsesFixedIPNotInterfaceNameOrDefaultPath() throws {
+        let usb = interfaceRow(name: "en77")
+        let unrelated = interfaceRow(name: "en0", address: "192.168.1.2")
+        XCTAssertEqual(try USBInterfaceBinding.select([unrelated, usb]), usb)
+    }
+    func testUSBInterfaceSelectionRejectsMissingAmbiguousAndUnsafeInterfaces() {
+        XCTAssertThrowsError(try USBInterfaceBinding.select([]))
+        XCTAssertThrowsError(try USBInterfaceBinding.select([interfaceRow(), interfaceRow(name: "en88", index: 88)]))
+        let complete = UInt32(IFF_UP | IFF_RUNNING | IFF_BROADCAST)
+        let invalid = [interfaceRow(index: 0), interfaceRow(mask: "255.255.0.0"),
+                       interfaceRow(flags: complete & ~UInt32(IFF_UP)),
+                       interfaceRow(flags: complete & ~UInt32(IFF_RUNNING)),
+                       interfaceRow(flags: complete & ~UInt32(IFF_BROADCAST)),
+                       interfaceRow(flags: complete | UInt32(IFF_POINTOPOINT)),
+                       interfaceRow(flags: complete | UInt32(IFF_LOOPBACK)),
+                       interfaceRow(linkType: nil), interfaceRow(linkType: 0)]
+        for row in invalid { XCTAssertThrowsError(try USBInterfaceBinding.select([row]), "\(row)") }
+    }
+    func testUSBInterfaceTypeNeverPermitsWiFiCellularOrLoopback() {
+        XCTAssertNoThrow(try USBInterfaceBinding.validateType(.wiredEthernet))
+        XCTAssertNoThrow(try USBInterfaceBinding.validateType(.other)) // Physical checks precede this classification.
+        for type in [NWInterface.InterfaceType.wifi, .cellular, .loopback] {
+            XCTAssertThrowsError(try USBInterfaceBinding.validateType(type))
+        }
+    }
+    func testScopedAddressAndParametersRequireExactInterfaceWithoutConnecting() throws {
+        // Exercise the actual public Network parser and parameter objects on
+        // loopback; no socket/connection or device traffic is created.
+        let address = try XCTUnwrap(IPv4Address("127.0.0.1%lo0"))
+        let interface = try XCTUnwrap(address.interface)
+        XCTAssertEqual(interface.name, "lo0")
+        XCTAssertEqual(interface.index, Int(if_nametoindex("lo0")))
+        XCTAssertNil(IPv4Address("192.168.7.1%phoneagent_missing_interface_999"))
+        let binding = USBInterfaceBinding(row: interfaceRow(name: "lo0", index: UInt32(interface.index)),
+                                          interface: interface, localAddress: address, remoteAddress: address)
+        let parameters = binding.parameters()
+        XCTAssertEqual(parameters.requiredInterface, interface)
+        XCTAssertEqual(parameters.requiredLocalEndpoint, .hostPort(host: .ipv4(address), port: .any))
+        XCTAssertFalse(parameters.includePeerToPeer)
+    }
+    func testUSBResolveRejectsStaleIndexAndDoesNotTrustInventedPhysicalFlags() {
+        let loopback = if_nametoindex("lo0")
+        XCTAssertGreaterThan(loopback, 0)
+        XCTAssertThrowsError(try USBInterfaceBinding.resolve([interfaceRow(name: "lo0", index: loopback + 10000)]))
+        // Even if a row claims to be Ethernet, the framework's loopback type
+        // must still prevent the connection from being created.
+        XCTAssertThrowsError(try USBInterfaceBinding.resolve([interfaceRow(name: "lo0", index: loopback)]))
+    }
+    func testDiagnosticRingKeepsRecentEventsAndAttemptIdentity() throws {
+        let log = USBDiagnosticsLog(capacity: 3, console: false)
+        let first = try XCTUnwrap(UUID(uuidString: "11111111-1111-1111-1111-111111111111"))
+        let second = try XCTUnwrap(UUID(uuidString: "22222222-2222-2222-2222-222222222222"))
+        log.record("connect.begin", attempt: first)
+        log.record("timeout.setup", attempt: first)
+        log.record("connect.begin", attempt: second)
+        log.record("connection.state=preparing", attempt: second)
+        let report = log.report()
+        XCTAssertTrue(report.contains("retained=3 dropped=1"))
+        XCTAssertFalse(report.contains("#1 [11111111]"))
+        XCTAssertTrue(report.contains("#2 [11111111] timeout.setup"))
+        XCTAssertTrue(report.contains("#4 [22222222] connection.state=preparing"))
+        XCTAssertTrue(report.contains(USBDiagnosticsLog.revision))
+    }
+    func testDiagnosticConcurrentWritesRemainBoundedAndCannotForgeLines() {
+        let log = USBDiagnosticsLog(capacity: 16, console: false)
+        DispatchQueue.concurrentPerform(iterations: 200) { _ in log.record("state\nforged\rline") }
+        log.record(String(repeating: "x", count: 10_000))
+        let report = log.report()
+        let events = report.split(separator: "\n").filter { $0.contains(" [app] ") }
+        XCTAssertEqual(events.count, 16)
+        XCTAssertTrue(report.contains("retained=16 dropped=185"))
+        XCTAssertTrue(events.first?.contains("#186 [app]") == true)
+        XCTAssertTrue(events.last?.contains("#201 [app]") == true)
+        XCTAssertFalse(report.contains("\nforged"))
+        XCTAssertLessThan(events.last?.count ?? Int.max, 1750)
+    }
+    func testDiagnosticCommandLabelsAndInterfaceAddressesOmitUnrelatedData() {
+        let log = USBDiagnosticsLog(console: false)
+        for body in ["TAP 12345 54321", "DRAG 12345 54321 23456 65432 100", "UNRECOGNIZED secret-value"] {
+            log.record("kind=\(USBDiagnosticsLog.commandKind(body)); arguments omitted")
+        }
+        XCTAssertFalse(log.report().contains("12345"))
+        XCTAssertFalse(log.report().contains("secret-value"))
+        XCTAssertEqual(USBDiagnosticsLog.commandKind("PING"), "PING")
+        XCTAssertEqual(USBDiagnosticsLog.visibleIPv4("192.168.7.2"), "192.168.7.2")
+        XCTAssertEqual(USBDiagnosticsLog.visibleIPv4("169.254.10.20"), "169.254.10.20")
+        XCTAssertFalse(USBDiagnosticsLog.visibleIPv4("10.20.30.40").contains("10.20.30.40"))
+    }
+    @MainActor func testUSBConnectGuardShowsFailureWithoutOpeningTransport() {
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false)
+        model.goal = "private-task-must-not-appear-in-diagnostics"
+        model.setForeground(false)
+        model.connectUSB()
+        XCTAssertTrue(model.usbConnectionStatus.isFailure)
+        XCTAssertTrue(model.usbConnectionStatus.message.contains("前台"))
+        XCTAssertFalse(model.isListening)
+        model.setForeground(true); model.stopping = true
+        model.connectUSB()
+        XCTAssertTrue(model.usbConnectionStatus.isFailure)
+        XCTAssertTrue(model.usbConnectionStatus.message.contains("停止"))
+        XCTAssertFalse(model.isListening)
+        let report = model.usbDiagnosticReport()
+        XCTAssertTrue(report.contains("rejected=notForeground"))
+        XCTAssertTrue(report.contains("rejected=runningOrStopping"))
+        XCTAssertFalse(report.contains("connect.begin"))
+        XCTAssertFalse(report.contains(model.goal))
     }
 }

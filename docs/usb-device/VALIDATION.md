@@ -1,5 +1,15 @@
 # 本地验证与真机验收边界 · 2026-10-04
 
+更新（18:47，Asia/Shanghai）：main 的 NCM-only 镜像已获用户确认并通过 COM 烧录，写入校验和 UART 启动检查通过，服务报告 `auth LOCKED`。尚未连接 iPhone 验证枚举或通信；NCM+HID 未烧录。见[实机记录](NCM-BRINGUP.md)。下文保留首阶段验证时的历史状态。
+
+后续用户观察：PA1 的 iPhone 以太网接口出现，固定 IP 已配置。用户随后选择 USB 免 PSK，2026-10-04 19:34 已完成 PA2 NCM-only 的 COM 烧录、设备摘要及启动检查；详见 [NO-PSK.md](NO-PSK.md)。PA2 手机端网络收发、HID 和后台闭环仍待验证。以下 PA1/PSK 测试结果为历史记录。
+
+后续连接诊断：用户已自行安装 App，确认 PA2 USB 以太网存在、IP 为 `192.168.7.2/24`；App TCP 报 ENETDOWN，本地网络权限列表尚无 PhoneAgent。App 首次连接等待与路径诊断修正已通过 119 项单元测试、1 项 UI 回归和 iPhoneOS 27 无签名构建，详见 [NO-PSK.md 的连接诊断](NO-PSK.md#iphone-首次连接诊断--2026-10-04)。还没有手机 PING 成功证据。 后续增加可复制 USB 诊断，已通过 122 项单元测试、1 项 UI 回归及 iPhoneOS 构建，见 日志版本验证（本地文件 `evidence/usb-diagnostics-20261004.log`，已忽略）。
+
+最新接口诊断：用户关闭 VPN 后默认路径变化，但 `en3=192.168.7.2/24` 与 connection `notAvailable/ENETDOWN` 同时存在的现象未变。App 已改为按该固定 IP 解析并绑定具体接口，新增选择/拒绝日志，版本 `usb-diag-20261004-2`；127 项单元测试、1 项 UI 测试和 iPhoneOS 无签名构建通过。尚未在手机验证新版 TCP/PING，详见 证据（本地文件 `evidence/usb-interface-binding-20261004.log`，已忽略） 和 [当前操作步骤](NO-PSK.md#vpn-对比与具体接口绑定--2026-10-04)。此次没有烧录或修改 VPN。
+
+最新真机反馈：用户随后确认界面出现“USB NCM 双向 PING 已验证”。这是 PA2 网络往返的用户报告，成功日志尚未提供；实际接口类型及旧路径失败的精确机制仍未核实。HID、拔插/睡眠恢复、VPN 共存、采集/后台闭环没有新增验收证据。
+
 独立分支 `feature/ios27-usb-device-capture` 已实现采集、认证 NCM TCP、HID 复合固件及现有 Agent 接口；下列本地检查通过。**未烧录 S3、未安装/签名真机 App、未授权真机全屏采集、未控制 iPhone。第二阶段已补齐 SCK / USB 专属有限后台执行代码与离线测试；后台全屏采集和完整后台 Agent 闭环仍没有真机证明。**
 
 第二阶段复用分析、补充验证和 PSK 配置授权范围见 [BACKGROUND.md](BACKGROUND.md)。下表的 53 项 XCTest 与固件记录为首阶段结果，第二阶段独立记录见该文。
@@ -17,13 +27,13 @@
 | IDF Python | 3.12.13；pyelftools 0.33 |
 | esp_tinyusb / TinyUSB | 2.2.0 / 0.21.0~2，manifest exact pin + dependencies.lock component hash |
 | 真机目标 App | `generic/platform=iOS` 无签名 build 成功，未注册/更改签名账户 |
-| 模拟器 | 已运行的 iPhone 18 Pro / iOS 27，`CBC53192-188D-4FC1-818C-36EC433418FF` |
+| 模拟器 | 已运行的 iPhone 18 Pro / iOS 27，`<SIMULATOR_ID>` |
 | S3 NCM-only | build 成功；app .bin 389568 bytes |
 | S3 NCM+HID | build 成功；app .bin 392736 bytes |
 
 两种固件均有实际 bootloader、partition-table、app `.bin`、ELF 和 `flash_args`，位于 worktree 的 `.build/device-{ncm,hid}/`。这些是编译产物，不是源码包，也不是已验证可用的成品固件。没有为方便测试加入默认 PSK，默认输入锁定。
 
-当前 `.bin` SHA-256：
+首阶段 `.bin` SHA-256（不是本次 main 已烧录镜像，后者见实机记录）：
 
 ```text
 NCM: a77bf535e677c583eff6c4c2f44f5fd39092c178b3e80e97aed77a8e57c7a1f4
@@ -36,14 +46,14 @@ HID: 1e3ab40aa4eaea07a03a93d41c59083bf7a470d91eea344c7b8fc2c7fde5b2b6
 
 | 检查 | 结果 | 证据 |
 | --- | --- | --- |
-| iOS XCTest | 53 项通过，包含新增 8 项采集/USB 安全测试 | [测试日志](evidence/ios-tests-summary.log) |
-| 离线 UI | 1 项通过，上传许可默认关、Simulator 采集不可用 | [截图](evidence/simulator-usb-capture.png) |
-| C 状态机 | 严格解析、幂等表、反重放、未完成项不逐出、tap/drag/释放顺序、完成/超时隔离通过；ASan/UBSan | [宿主机日志](evidence/host-protocol-tests.log) |
-| C 生产 server localhost | 10 项通过：认证、无 PSK、NCM-only 往返与拒绝输入、HID/PING 并发、重复/冲突 ID、错误签名、超长行、心跳丢失、STOP、USB epoch 撤销 | [同上](evidence/host-protocol-tests.log) |
-| 原 Python wire contract | 12 项通过 | [日志](evidence/legacy-contract-tests.log) |
-| ELF 描述符/依赖 | 实际符号中核对 IAD class、接口数、端点、bus power、HID report IDs；build graph 无 esp_wifi/bt，DHCP/forwarding 关闭 | [描述符日志](evidence/device-descriptors.log) |
-| 真机 App 构建 | 成功；Bundle ID 固定；仅新增 screen-capture 后台模式，无麦克风/相机/照片声明 | [构建日志](evidence/ios-device-build-summary.log)、[实际 Info.plist 摘要](evidence/built-info.json) |
-| 固件构建 | 两种配置通过 | [NCM](evidence/device-ncm-build-summary.log)、[HID](evidence/device-hid-build-summary.log) |
+| iOS XCTest | 53 项通过，包含新增 8 项采集/USB 安全测试 | 测试日志（本地文件 `evidence/ios-tests-summary.log`，已忽略） |
+| 离线 UI | 1 项通过，上传许可默认关、Simulator 采集不可用 | 截图（本地文件 `evidence/simulator-usb-capture.png`，已忽略） |
+| C 状态机 | 严格解析、幂等表、反重放、未完成项不逐出、tap/drag/释放顺序、完成/超时隔离通过；ASan/UBSan | 宿主机日志（本地文件 `evidence/host-protocol-tests.log`，已忽略） |
+| C 生产 server localhost | 10 项通过：认证、无 PSK、NCM-only 往返与拒绝输入、HID/PING 并发、重复/冲突 ID、错误签名、超长行、心跳丢失、STOP、USB epoch 撤销 | 同上（本地文件 `evidence/host-protocol-tests.log`，已忽略） |
+| 原 Python wire contract | 12 项通过 | 日志（本地文件 `evidence/legacy-contract-tests.log`，已忽略） |
+| ELF 描述符/依赖 | 实际符号中核对 IAD class、接口数、端点、bus power、HID report IDs；build graph 无 esp_wifi/bt，DHCP/forwarding 关闭 | 描述符日志（本地文件 `evidence/device-descriptors.log`，已忽略） |
+| 真机 App 构建 | 成功；Bundle ID 固定；仅新增 screen-capture 后台模式，无麦克风/相机/照片声明 | 构建日志（本地文件 `evidence/ios-device-build-summary.log`，已忽略）、实际 Info.plist 摘要（本地文件 `evidence/built-info.json`，已忽略） |
+| 固件构建 | 两种配置通过 | NCM（本地文件 `evidence/device-ncm-build-summary.log`，已忽略）、HID（本地文件 `evidence/device-hid-build-summary.log`，已忽略） |
 
 完整构建日志与 `.xcresult` 留在 `.build/validation/`、`.build/ios/Logs/Test/`。仓库内保存摘要与测试结果。UI 截图来自测试模式，没有真实屏幕内容。没有调用模型服务、读取用户 PSK/API key，或接触真实设备连接。
 
@@ -69,7 +79,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
   -project ios-app/PhoneAgent.xcodeproj -scheme PhoneAgent \
-  -destination 'platform=iOS Simulator,id=CBC53192-188D-4FC1-818C-36EC433418FF' \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro,OS=27.0' \
   -derivedDataPath .build/ios -clonedSourcePackagesDirPath .build/SourcePackages \
   -skipPackageUpdates -disableAutomaticPackageResolution \
   -only-testing:PhoneAgentTests \

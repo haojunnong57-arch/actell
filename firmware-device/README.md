@@ -1,6 +1,6 @@
-# PhoneAgent USB Device 固件（实验，未烧录）
+# PhoneAgent USB Device 固件（实验）
 
-入口是 `main/main.c`，ESP32-S3 原生 USB Device。默认仅 NCM；HID 需要独立构建。源代码、构建通过、USB 枚举成功、iPhone 控制成功是四个不同的状态，当前只完成前两项。
+入口是 `main/main.c`，ESP32-S3 原生 USB Device。默认仅 NCM；HID 需要独立构建。当前源码使用 **PA2 免 PSK**，无需设备或 App 密钥配置。2026-10-04 19:34 已经用户确认，通过 COM 烧录 PA2 NCM-only 并完成镜像摘要、UART 启动检查。此前 PA1 的 iPhone 以太网/IP 已获用户报告，新 PA2 的手机网络收发尚待验证。详见[首次实机记录](../docs/usb-device/NCM-BRINGUP.md)及[免 PSK 验证与烧录记录](../docs/usb-device/NO-PSK.md)。
 
 从仓库根目录：
 
@@ -13,7 +13,7 @@
 
 构建入口复用本机 `../with-esp/.build/toolchains/` 中已安装的 ESP-IDF 5.5.5，所有新 build/cache 在本 worktree 的 `.build/`。其他机器可通过 `IDF_PATH`、`IDF_TOOLS_PATH` 指向已安装工具链。没有安装脚本，没有 flash/monitor 命令。
 
-依赖固定为 `esp_tinyusb ==2.2.0`、`tinyusb ==0.21.0~2`，锁文件带组件 hash。`SDKCONFIG` 为每个构建独立保存，不使用原 Host 项目的配置。不开 Wi-Fi/BLE，不借调试 CDC，console 为 UART；PSRAM 当前未使用，flash 配置 16 MB。没有触碰真实串口或 USB 设备。
+依赖固定为 `esp_tinyusb ==2.2.0`、`tinyusb ==0.21.0~2`，锁文件带组件 hash。`SDKCONFIG` 为每个构建独立保存，不使用原 Host 项目的配置。不开 Wi-Fi/BLE，不借调试 CDC，console 为 UART；PSRAM 当前未使用，flash 配置 16 MB。真实 COM 与 iPhone 接线验证状态见上述实机记录。
 
 构建产物：
 
@@ -28,9 +28,11 @@
   sdkconfig
 ```
 
-这是实际本机交叉编译生成的镜像，不是把源码压缩包改名。它们未烧录、未签名，不是已验证产品固件。默认未配置 PSK 时输入锁定；测试中的公开密钥仅存在宿主机夹具，不进入生产固件。
+这是实际本机交叉编译生成的镜像，不是把源码压缩包改名。PA2 NCM-only 已烧录并通过 UART 启动检查；NCM+HID 未烧录，镜像未签名，不是已验证产品固件。NCM-only 可 PING/STOP，始终拒绝 tap/drag。此次串口压缩传输发生中断，最终以 57600、ROM 无 stub/无压缩方式恢复 App 写入并校验通过；完整备份与过程见上述记录。
 
-凭据接口是 NVS namespace `pa_usb` 中 32-byte blob `psk`。需要用户选择独立随机 PSK，在 App 设置中保存同一值，并在明确同意后用 ESP-IDF 的 NVS 分区生成/写入流程配置设备。不要把密钥放进 Git、命令行日志或截图；不要自动擦除其他 NVS 内容。本次没有生成、读取或写入任何真实 PSK，没有增加钥匙串访问权限。
+USB 没有通信密钥，能访问 USB 网络的其他程序也能调用协议；用户已接受此行为。固件不初始化、读取或写入 NVS，也不修改 eFuse、安全启动或 Flash 加密。已有 NVS 内容保持原状，无须为升级清空。App 与固件需要同时采用 PA2；系统全屏采集、本地网络授权和本 App 逐动作批准仍保留。旧 Host TLS 与模型 API 的 Keychain 不受影响。
+
+后续烧录约定（用户于 2026-10-04 明确调整）：对于来源已知、保有源码和构建配置、可重新构建的工程固件，**默认跳过设备固件读回备份**，直接核对目标、镜像与写入范围，再执行已授权的烧录、设备摘要校验和必要启动检查。仅在将覆盖不可重建的数据（如 NVS 中的配置/凭据、校准数据）、替换来源未知且需要保留的固件，或分区变更确实需要保留原数据时，按实际需要备份相关区域并说明原因；不再把每次读取 512 KiB 或整片 Flash 当作固定前置步骤。现有备份与历史日志保留。此约定不改变烧录授权及接线确认要求。
 
 接线初步要求：只通过已确认 D−/D+ 接 GPIO19/20 的原生 USB 口连接 USB-C iPhone，由 iPhone 供电。不要误用 CH340/COM 口，也不要默认同时接 Mac COM 供电；板上 VBUS 回流路径、现有焊盘状态和额定电流需确认。N16R8 不是板型证据。不要求新增 Hub、Wi-Fi/BLE 模块或其它设备。
 

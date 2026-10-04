@@ -1,6 +1,6 @@
 import Foundation
 
-/// Observed authenticated transport health, never inferred from interface presence.
+/// Observed transport round-trip health, never inferred from interface presence.
 final class USBTransportHealth: @unchecked Sendable {
     private let lock = NSLock()
     private var session = UUID()

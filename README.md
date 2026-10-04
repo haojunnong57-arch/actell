@@ -14,7 +14,7 @@ with-esp/
 ├── tests/                         # 固件宿主机测试、模拟 USB 对端、合成数据
 ├── tools/                         # 原固件构建/测试脚本与导入校验工具
 ├── docs/                          # 固件协议资料、导入说明与本次验证记录
-│   └── local-validation/          # 本次 Mac 检查原始输出
+│   └── local-validation/          # 本地检查输出（原始日志忽略，可读总结保留）
 ├── archives/                      # 两份未经修改的 Library 版本 2 原始包
 ├── README.firmware.md             # 固件包原始 README，内容保持不变
 ├── SOURCE_MANIFEST.firmware.json  # 固件包原始源文件清单
@@ -36,7 +36,7 @@ with-esp/
 | --- | --- | --- |
 | ESP32 固件 | ESP-IDF/C、USB Host/mux、已有配对身份下的 TLS/lockdown、CDTunnel、lwIP、RSD/RemoteXPC、截图与 Home 请求路径 | 云端分层测试及本地 S3 编译通过；2026-10-04 实体 N16R8 的原生 USB / COM 烧录、16 MB Flash 检测、8 MB PSRAM 初始化与基础自测通过。COM 使用 115200，高速传输仍有错误。没有真实 iPhone/S3 联通；首次配对、触控媒体流启停、固件 App 通道及负载下的内存/栈峰值仍待完成 |
 | iOS App | SwiftUI、SwiftAgentKit、视觉模型适配、逐动作确认/停止、Keychain、实验 TLS-PSK 桥接协议，以及 Xcode 工程和只读状态 PiP 原型 | 集成版的无签名 iPhoneOS 27 构建、单元及 UI 测试见最新集成记录；真机系统授权、Siri 语音入口、后台执行时间和 USB 闭环未验证；未启用 PiP 保活 |
-| 两端联调 | 原 Host 路径仍拟经 usbmux；新 Device 路径为 iPhone USB Host → S3 NCM+HID，App 本地 TCP 收发认证命令及分阶段 ACK | Device 固件可编译，有协议及合成端点测试；实际枚举、输入映射、系统授权、网络共存与模型端到端尚未验证 |
+| 两端联调 | 原 Host 路径仍拟经 usbmux；Device 路径为 iPhone USB Host → S3 NCM+HID，App 通过 [PA2 免 PSK TCP](docs/usb-device/PROTOCOL.md) 收发命令及分阶段 ACK | PA2 NCM-only 已烧录并通过设备摘要/UART 检查；用户确认 iPhone App 已显示 USB NCM 双向 PING 已验证。HID 输入、系统采集、网络共存与模型端到端尚未验证；见 [当前状态](docs/usb-device/NO-PSK.md) |
 
 **后台执行有边界：SCK / USB 需本次用户启用并持续满足采集、连接与时限检查；普通模型任务需系统实际授予有限片段。TLS 和演示设备工具保持前台限制。尚未证明同机跨 App 自动化闭环。** 独立的 Mac 历史基线曾在 iPhone 15 Pro / iOS 27.0、Xcode 27 DDI、USB 进程内 userspace RSD、无 WDA 的条件下完成截图、触控和 Home，文字输入字符错误；这不代表 ESP32 已成功。见[原始基线记录](https://chatgpt.com/space/page_6abf8257931881918f961de7bba04aeb)。
 
@@ -52,11 +52,12 @@ with-esp/
 ./tools/with_esp_idf.sh idf.py --version
 ./tools/with_esp_idf.sh ./tools/build_firmware.sh
 # 以下会烧录开发板；先确认实际串口名和已保留的备份
-./tools/with_esp_idf.sh idf.py -C firmware -p /dev/cu.usbserial-110 -b 115200 flash
-./tools/with_esp_idf.sh idf.py -C firmware -p /dev/cu.usbserial-110 monitor
+ESPPORT="/dev/cu.usbserial-REPLACE_ME" # 替换为当前 COM 串口路径
+./tools/with_esp_idf.sh idf.py -C firmware -p "$ESPPORT" -b 115200 flash
+./tools/with_esp_idf.sh idf.py -C firmware -p "$ESPPORT" monitor
 ```
 
-实测时 COM 串口为 `/dev/cu.usbserial-110`，原生 USB 曾枚举为 `/dev/cu.usbmodem1101`，重接后名称可能变化。使用 ESP-IDF 配套 esptool 4.12.0；COM 460800 / 921600 曾出现传输错误，已验证的烧录速度是 115200，保留了[460800 失败证据](docs/local-validation/esp32-com-460800-failure.log)。原生 USB 同样已通过标准 `idf.py flash` 流程。
+实测时 COM 串口为 `/dev/cu.usbserial-<port>`，原生 USB 曾枚举为 `/dev/cu.usbmodem<port>`，重接后名称可能变化。使用 ESP-IDF 配套 esptool 4.12.0；COM 460800 / 921600 曾出现传输错误，已验证的烧录速度是 115200，保留了460800 失败证据（本地文件 `docs/local-validation/esp32-com-460800-failure.log`，已忽略）。原生 USB 同样已通过标准 `idf.py flash` 流程。
 
 实际烧录产物位于 `firmware/build/`：`bootloader/bootloader.bin`、`partition_table/partition-table.bin`、`esp32_iphone_bridge_diagnostics.bin` 和配套 `flash_args` / `flasher_args.json`。应用镜像为 448016 字节。默认固件输出 COM 日志及原生 USB 辅助日志，USB Host 仍关闭。
 
@@ -64,7 +65,7 @@ with-esp/
 
 可直接复制独立备份包 `device-backups/esp32-s3-n16r8-preflash-backup-20261004.zip` 到项目外或其他磁盘。包内含完整镜像、原始 manifest、设备摘要校验日志、恢复说明及 `SHA256SUMS`；包外另有同名 `.zip.sha256`。ZIP 已逐项解压校验一致；由于镜像全为 `0xFF`，压缩后约 20 KB 属正常现象，不是只备份了部分 Flash。
 
-证据见[实测摘要](docs/local-validation/esp32-bringup-summary.json)、[Hello World 启动日志](docs/local-validation/esp32-hello-runtime.log)、[原生 USB 诊断日志](docs/local-validation/esp32-diagnostics-usb-runtime.log)和[COM 诊断日志](docs/local-validation/esp32-diagnostics-com-after-flash.log)。PSRAM 已通过 IDF 启动时的步进地址测试和项目的 16 KiB 读写测试，尚未进行持续负载或全容量多模式压力测试。
+证据见实测摘要（本地文件 `docs/local-validation/esp32-bringup-summary.json`，已忽略）、Hello World 启动日志（本地文件 `docs/local-validation/esp32-hello-runtime.log`，已忽略）、原生 USB 诊断日志（本地文件 `docs/local-validation/esp32-diagnostics-usb-runtime.log`，已忽略）和COM 诊断日志（本地文件 `docs/local-validation/esp32-diagnostics-com-after-flash.log`，已忽略）。PSRAM 已通过 IDF 启动时的步进地址测试和项目的 16 KiB 读写测试，尚未进行持续负载或全容量多模式压力测试。
 
 阶段证据、构建环境限制、高波特率与 USB 读取试错，以及本次归档校验见[会话整理记录](docs/local-validation/ESP32-SESSION-REVIEW.md)。
 
@@ -92,3 +93,5 @@ CC=clang bash tools/test_lockdown_session.sh
 `verify_import.py` 比较当前文件与原始归档，会报告后续有意修改的 iOS 文件和 `.gitignore`；原始清单保留为导入时的历史证据。这些测试会在本目录 `.build/` 生成合成数据和测试二进制。其他原始脚本的完整依赖和平台限制见[导入时验证记录](docs/LOCAL-VALIDATION.md)；不要把这些检查当作完整构建或真机验收。
 
 Git 版本管理范围仅为本目录，`../app-only` 独立维护。当前检查点包含原始归档、导入源码、Xcode 工程、状态 PiP 原型和验证记录；构建缓存与 Xcode 个人状态不纳入版本管理。后续 Xcode 验证已解析并下载固定依赖，详情见上述验证文档。2026-10-04 已执行上述 ESP32 备份和诊断固件烧录；这不代表已连接或控制 iPhone。
+
+原始构建/串口/网络日志、测试结果包、抓包、设备探测 JSON 和 `docs/**/evidence/` 等生成目录仅保留在本地，由 `.gitignore` 排除。仓库保留脱敏的结论、重现方法和明确的验收范围；历史文档中标注“本地文件，已忽略”的材料不会出现在新克隆中。已审核的合成 UI 示例仍可作为文档素材。分享新诊断前需去除设备标识、个人路径和屏幕内容；不要强制添加原始输出。取消跟踪不会删除本地副本，也不会清除旧提交中的文件。

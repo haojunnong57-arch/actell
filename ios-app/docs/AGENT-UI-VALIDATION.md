@@ -4,11 +4,11 @@
 
 ## 后续调整：移除列表时间并压缩行高
 
-按后续反馈，将上下 inset 从各 6 pt 增加到各 **10 pt**，每行比前一版增加 8 pt 留白。最终增量编译和现有新建会话 UI 用例 **1/1 通过**，0 failures；日志见 [`list-balanced-spacing.log`](../.build/validation/list-balanced-spacing.log)。已实际查看[增加留白后的列表](../.build/validation/list-balanced-spacing-shots/456775A9-0EE0-4385-90E6-85000A9C54B8.png)，无日期、标题与单行预览布局正常。未新增测试、未重跑单元测试，`git diff --check` 通过。
+按后续反馈，将上下 inset 从各 6 pt 增加到各 **10 pt**，每行比前一版增加 8 pt 留白。最终增量编译和现有新建会话 UI 用例 **1/1 通过**，0 failures；日志见 list-balanced-spacing.log（本地文件 `../.build/validation/list-balanced-spacing.log`，已忽略）。已实际查看增加留白后的列表（本地验证附件，已忽略），无日期、标题与单行预览布局正常。未新增测试、未重跑单元测试，`git diff --check` 通过。
 
 基于已提交的 `40fc17c` 调整会话列表：移除日期，预览限制为一行，标题与预览间距由 7 pt 改为 3 pt；移除额外的上下 padding，明确列表行上下 inset 各 6 pt。行高由内容及系统字号自然撑开，不固定高度。
 
-增量编译及已有“会话执行后重开历史”“新建真实会话”两条 UI 回归 **2/2 通过**，0 failures，日志见 [`dense-list-no-date.log`](../.build/validation/dense-list-no-date.log)。已实际查看[有消息的列表](../.build/validation/dense-list-no-date-shots/F24B39EB-C89C-4B7A-8C36-07AA6289513C.png)和[两条会话的列表](../.build/validation/dense-list-no-date-shots/5A86814F-9555-4148-9395-64902EA05690.png)，确认无日期、两行紧凑布局及正常截断。本次未新增测试，未重跑单元测试；使用已有模拟器与隔离数据，不调用真实模型或设备。`git diff --check` 通过，未提交本次样式改动。
+增量编译及已有“会话执行后重开历史”“新建真实会话”两条 UI 回归 **2/2 通过**，0 failures，日志见 dense-list-no-date.log（本地文件 `../.build/validation/dense-list-no-date.log`，已忽略）。已实际查看有消息的列表（本地验证附件，已忽略）和两条会话的列表（本地验证附件，已忽略），确认无日期、两行紧凑布局及正常截断。本次未新增测试，未重跑单元测试；使用已有模拟器与隔离数据，不调用真实模型或设备。`git diff --check` 通过，未提交本次样式改动。
 
 ## 后续调整：工具错误作为正常结果返回
 
@@ -16,8 +16,8 @@
 
 保留显式停止、拒绝、前台和运行上限。输入传输出错后，本轮进一步 tap/drag 被禁用，防止重复发送可能已经执行的动作；Agent 仍可继续观察和回答。若模型收到错误后返回空白，不使用调用前的叙述作为最终回答，也不追加重复错误通知。“已结束”表示本轮对话结束，不代表设备任务完成。
 
-- 第一轮完整编译、单元 **44/44**、UI **8/8** 通过，0 failures，日志见 [`tool-errors-as-results.log`](../.build/validation/tool-errors-as-results.log)。包含新错误 UI 流程和现有批准、拒绝、停止、历史、新会话、Return、设置与调试回归。
-- 随后补充空回复边界并调整结束日志；最终编译、单元 **45/45**、错误展示 UI 复验 **1/1** 通过，0 failures，日志见 [`tool-errors-as-results-final.log`](../.build/validation/tool-errors-as-results-final.log)，结果包见 [`tool-errors-as-results-final.xcresult`](../.build/validation/tool-errors-as-results-final.xcresult)。已实际查看[工具错误及后续 Agent 回复](../.build/validation/tool-errors-as-results-final-shots/F7DC5E70-6011-4204-A810-1B833BD9E72B.png)：具体原因在展开的工具详情内出现一次，保留失败标签，后面为正常助手回复；截图回复由离线测试 provider 提供，不是云模型联调证明。
+- 第一轮完整编译、单元 **44/44**、UI **8/8** 通过，0 failures，日志见 tool-errors-as-results.log（本地文件 `../.build/validation/tool-errors-as-results.log`，已忽略）。包含新错误 UI 流程和现有批准、拒绝、停止、历史、新会话、Return、设置与调试回归。
+- 随后补充空回复边界并调整结束日志；最终编译、单元 **45/45**、错误展示 UI 复验 **1/1** 通过，0 failures，日志见 tool-errors-as-results-final.log（本地文件 `../.build/validation/tool-errors-as-results-final.log`，已忽略），结果包见 tool-errors-as-results-final.xcresult（本地文件 `../.build/validation/tool-errors-as-results-final.xcresult`，已忽略）。已实际查看工具错误及后续 Agent 回复（本地验证附件，已忽略）：具体原因在展开的工具详情内出现一次，保留失败标签，后面为正常助手回复；截图回复由离线测试 provider 提供，不是云模型联调证明。
 - 新增运行测试经真实 SwiftAgentKit 循环：离线 provider 只有收到正确 `toolCallId`、`role=tool` 和完整错误内容后才会回答；断言失败工具详情、后续助手消息、无 notice、正常结束。另验证空白后续回复不冒充完成。
 - 新增工具边界用例：参数错误后可以执行修正后的调用；不确定输入返回错误，重新截图后仍禁止重复点击/拖动；显式停止仍终止执行。既有拒绝与后台取消测试保持通过。
 - 使用已有 iPhone 18 Pro / iOS 27 模拟器和隔离内存数据；不调用真实模型，不读真实密钥，不连接设备。首轮重编译显示既有 `TLSBridge.swift` 和 `SafetyTests.swift` Swift 6 并发警告，以及 AppIntents 元数据跳过提示；未改相应并发实现。
@@ -27,45 +27,45 @@
 
 列表去掉模式图标、真实模型/离线演示文案和第三行状态，仅保留标题/日期与消息预览。标题后的“待确认”标签仅在 `.awaitingApproval` 且当前会话仍有有效审批请求时显示；`.blocked` 等普通错误状态不当作 HIL。保留离开会话即中断运行的既有行为，已清除审批的历史不会显示待确认标签。
 
-增量编译及完成后重开历史、离开调试页中断、新建真实会话三条现有 UI 流程 **3/3 通过**，0 failures，日志见 [`compact-conversation-list.log`](../.build/validation/compact-conversation-list.log)。断言验证模式文案、空闲/完成/中断状态和非 HIL 标签不出现在列表，并保留新建真实模式及历史状态验证。已实际查看[有消息的列表](../.build/validation/compact-conversation-list-shots/7AF69E3A-1A85-4164-B5C5-40BA6EFE6B59.png)和[新会话列表](../.build/validation/compact-conversation-list-shots/46EAF2B9-94F0-4AE6-B4C9-684C74741159.png)。本次未构造列表中的活跃审批快照，未调用真实模型；`git diff --check` 通过。
+增量编译及完成后重开历史、离开调试页中断、新建真实会话三条现有 UI 流程 **3/3 通过**，0 failures，日志见 compact-conversation-list.log（本地文件 `../.build/validation/compact-conversation-list.log`，已忽略）。断言验证模式文案、空闲/完成/中断状态和非 HIL 标签不出现在列表，并保留新建真实模式及历史状态验证。已实际查看有消息的列表（本地验证附件，已忽略）和新会话列表（本地验证附件，已忽略）。本次未构造列表中的活跃审批快照，未调用真实模型；`git diff --check` 通过。
 
 ## 后续调整：隐藏工具成功标签
 
-成功工具不再显示“已返回”标签，保留图标、名称和详情展开；其余状态标签沿用原样式。增量编译及成功/拒绝两条现有 UI 流程 **2/2 通过**，0 failures，日志见 [`hide-tool-success-chip.log`](../.build/validation/hide-tool-success-chip.log)。已实际核对[成功结果](../.build/validation/hide-tool-success-chip-shots/DB834786-AE2D-41F3-9AA6-AEF0CE4BF50E.png)没有成功标签，[拒绝结果](../.build/validation/hide-tool-success-chip-shots/53FEB94C-1E43-405A-BFD5-07FDB2F9EE17.png)仍保留“已拒绝”标签。未重跑单元测试或调用真实模型；`git diff --check` 通过。
+成功工具不再显示“已返回”标签，保留图标、名称和详情展开；其余状态标签沿用原样式。增量编译及成功/拒绝两条现有 UI 流程 **2/2 通过**，0 failures，日志见 hide-tool-success-chip.log（本地文件 `../.build/validation/hide-tool-success-chip.log`，已忽略）。已实际核对成功结果（本地验证附件，已忽略）没有成功标签，拒绝结果（本地验证附件，已忽略）仍保留“已拒绝”标签。未重跑单元测试或调用真实模型；`git diff --check` 通过。
 
 ## 后续调整：工具图标尺寸与名称颜色
 
-消息流和授权卡片的工具图标改用小号符号，仍随正文字号缩放；工具名称与图标统一使用次要文字颜色，保留正文字号及常规字重。增量编译及现有会话批准→结果→历史 UI 流程 **1/1 通过**，0 failures，日志见 [`subtle-tool-labels.log`](../.build/validation/subtle-tool-labels.log)。已实际核对[消息流](../.build/validation/subtle-tool-labels-shots/CB56FE0A-DBA6-4FDC-81A8-65EFABCFDE6D.png)和[授权卡片](../.build/validation/subtle-tool-labels-shots/0BD3604C-2347-4BEF-B583-DD6987470F6A.png)截图。未重跑单元测试或调用真实模型；`git diff --check` 通过。
+消息流和授权卡片的工具图标改用小号符号，仍随正文字号缩放；工具名称与图标统一使用次要文字颜色，保留正文字号及常规字重。增量编译及现有会话批准→结果→历史 UI 流程 **1/1 通过**，0 failures，日志见 subtle-tool-labels.log（本地文件 `../.build/validation/subtle-tool-labels.log`，已忽略）。已实际核对消息流（本地验证附件，已忽略）和授权卡片（本地验证附件，已忽略）截图。未重跑单元测试或调用真实模型；`git diff --check` 通过。
 
 ## 后续调整：输入框上方的授权卡片
 
 待授权操作改为输入框上方的独立卡片，消息流中只保留简洁工具状态行；拒绝/批准按钮右对齐。卡片默认展示最多三行摘要，完整说明、参数和截图可在固定高度的详情区展开滚动。卡片只取当前有效审批对应的步骤与图像，沿用完整 ID 校验；批准、拒绝、停止后移除，历史会话不展示可操作授权卡。
 
-增量编译、`AgentPresentationTests` **7/7** 及批准/拒绝/停止三条 UI 流程 **3/3** 均通过，0 failures。新增断言覆盖卡片与当前步骤/审批/图像对应、授权消费后清空、跨会话隔离，以及 UI 中审批按钮仅有一份、位于消息流之外、卡片在输入框上方且按钮右对齐。日志见 [`composer-approval-card.log`](../.build/validation/composer-approval-card.log)，结果包见 [`composer-approval-card.xcresult`](../.build/validation/composer-approval-card.xcresult)。
+增量编译、`AgentPresentationTests` **7/7** 及批准/拒绝/停止三条 UI 流程 **3/3** 均通过，0 failures。新增断言覆盖卡片与当前步骤/审批/图像对应、授权消费后清空、跨会话隔离，以及 UI 中审批按钮仅有一份、位于消息流之外、卡片在输入框上方且按钮右对齐。日志见 composer-approval-card.log（本地文件 `../.build/validation/composer-approval-card.log`，已忽略），结果包见 composer-approval-card.xcresult（本地文件 `../.build/validation/composer-approval-card.xcresult`，已忽略）。
 
-已实际查看[默认授权卡](../.build/validation/composer-approval-card-shots/5BCA87BE-3F07-492B-A54B-4AB00A93833D.png)、[展开参数](../.build/validation/composer-approval-card-shots/4C71683C-5461-432D-971F-4397A71BEA18.png)、[合成截图预览](../.build/validation/composer-approval-card-shots/3D08FD87-1ABE-45BF-A76C-5EBE33885934.png)及[拒绝后的消息流](../.build/validation/composer-approval-card-shots/2CAF2CDA-2049-43C2-AE86-F8ACE48441F9.png)。验证使用现有 iOS 27 竖屏模拟器、内存演示数据，不调用真实模型或设备；未重跑全部单元测试。既有 `SafetyTests.swift` 并发警告仍在，`git diff --check` 通过。
+已实际查看默认授权卡（本地验证附件，已忽略）、展开参数（本地验证附件，已忽略）、合成截图预览（本地验证附件，已忽略）及拒绝后的消息流（本地验证附件，已忽略）。验证使用现有 iOS 27 竖屏模拟器、内存演示数据，不调用真实模型或设备；未重跑全部单元测试。既有 `SafetyTests.swift` 并发警告仍在，`git diff --check` 通过。
 
 ## 后续调整：统一工具消息样式
 
 所有工具状态共用前置工具图标、普通正文标题和末尾状态标签；移除成功勾选、标题加粗/蓝色强调、卡片底色与边框。参数、截图、结果展开及单次审批行为保留。
 
-增量编译及现有批准→结果→历史、拒绝结束两条 UI 用例 **2/2 通过**（0 failures），日志见 [`plain-tool-rows.log`](../.build/validation/plain-tool-rows.log)，结果包见 [`plain-tool-rows.xcresult`](../.build/validation/plain-tool-rows.xcresult)。实际查看了[成功结果](../.build/validation/plain-tool-rows-shots/C6BFF77A-9B4C-4904-9A44-B73C879D27B7.png)、[待批准](../.build/validation/plain-tool-rows-shots/0247BF39-9C06-4857-9401-E40F797843C3.png)、[拒绝状态](../.build/validation/plain-tool-rows-shots/F4D15CF7-2C25-485D-A1FC-B383A49C3627.png)截图，确认名称使用普通正文颜色、各状态保留工具图标、没有卡片底色/边框。失败与拒绝/取消使用同一视图及标题组件，未调用真实模型制造失败场景。本次没有重跑全部单元测试；`git diff --check` 通过。
+增量编译及现有批准→结果→历史、拒绝结束两条 UI 用例 **2/2 通过**（0 failures），日志见 plain-tool-rows.log（本地文件 `../.build/validation/plain-tool-rows.log`，已忽略），结果包见 plain-tool-rows.xcresult（本地文件 `../.build/validation/plain-tool-rows.xcresult`，已忽略）。实际查看了成功结果（本地验证附件，已忽略）、待批准（本地验证附件，已忽略）、拒绝状态（本地验证附件，已忽略）截图，确认名称使用普通正文颜色、各状态保留工具图标、没有卡片底色/边框。失败与拒绝/取消使用同一视图及标题组件，未调用真实模型制造失败场景。本次没有重跑全部单元测试；`git diff --check` 通过。
 
 ## 后续调整：直接新建真实会话与 Return 发送
 
 首页及工具栏的新建入口直接创建真实模型会话，已删除模式选择面板及首页演示提示；已有演示历史保留。输入框 Return 与发送按钮共用校验，空白、超长、运行/停止处理中不发送；发送成功清空输入。多行编辑采用 `UITextViewDelegate` 处理 Return，保留自动换行和最多五行显示。
 
-- 最终增量编译与两条新增 UI 测试 **2/2 通过**：两个新建入口均进入真实模型；空白 Return 不启动、非空 Return 发送且消息仅出现一次、输入清空。日志：[`live-new-keyboard-send-verified.log`](../.build/validation/live-new-keyboard-send-verified.log)，结果包：[`live-new-keyboard-send-verified.xcresult`](../.build/validation/live-new-keyboard-send-verified.xcresult)。
-- 原有五条 UI 流程均在同一版应用代码下通过，见 [`live-new-keyboard-send-fixed.log`](../.build/validation/live-new-keyboard-send-fixed.log)；该轮结果包还包含键盘用例的一次定位失败：把导航标题和用户消息一起计数。随后限定消息区域重新验证通过，未移除消息数量断言。
+- 最终增量编译与两条新增 UI 测试 **2/2 通过**：两个新建入口均进入真实模型；空白 Return 不启动、非空 Return 发送且消息仅出现一次、输入清空。日志：live-new-keyboard-send-verified.log（本地文件 `../.build/validation/live-new-keyboard-send-verified.log`，已忽略），结果包：live-new-keyboard-send-verified.xcresult（本地文件 `../.build/validation/live-new-keyboard-send-verified.xcresult`，已忽略）。
+- 原有五条 UI 流程均在同一版应用代码下通过，见 live-new-keyboard-send-fixed.log（本地文件 `../.build/validation/live-new-keyboard-send-fixed.log`，已忽略）；该轮结果包还包含键盘用例的一次定位失败：把导航标题和用户消息一起计数。随后限定消息区域重新验证通过，未移除消息数量断言。
 - 首轮测试发现 SwiftUI 多行 `TextField` 的 Return 仍插入换行，因此改用原生编辑器处理提交。没有将仅编译通过视为键盘功能通过。
-- 已导出并实际查看[新建真实会话](../.build/validation/live-new-keyboard-send-shots/ADF097BF-BEF7-4580-A029-AC6ED0768785.png)和 [Return 发送结果](../.build/validation/live-new-keyboard-send-shots/FFC7073D-AD79-455E-93BB-011E74099BE2.png)。后者来自测试专用内存演示历史，不是正式新建入口。
+- 已导出并实际查看新建真实会话（本地验证附件，已忽略）和 Return 发送结果（本地验证附件，已忽略）。后者来自测试专用内存演示历史，不是正式新建入口。
 - 未调用真实模型、读取真实配对凭据或连接实体设备；未重跑全部单元测试。构建仍有既有 `SafetyTests.swift` Swift 6 并发警告及 AppIntents 元数据跳过提示。`git diff --check` 通过。
 
 ## 后续调整：会话直接发送
 
 按用户要求移除会话页“发送到模型服务”确认弹窗。点击发送直接提交本轮请求；设备输入的逐次审批仍保留。底层 `cloudConsent` 参数由显式发送操作传入，未授权的程序调用仍被阻挡。
 
-本次增量编译及现有 `testConversationListChatApprovalAndResult` UI 用例通过（1/1，0 failures），覆盖离线发送、工具批准、结果与历史重开。日志见 [`chat-direct-send.log`](../.build/validation/chat-direct-send.log)，结果包见 [`chat-direct-send.xcresult`](../.build/validation/chat-direct-send.xcresult)。未调用真实模型服务，未重跑全部单元测试。下方完整测试及截图为此前 AgentUI 验证记录。
+本次增量编译及现有 `testConversationListChatApprovalAndResult` UI 用例通过（1/1，0 failures），覆盖离线发送、工具批准、结果与历史重开。日志见 chat-direct-send.log（本地文件 `../.build/validation/chat-direct-send.log`，已忽略），结果包见 chat-direct-send.xcresult（本地文件 `../.build/validation/chat-direct-send.xcresult`，已忽略）。未调用真实模型服务，未重跑全部单元测试。下方完整测试及截图为此前 AgentUI 验证记录。
 
 ## 此前完整验证结果
 
@@ -80,7 +80,7 @@
 | 配置范围 | 实际产物 Bundle ID 正确，无 UIBackgroundModes；未加入 Manifold SPM/Runtime 依赖 |
 | Diff | `git diff --check` 通过；改动限于 `ios-app/`；固件、宿主机测试/工具及 Vendor/SwiftAgentKit 无 diff |
 
-最终完整测试日志：[`agentui-verified.log`](../.build/validation/agentui-verified.log)。结果包：[`agentui-verified.xcresult`](../.build/validation/agentui-verified.xcresult)。40 项单元测试约 8.2 秒，5 条 UI 用例约 90.9 秒；日志终止为 `** TEST SUCCEEDED **`，进程退出码 0。构建日志保留 AppIntents 元数据提取跳过提示，本 App 未依赖 AppIntents；不将增量构建视为全项目零警告证明。
+最终完整测试日志：agentui-verified.log（本地文件 `../.build/validation/agentui-verified.log`，已忽略）。结果包：agentui-verified.xcresult（本地文件 `../.build/validation/agentui-verified.xcresult`，已忽略）。40 项单元测试约 8.2 秒，5 条 UI 用例约 90.9 秒；日志终止为 `** TEST SUCCEEDED **`，进程退出码 0。构建日志保留 AppIntents 元数据提取跳过提示，本 App 未依赖 AppIntents；不将增量构建视为全项目零警告证明。
 
 ### 关键验证内容
 
@@ -111,7 +111,7 @@ UI 用例为：会话列表→会话→查看参数和合成截图→批准→�
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   xcodebuild -project PhoneAgent.xcodeproj -scheme PhoneAgent \
   -configuration Debug \
-  -destination 'platform=iOS Simulator,id=CBC53192-188D-4FC1-818C-36EC433418FF' \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro,OS=27.0' \
   -derivedDataPath .build/SimulatorRunBuild \
   -clonedSourcePackagesDirPath .build/SourcePackages \
   -scmProvider system -disablePackageRepositoryCache -skipPackageUpdates \
