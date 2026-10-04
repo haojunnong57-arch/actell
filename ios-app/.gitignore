@@ -9,3 +9,6 @@ secrets*
 *.key
 __pycache__/
 .venv/
+
+# This is source code, not a secret file. Keep fresh worktrees buildable.
+!PhoneAgent/Security/SecretStore.swift

@@ -51,13 +51,16 @@ def generate():
             requirement=dict(kind="exactVersion", version="2.4.1")),
     ]
     targets, groups, products = [], [], []
-    for name, extension, product_type in [("PhoneAgent", "app", "application"), ("PhoneAgentTests", "xctest", "bundle.unit-test"), ("PhoneAgentUITests", "xctest", "bundle.ui-testing")]:
+    for name, extension, product_type in [("PhoneAgent", "app", "application"), ("PhoneAgentTests", "xctest", "bundle.unit-test"), ("PhoneAgentUITests", "xctest", "bundle.ui-testing"), ("PhoneAgentLiveActivity", "appex", "app-extension")]:
         sources, children = [], []
-        for path in sorted((ROOT / name).rglob("*.swift")):
+        paths = list((ROOT / name).rglob("*.swift"))
+        if name in ("PhoneAgent", "PhoneAgentLiveActivity"):
+            paths += list((ROOT / "Shared").rglob("*.swift"))
+        for path in sorted(paths):
             relative = path.relative_to(ROOT).as_posix()
-            ref = add(relative, "PBXFileReference", lastKnownFileType="sourcecode.swift", path=relative, sourceTree="SOURCE_ROOT")
+            ref = add((name if relative.startswith("Shared/") else "") + relative, "PBXFileReference", lastKnownFileType="sourcecode.swift", path=relative, sourceTree="SOURCE_ROOT")
             children.append(ref)
-            sources.append(add(relative + "Build", "PBXBuildFile", fileRef=ref))
+            sources.append(add((name if relative.startswith("Shared/") else "") + relative + "Build", "PBXBuildFile", fileRef=ref))
         resources = []
         if name == "PhoneAgent":
             ref = add("PrivacyManifest", "PBXFileReference", lastKnownFileType="text.xml", path="PhoneAgent/PrivacyInfo.xcprivacy", sourceTree="SOURCE_ROOT")
@@ -72,7 +75,7 @@ def generate():
                       includeInIndex=0, path=name + "." + extension, sourceTree="BUILT_PRODUCTS_DIR")
         products.append(product)
         package_products, frameworks = [], []
-        linked_products = [] if name == "PhoneAgentUITests" else [("SwiftAgentKit", packages[0]), ("LLMProviderKit", packages[1]), ("LLMProviderKitOpenAI", packages[1])]
+        linked_products = [] if name in ("PhoneAgentUITests", "PhoneAgentLiveActivity") else [("SwiftAgentKit", packages[0]), ("LLMProviderKit", packages[1]), ("LLMProviderKitOpenAI", packages[1])]
         for product_name, package in linked_products:
             dependency = add(name + product_name, "XCSwiftPackageProductDependency", package=package, productName=product_name)
             package_products.append(dependency)
@@ -96,6 +99,16 @@ def generate():
                             INFOPLIST_KEY_UIApplicationSceneManifest_Generation="YES",
                             INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents="YES",
                             INFOPLIST_KEY_UILaunchScreen_Generation="YES")
+            widget = "PhoneAgentLiveActivity"
+            embedded = add("EmbedLiveActivityBuild", "PBXBuildFile", fileRef=uid(widget + "Product"), settings=dict(ATTRIBUTES=["RemoveHeadersOnCopy"]))
+            phases.append(add("EmbedLiveActivity", "PBXCopyFilesBuildPhase", buildActionMask=2147483647, dstPath="", dstSubfolderSpec=13,
+                              files=[embedded], name="Embed App Extensions", runOnlyForDeploymentPostprocessing=0))
+            proxy = add("LiveActivityProxy", "PBXContainerItemProxy", containerPortal=uid("Project"), proxyType=1, remoteGlobalIDString=uid(widget + "Target"), remoteInfo=widget)
+            dependencies.append(add("LiveActivityDependency", "PBXTargetDependency", target=uid(widget + "Target"), targetProxy=proxy))
+        elif name == "PhoneAgentLiveActivity":
+            settings.update(PRODUCT_BUNDLE_IDENTIFIER="com.ja1chen.PhoneAgent.LiveActivity", INFOPLIST_FILE="PhoneAgentLiveActivity/Info.plist",
+                            INFOPLIST_KEY_CFBundleDisplayName="Phone Agent Status", APPLICATION_EXTENSION_API_ONLY="YES", SKIP_INSTALL="YES",
+                            LD_RUNPATH_SEARCH_PATHS=["$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks"])
         else:
             if name == "PhoneAgentUITests":
                 settings.update(TEST_TARGET_NAME="PhoneAgent")

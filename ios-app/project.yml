@@ -31,6 +31,7 @@ targets:
     platform: iOS
     sources:
       - PhoneAgent
+      - Shared
       - path: Licenses
         type: folder
         buildPhase: resources
@@ -39,6 +40,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.ja1chen.PhoneAgent
         INFOPLIST_FILE: PhoneAgent/Info.plist
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: PhoneAgent/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Phone Agent
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Connect to your explicitly paired development bridge while this app is open.
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
@@ -46,6 +48,8 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         TARGETED_DEVICE_FAMILY: '1,2'
     dependencies:
+      - target: PhoneAgentLiveActivity
+        embed: true
       - package: SwiftAgentKit
         product: SwiftAgentKit
       - package: LLMProviderKit
@@ -54,6 +58,17 @@ targets:
         product: LLMProviderKitOpenAI
       - package: MarkdownUI
         product: MarkdownUI
+  PhoneAgentLiveActivity:
+    type: app-extension
+    platform: iOS
+    sources: [PhoneAgentLiveActivity, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ja1chen.PhoneAgent.LiveActivity
+        INFOPLIST_FILE: PhoneAgentLiveActivity/Info.plist
+        INFOPLIST_KEY_CFBundleDisplayName: Phone Agent Status
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
   PhoneAgentTests:
     type: bundle.unit-test
     platform: iOS

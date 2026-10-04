@@ -26,6 +26,10 @@ struct ConversationView: View {
                         Spacer()
                         Text(session.phase.label).foregroundStyle(session.phase == .awaitingApproval ? .orange : .secondary)
                     }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20).padding(.vertical, 10)
+                    if let navigation = presentation.activityNavigation {
+                        Text(navigation.notice).font(.caption).foregroundStyle(.secondary)
+                            .padding(.horizontal, 20).padding(.bottom, 8).accessibilityIdentifier("activityNavigationNotice")
+                    }
                     Divider()
                     ScrollViewReader { proxy in
                         ScrollView {
@@ -43,7 +47,13 @@ struct ConversationView: View {
                         .simultaneousGesture(DragGesture().onChanged { _ in followLatest = false })
                         .onChange(of: session.messages) { _, _ in if followLatest { proxy.scrollTo("latest", anchor: .bottom) } }
                         .onChange(of: presentation.approvalID) { _, _ in if followLatest { proxy.scrollTo("latest", anchor: .bottom) } }
-                        .onAppear { proxy.scrollTo("latest", anchor: .bottom) }
+                        .onAppear { if presentation.activityNavigation == nil { proxy.scrollTo("latest", anchor: .bottom) } }
+                        .task(id: presentation.activityNavigation?.id) {
+                            guard let navigation = presentation.activityNavigation, let target = navigation.messageID else { return }
+                            followLatest = false
+                            await Task.yield()
+                            proxy.scrollTo(target, anchor: .center)
+                        }
                         .overlay(alignment: .bottomTrailing) {
                             if !followLatest {
                                 Button { followLatest = true; withAnimation { proxy.scrollTo("latest", anchor: .bottom) } } label: { Image(systemName: "arrow.down").padding(12).background(.regularMaterial, in: Circle()) }

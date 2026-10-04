@@ -118,7 +118,9 @@ actor ActionCoordinator {
             let deviceContext = try await bridge.approvalContext(imageID: frame.id)
             try checkActive()
             pendingCallID = callID
-            guard await approve(Approval(tool: name, detail: detail, imageID: frame.id, callID: callID)) else { throw AppError.stopped }
+            guard await approve(Approval(tool: name, detail: detail, imageID: frame.id, callID: callID,
+                                         parametersDigest: try ApprovalRecordStore.digest(tool: name, parameters: p),
+                                         expiresAt: min(deadline, frame.capturedAt.addingTimeInterval(limits.maxScreenshotAge)))) else { throw AppError.stopped }
             try checkActive(); _ = try currentImage(frame.id)
             let currentContext = try await bridge.approvalContext(imageID: frame.id)
             guard currentContext == deviceContext else { throw AppError.invalid("设备会话已变化；旧审批失效，请重新获取截图") }

@@ -17,7 +17,8 @@ import SwiftUI
                ProcessInfo.processInfo.arguments.contains("--ui-test-demo-history") {
                 sessions.create(mode: .demo)
             }
-            return AgentViewModel(sessions: sessions, loadPersistentState: false)
+            return AgentViewModel(sessions: sessions, loadPersistentState: false,
+                                  liveActivitiesEnabled: ProcessInfo.processInfo.arguments.contains("--ui-test-live-activity"))
         }
         #endif
         return AgentViewModel()
