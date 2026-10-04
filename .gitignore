@@ -41,3 +41,15 @@ firmware-device/build/
 /ios-app/docs/xcode-validation/
 /ios-app/docs/background-runs/validation.txt
 /ios-app/docs/siri-validation/*.json
+
+# Isolated NCM/CoreDevice experiment; diagnostic bytes and build outputs stay local.
+/ncm-dev/firmware/managed_components/
+/ncm-dev/firmware/sdkconfig*
+!/ncm-dev/firmware/sdkconfig.defaults
+/ncm-dev/firmware/build/
+/ncm-dev/PhoneAgentNCM/.build/
+/ncm-dev/PhoneAgentNCM/.swiftpm/
+/ncm-dev/**/pairing*.plist
+/ncm-dev/**/identity*.plist
+/ncm-dev/**/screen*.png
+/ncm-dev/**/screen*.hevc
