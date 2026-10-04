@@ -1,3 +1,5 @@
+> 后续主线集成已保留通用 BGContinuedProcessing 能力，并与 SCK 共用一个生命周期协调器；当前范围见 [集成记录](../integration/INTEGRATION.md)。本文保留该阶段的设计与验证历史。
+
 # 有限后台执行与已有 worktree 复用 · 第二阶段
 
 首阶段 `18fac1158b35951aa531cdf1b214087f93b4e990` 保留前台限制的原因是**尚未接入后台执行资格**，不是发现 ScreenCaptureKit 禁止该用途，也不是缺少用户对代码修改的授权。本阶段在同一 `feature/ios27-usb-device-capture` worktree 补齐衔接。没有烧录、签名、安装真机 App、读取或生成密钥、改变其它 worktree，或上传真实屏幕。

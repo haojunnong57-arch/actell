@@ -1,4 +1,4 @@
-> **独立 USB Device 实验分支**：本分支从 `b372438` 新增 iOS 27 ScreenCaptureKit + 无无线 NCM/HID 路径，源码位于 `ios-app/` 和 `firmware-device/`。实际编译与测试、未验证真机项见 [USB Device 验证记录](docs/usb-device/VALIDATION.md)，架构见 [设计说明](docs/usb-device/ARCHITECTURE.md)。下文原 Host 方案内容保留作历史基线。本分支尚未烧录或成功控制 iPhone。
+> **主线集成版（2026-10-04）**：保留 ESP Host 工程与已有板级实测记录，整合 iOS 27 ScreenCaptureKit、无无线 USB Device NCM/HID、Siri 草稿入口、Live Activities 及统一有限后台生命周期。新 USB Device 路线尚未完成真机联调。最新构建、测试、分支和恢复说明以 [集成记录](docs/integration/INTEGRATION.md) 为准；各历史阶段文档保留原有时间与验证范围。
 
 # ESP32 控制 iPhone：源码与方案检查点
 
@@ -9,6 +9,7 @@
 ```text
 with-esp/
 ├── firmware/                      # ESP-IDF 工程：CMake、components、main
+├── firmware-device/               # 同线 NCM / NCM+HID 独立 USB Device 工程，无无线
 ├── ios-app/                       # SwiftUI 源码、Xcode 工程、XCTest、协议文档
 ├── tests/                         # 固件宿主机测试、模拟 USB 对端、合成数据
 ├── tools/                         # 原固件构建/测试脚本与导入校验工具
@@ -34,10 +35,10 @@ with-esp/
 | 部分 | 源码包含 | 验证状态与缺口 |
 | --- | --- | --- |
 | ESP32 固件 | ESP-IDF/C、USB Host/mux、已有配对身份下的 TLS/lockdown、CDTunnel、lwIP、RSD/RemoteXPC、截图与 Home 请求路径 | 云端分层测试及本地 S3 编译通过；2026-10-04 实体 N16R8 的原生 USB / COM 烧录、16 MB Flash 检测、8 MB PSRAM 初始化与基础自测通过。COM 使用 115200，高速传输仍有错误。没有真实 iPhone/S3 联通；首次配对、触控媒体流启停、固件 App 通道及负载下的内存/栈峰值仍待完成 |
-| iOS App | SwiftUI、SwiftAgentKit、视觉模型适配、逐动作确认/停止、Keychain、实验 TLS-PSK 桥接协议，以及 Xcode 工程和只读状态 PiP 原型 | 修复依赖的 iOS 路径 API 后，完整无签名 Simulator App 与 18 项 XCTest 编译通过；12 项 Python 协议测试通过；XCTest 执行、界面和真机验证未运行；未启用跨 App PiP 后台能力 |
-| 两端联调 | 拟由 S3 经 usbmux 连接 App 的 NWListener，独立于 CoreDevice 通道 | 固件尚无 App 通道，协议约定不等于已连接；模型 API 与硬件端到端尚未验证 |
+| iOS App | SwiftUI、SwiftAgentKit、视觉模型适配、逐动作确认/停止、Keychain、实验 TLS-PSK 桥接协议，以及 Xcode 工程和只读状态 PiP 原型 | 集成版的无签名 iPhoneOS 27 构建、单元及 UI 测试见最新集成记录；真机系统授权、Siri 语音入口、后台执行时间和 USB 闭环未验证；未启用 PiP 保活 |
+| 两端联调 | 原 Host 路径仍拟经 usbmux；新 Device 路径为 iPhone USB Host → S3 NCM+HID，App 本地 TCP 收发认证命令及分阶段 ACK | Device 固件可编译，有协议及合成端点测试；实际枚举、输入映射、系统授权、网络共存与模型端到端尚未验证 |
 
-**App 离开前台即停止，不能宣称同一台 iPhone 跨 App 持续自动化。** 独立的 Mac 历史基线曾在 iPhone 15 Pro / iOS 27.0、Xcode 27 DDI、USB 进程内 userspace RSD、无 WDA 的条件下完成截图、触控和 Home，文字输入字符错误；这不代表 ESP32 已成功。见[原始基线记录](https://chatgpt.com/space/page_6abf8257931881918f961de7bba04aeb)。
+**后台执行有边界：SCK / USB 需本次用户启用并持续满足采集、连接与时限检查；普通模型任务需系统实际授予有限片段。TLS 和演示设备工具保持前台限制。尚未证明同机跨 App 自动化闭环。** 独立的 Mac 历史基线曾在 iPhone 15 Pro / iOS 27.0、Xcode 27 DDI、USB 进程内 userspace RSD、无 WDA 的条件下完成截图、触控和 Home，文字输入字符错误；这不代表 ESP32 已成功。见[原始基线记录](https://chatgpt.com/space/page_6abf8257931881918f961de7bba04aeb)。
 
 ## ESP32-S3 本地构建与基础实测（2026-10-04）
 
@@ -73,7 +74,7 @@ with-esp/
 
 用户报告焊盘双向电阻与表笔短接基线均为 1.7 Ω、COM 供电时两端各 4.95 V。前者支持低阻通路判断，后者为空载电压；均未定位实物 J4 的短接方式，也未证明对外供电或 iPhone 接法已通过验证。无需再短接焊盘。
 
-下一阶段采用 GPIO19/20/GND 接外部 USB-A 母口、独立受保护 5V 给该口供电的原型方案，板载原生 USB 留空，COM 保留日志。配件尚未组装或联调，USB Host 仍关闭。
+原 Host 分支后续计划采用 GPIO19/20/GND 接外部 USB-A 母口、独立受保护 5V 给该口供电的原型方案，板载原生 USB 留空，COM 保留日志。配件尚未组装或联调，USB Host 仍关闭。此段保留 Host 调试路线；新 Device 路线不新增配件或无线通道，使用现有板原生 USB，接入前仍须核对接口与供电并释放原调试连接。
 
 ## 本地离线校验
 

@@ -1,3 +1,5 @@
+> 后续主线集成已保留通用 BGContinuedProcessing 能力，并与 SCK 共用一个生命周期协调器；当前范围见 [集成记录](../integration/INTEGRATION.md)。本文保留该阶段的设计与验证历史。
+
 # iOS 27 ScreenCaptureKit + ESP32-S3 USB Device 实验分支
 
 本分支实现并编译了新的采集与同线 NCM/HID 路径；尚未烧录或验证 iPhone USB 枚举、屏幕授权或实际控制。原 `firmware/` USB Host 工程保留，新的工程在 `firmware-device/`。没有增加设备、Wi-Fi/BLE 通道、Broadcast Upload Extension、VPN 或静音音频保活。

@@ -1,4 +1,4 @@
-> 本实验分支最低版本改为 **iOS 27**，新增系统全屏采集和 USB Device TCP 连接；主 Bundle ID 不变。见 [架构与限制](../docs/usb-device/ARCHITECTURE.md) 和 [验证记录](../docs/usb-device/VALIDATION.md)。下文 iOS 17 / Host TLS 路径说明是原始基线。Agent 仍然离开前台就停止，采集后台模式不等于后台控制闭环。
+> **主线集成版最低 iOS 27**，Bundle ID 保持 `com.ja1chen.PhoneAgent`。SCK / USB、Siri、Live Activities 和通用有限后台片段共用同一执行实例；批准、输入与恢复边界见 [集成记录](../docs/integration/INTEGRATION.md)。以下历史验证章节按原日期保留。
 
 > **本地工程更新（2026-10-04）**：已接入会话列表、会话页、真实流式回复、工具步骤/参数、单次批准/拒绝/停止及本地历史；执行层保留 SwiftAgentKit，工具展示选择性复用 ManifoldKit MIT 源码，Markdown 使用 MarkdownUI。会话 UI 与工具错误处理基于 `e183d6d` 扩展。实际编译、单元和 UI 验证见 [AGENT-UI-VALIDATION.md](docs/AGENT-UI-VALIDATION.md)，实现与开源复用清单见 [AGENT-UI.md](docs/AGENT-UI.md)。主 Bundle ID 固定 `com.ja1chen.PhoneAgent`，PiP 后台能力仍未启用。
 
@@ -22,7 +22,7 @@
 
 ## 必须明确的边界
 
-1. **同机跨 App 持续执行尚未解决。** 此版 App 离开前台就取消任务和连接。若 agent 和目标界面在同一台 iPhone，切到另一个 App 会中断 agent；没有宣称原生后台持续执行，没有音频 / VPN 保活
+1. **真机跨 App 闭环尚未验证。** 本次启用的 SCK / USB 可在健康采集、认证连接及有限时限内继续；普通模型任务可申请系统有限片段。TLS 和演示设备工具仍限前台；审批必须前台完成，结果未知不重放。没有音频 / VPN 保活
 2. **ESP32 固件 v0.3 尚无这个 App 通道。** 有认证握手、`backend_ready` 和真实截图之前不能当作已连通。已有 Mac 上的截图 / 触控成功不等于本 App + ESP32 成功
 3. **模型/API 兼容性未实测。** 仅支持 Chat Completions 形状和原生 function calls；不是 Responses API。模型须支持图片和工具调用；不兼容参数会明确报错，不能冒充成功
 4. **计费上限不是金额硬上限。** 20,000 tokens 是服务实际报告后的停机门槛，当前请求可能已产生费用，缺失 usage 时无法完整统计。还有请求次数、输出 tokens 和运行时间上限
@@ -31,12 +31,12 @@
 
 ## 打开工程与构建
 
-目标为 iOS 17+。SwiftAgentKit 的 package manifest 要求 Swift tools 6.2+；本机使用 Xcode 27 / Swift 6.4 完成编译。App 自身使用 Swift 5 language mode + complete concurrency checking。SwiftAgentKit 使用仓库内兼容快照，远程依赖已解析并锁定。
+目标为 iOS 27+。SwiftAgentKit 的 package manifest 要求 Swift tools 6.2+；本机使用 Xcode 27 / Swift 6.4 完成编译。App 自身使用 Swift 5 language mode + complete concurrency checking。SwiftAgentKit 使用仓库内兼容快照，远程依赖已解析并锁定。
 
 1. 用 Xcode 打开 `PhoneAgent.xcodeproj`，选择共享 scheme `PhoneAgent` 和 iOS Simulator。主 Bundle ID 固定为 `com.ja1chen.PhoneAgent`，不要改成随机 ID。
 2. 等待 Xcode 解析依赖，再按 `⌘R`。若 Xcode 仍显示旧的远程 SwiftAgentKit 报错路径，关闭并重新打开工程，确认 SwiftAgentKit 指向 `Vendor/SwiftAgentKit`。本次未绕过宏验证或修改全局信任配置。
 3. 模拟器不需要选择 Team。真机签名、Team、App ID 注册和设备安装属于单独步骤，本次没有执行。
-4. PiP 状态预览默认关闭，在设置 → 控制调试中主动开启。当前构建未增加后台模式，跨 App PiP 按钮禁用；不影响前台原型的展示。
+4. PiP 状态预览默认关闭，在设置 → 控制调试中主动开启。PiP 不作为保活方式，跨 App PiP 按钮禁用；不影响前台原型的展示。
 5. `project.yml` 保留为 XcodeGen 来源；也可以用 Python 标准库脚本重新生成同一工程，新增 Swift 源文件后运行：
 
 ```sh
