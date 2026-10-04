@@ -1,6 +1,6 @@
-# NCM 开发者服务路线：独立诊断实现
+# NCM 开发者服务路线：独立诊断与真实协议后端
 
-这是一条独立的 **USB 仅 NCM → iPhone 开发者服务** 路线。目前可构建并离线验证的是 NCM-only 固件、手机诊断 App、协议探针和 CoreDevice 接口；**尚未证明 iPhone 接受此 NCM 接口的开发者连接，尚未实现独立截图和输入**。
+这是一条独立的 **USB 仅 NCM → iPhone 开发者服务** 路线。目前可构建并离线验证的是 NCM-only 固件、手机诊断 App、浏览器探针，以及实现 PairVerify/TLS-PSK/RSD/截图/媒体与触控调用的 Rust 后端库；**尚未证明 NCM 准入，尚未把后端通过 S3 relay/Swift ABI 接到 App，未取得真实截图或输入成功证据**。
 
 - worktree：`/Users/developer/Developer/AI/ios-use/ncm-coredevice`
 - branch：`feature/ncm-coredevice`
@@ -18,6 +18,8 @@ USB Host/Device 是 USB 总线角色，TCP client/server 是网络角色；iPhon
 | `ncm-dev/firmware` | 独立 S3 NCM-only 工程；IPv4 `.1/24`、IPv6 link-local、IGMP/MLD；TCP 28767 的只读诊断服务 | 已交叉编译，未刷写；IPv6/NCM 的 DAD、广播和吞吐未实测 |
 | `ncm-dev/core/nd_discovery.c` | 有界 DNS-SD PTR/SRV/A/AAAA、压缩指针检查、分包聚合、TTL/goodbye、重复端点去重 | mDNS 未认证；不保存 TXT；只接受指定 `.2` 的 A 和同链路 link-local AAAA |
 | `nd_socket.c` / `nd_server.c` | 指定 NCM 出口、3 秒 deadline、USB epoch 撤销、失效候选拒绝、无后台轮询/自动重试 | 没有通用任意目标代理、NAT 或端口扫描 |
+| `nd_http.c` | 同端口本地浏览器入口，GET 无动作，POST 同源/token 门控；一轮发现后立即问候首个 RP 候选 | 只读诊断，免装 App；未在 Safari 真机运行 |
+| `ncm-dev/rust` | 实际 PairVerify → TLS-PSK/CDTunnel → retained RSD → Developer/DDI 检查 → CoreDevice 截图/媒体/HID | iOS 静态库和内存测试；尚未接线至诊断 App，见 [BACKEND.md](BACKEND.md) |
 | `nd_pairing.c` | RemotePairing 明文问候，严格封装/角色/序号/版本检查，解析后清空缓冲 | 只证明问候被接受；没有 Pair Setup、Pair Verify、TLS-PSK |
 | 既有 `bridge_lockdown_probe` | 复用 QueryType 的 XML/bplist 编解码及分块 I/O | 不调用 Pair / StartSession / StartService，不读取任何旧凭据 |
 | `nd_services.c` | 对接既有 RSD 和 CoreDevice PNG streaming；仅接收可信后端提供的认证隧道、动态 IPv6/RSD 端口和 DeveloperMode/DDI 检查结果 | **集成接口**，当前诊断固件没有认证后端/调用路径；触控返回 unsupported，不发送 HID |
@@ -31,6 +33,9 @@ USB Host/Device 是 USB 总线角色，TCP client/server 是网络角色；iPhon
 从本 worktree 执行：
 
 ```sh
+bash tools/test_ncm_rust.sh
+bash tools/build_ncm_rust.sh device
+bash tools/build_ncm_rust.sh simulator
 bash tools/build_ncm_developer.sh
 bash tools/build_ncm_probe_app.sh device
 bash tools/build_ncm_probe_app.sh simulator
@@ -81,3 +86,5 @@ IPv6 范围仅支持同链路 link-local，不把 `.2` 映射成隧道内部地�
 最终运行路径可以不含 Mac，但“无 Mac 初次准备”和“已准备后的无 Mac 运行”要分别验收。DDI 获取授权、来源、版本匹配、TSS 个性化、挂载/重启恢复仍是独立工作；不捆绑 Apple DDI，不使用不明镜像，不调用 Mac 后台服务代做。触控必须有经认证的 DisplayService 会话及媒体收包/drain；可省 HEVC 解码，不能省认证。已有全局 stopAll 行为不能直接用于共享设备，必须核实本会话的安全清理。
 
 复用依据见 [REUSE.md](REUSE.md)，需要另外授权的下一实验见 [NEXT_EXPERIMENT.md](NEXT_EXPERIMENT.md)。
+
+浏览器最小实验现可免装新 App；但当前 PA3 固件缺少此入口，依然需要备用板或授权维护刷写。见 [NEXT_EXPERIMENT.md](NEXT_EXPERIMENT.md)。Rust 库的真实代码、接线缺口、媒体资源和清理限制见 [BACKEND.md](BACKEND.md)。

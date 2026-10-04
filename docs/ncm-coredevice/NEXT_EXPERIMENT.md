@@ -1,27 +1,27 @@
-# 最小下一实验：只验证 NCM 开发者入口
+# 待授权的唯一最小实验：S3 来源的只读 NCM 服务准入
 
-**本文件是待授权的实验说明，不表示已运行或可自动执行。** 当前设备空闲状态未知，没有打开主线 COM/USB、查看手机屏幕或读取配对密钥。
+**此实验未执行。** 设备空闲状态未知；没有打开现有 COM/USB、改网络/VPN、读取密钥、抓屏或发送输入。Rust 真实协议库已可离线构建，详细状态见 [BACKEND](BACKEND.md)；本实验只解除更早的设备准入未知，不启动该库的认证/媒体能力。
 
-交付物是本 worktree `.build/ncm-developer/phoneagent_ncm_developer.bin`（SHA 见 VALIDATION）和无签名 `NCMProbe.app`。当前 S3 上 PA3+HID 固件没有 ND1 诊断命令，不能直接借该固件取得下面结果。运行前需要用户明确同意：
+## 具体动作和影响
 
-1. 确认主线/其他任务停止使用设备并选定维护窗口；必要时核对当前固件备份/恢复办法，不以这里的构建产物假称备份。
-2. 把独立 NCM-only 诊断固件刷到指定 S3。**这会替换其现有固件、临时失去 PA3/HID 功能**；本次没有进行此步骤。刷写端口、供电接法和回滚镜像先核实，不从 `idf.py` 默认 flash 提示猜测设备。
-3. 用户授权使用指定 Team/Bundle ID 给 NCMProbe 签名并装机。**这会增加一个 App，并可能占用 Personal Team 安装槽位**；不能覆盖 app-only、PhoneAgent 或 Device Hub/StikPair 来腾空间。若满额，先请用户选择处理方式。现有构建明确 `CODE_SIGNING_ALLOWED=NO`。
-4. 探测数据只有固定 QueryType、协议问候与 mDNS 查询，目标仅当前 NCM `.2` 及同链路发现候选；不会发送触控、抓屏、上传数据、取出旧配对记录或生成新持久身份。手机可能出现本地网络权限请求，由用户自行确认；不变更 Trust/VPN。
+首选备用 ESP32-S3；否则需要用户明确批准一个维护窗口，确认其他任务已释放当前板和手机，核实当前 PA3 固件的实际回滚镜像/刷写端口/供电接法后，临时刷入本 worktree 的 NCM-only 诊断固件。**用当前板会覆盖 PA3/HID 固件，实验期间失去其功能**。本工程的 build 脚本不 flash；构建日志中的 flash 提示不是执行授权。
 
-建议执行顺序：
+无需另装 App：手机 Safari 手动打开 `http://192.168.7.1:28767/`。GET 页面没有探测；页面没有外部资源、脚本、自动刷新或上传。逐次点击 Status、IPv4 discovery + greeting、IPv6 discovery + greeting；必要时再点 Lockdown QueryType。浏览器到 `.1` 的路由若被现有配置/VPN阻止，先报告这一层，不自动改设置；可另行选择已构建但未签名安装的 NCMProbe 作为诊断客户端，**它不是本次实验必需项**。
 
-| 步骤 | 观察 | 可得结论 / 最小下一动作 |
+每个 discovery 按钮执行一轮 3 秒 mDNS，立即对第一条当轮有效 RemotePairing 候选做 TCP/RPPairing 问候，之后关闭；没有候选就不猜端口。IPv4/IPv6 独立测试。Lockdown 仅 `.2:62078` 的 QueryType。所有设备方向连接从 S3 的 NCM 接口发起；手机内普通 App 或 Mac Wi-Fi 上的成功不替代这一证据。
+
+不需要新 Pair/Trust/PIN；不提取旧身份，不创建持久凭据，不开屏幕/音频媒体，不发触控。如果手机意外提示 Trust/PIN/新配对，**停在提示处另行说明并取得授权**。Bonjour 查询可能让系统产生本地诊断日志，页面只显示服务类型、协议版本、连接/错误状态，不显示设备名、TXT、UDID 或密钥。HTTP 明文只在固定 `.1↔.2` USB 子网传送这些诊断元数据；页面与 POST 均 no-store、无 CORS，POST 检查 origin/host 和每次 USB 连接的临时 token。token 不是配对身份。不给公网主机、模型或日志输出屏幕内容。
+
+## 只记录以下结果
+
+| 层 | 观察值 | 结论及停止点 |
 |---|---|---|
-| 用户检查 USB 网络配置仍为 `.2/24`，网关/DNS 空 | 不由工具改设置 | 配置偏差先由用户处理；不关闭现有 VPN |
-| STATUS | `ncm/diagnostic-only` | 仅证明 PhoneAgentNCM→S3 通道；失败先查具体 interface 绑定，不能前进到服务层 |
-| DISCOVER4 / DISCOVER6 | 分别记录候选类型/族，或者 no-candidates/timeout/io | 只说明这一轮发现结果。IPv6 失败不能推出 IPv4 必败；无广播不能推出所有服务均不可达 |
-| LOCKDOWN | `tcpConnected` 和 `lockdown-querytype/result` | 拒绝/EPERM/超时与正确服务回复分开；正确 Type 仍未信任 |
-| 5 秒内 PROBE 当轮 RemotePairing 候选 | `tcpConnected`、`greeting/result`、`wireVersion` | 若 TCP 可达而问候重置，失败卡在认证之前；系统明确原因需另获同意采集去标识化日志。不能凭 ECONNRESET 单独断定本机来源策略 |
-| 若问候接受 | 停在这里 | 先选择认证路线与身份归属，再另获 Pair/Trust/PIN 授权。当前没有实现认证后端或 pairable-host 广播，不会自动开始配对 |
+| Safari → S3 | Status `ncm/diagnostic-only` | 仅证明本地页面/命令通道；失败先处理路径，不能当开发服务拒绝 |
+| S3 mDNS IPv4/IPv6 | candidates / no-candidates / io，以及族和服务类型 | 无广播不能断言没有服务；不能用固定 RSD 端口继续试 |
+| S3 → RemotePairing | tcpConnected、greeting result、wireVersion | TCP 成功而问候被断开：卡在认证前。单凭 ECONNRESET 不能断定“本机来源”策略；系统原因需另获日志采集授权 |
+| S3 → Lockdown（可选） | tcpConnected、QueryType result | Type 正确也不代表已信任、可开启 CoreDeviceProxy |
+| 任一问候被接受 | 立即结束本实验 | 记录“未认证”；随后再决定已信任 Lockdown 或 RP 身份方案和必要授权，不能宣称截图/输入成功 |
 
-若没有 RemotePairing 广播但网络正常，下一候选是经明确授权实现 S3 上的 `_remotepairing-pairable-host._tcp` 监听/广播及受保护的 PhoneAgent 协议通道，由手机主动初配；不是猜端口或换成 QUIC。授权时需说明持久信任/凭据位置、哪些端点收发、PIN 仅在受控 UI 中展示，不能把现存 app-only 身份直接导出。
+**能否不影响主线就只读发现？** 现有 PA3 固件没有 ND1/HTTP 探测入口；本次不改它，因此不能让当前板原样发出这个实验。备用板能保留原板固件，但占用同一手机端口时仍需协调。当前板必须临时换固件；“数据操作只读”不等于“刷写无影响”。不从主线抢串口，不让 Mac 后台代做 S3 探测，不关闭 VPN，也不引入 LocalDevVPN。
 
-通过认证后才逐层实现并验证：TCP TLS-PSK/CDTunnel（记录协商出的 IPv6、MTU、RSD port，脱敏）→ RSD 动态服务表 → Developer Mode 和匹配 DDI → 单张 PNG 完整校验 → DisplayService 认证媒体会话/drain/安全停止 → 单次可逆输入和前后画面观察。真实截图和输入各需用户明确授权，说明目标与数据流；默认不进入模型、日志、Git 或云端。
-
-Mac 可以作为构建/验证工具；验收最终独立运行时必须断开 Mac 的代理/隧道依赖并单独记录证据。PhoneAgent 后台运行、重启后的 DDI/信任恢复、USB Full Speed 媒体带宽、S3 SRAM/PSRAM/栈峰值也要分别验收。
+如果 NCM 上没有可用服务，下一次候选才是 `_remotepairing-pairable-host._tcp` 反向初配监听/广播。它会改变手机信任并生成长期身份，需要另行授权，不能自动升级本实验。Apple 文档只确认同 Wi-Fi 流程，不能预先保证 NCM 可行。

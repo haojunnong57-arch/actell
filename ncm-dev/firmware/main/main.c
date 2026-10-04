@@ -1,11 +1,15 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "usb.h"
 #include "nd_server.h"
+#include "nd_http.h"
+#include "esp_random.h"
+#include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include <fcntl.h>
 #include <string.h>
+static void rotate(nd_http *http) { uint8_t nonce[16]; esp_fill_random(nonce,sizeof nonce);for(size_t i=0;i<sizeof nonce;i++)snprintf(http->token+2*i,3,"%02x",nonce[i]); }
 static bool alive(void *context) { return nd_usb_online() && nd_usb_epoch()==*(uint32_t *)context; }
 static void serve(void *unused) {
     (void)unused;
@@ -16,12 +20,12 @@ static void serve(void *unused) {
     ESP_ERROR_CHECK(bind(listener,(struct sockaddr *)&address,sizeof address)?ESP_FAIL:ESP_OK);
     ESP_ERROR_CHECK(listen(listener,1)?ESP_FAIL:ESP_OK);
     ESP_ERROR_CHECK(fcntl(listener,F_SETFL,O_NONBLOCK)<0?ESP_FAIL:ESP_OK);
-    static nd_server server; static char output[ND_REPLY_LIMIT];
+    static nd_server server; static nd_http http; static char output[ND_HTTP_BODY_LIMIT]; rotate(&http);
     uint32_t epoch=nd_usb_epoch();
     nd_link link={.local4={192,168,7,1},.peer4={192,168,7,2},.interface_index=nd_network_index(),.alive=alive,.context=&epoch};
     ESP_LOGI("ncm_dev","ND1 diagnostic-only; no credentials, capture, input, HID or radio; idle until command");
     for (;;) {
-        if (nd_usb_epoch()!=epoch) { epoch=nd_usb_epoch(); nd_server_reset(&server); }
+        if (nd_usb_epoch()!=epoch) { epoch=nd_usb_epoch(); nd_server_reset(&server); rotate(&http); }
         if (nd_usb_online()) {
             struct sockaddr_in peer={0}; socklen_t length=sizeof peer;
             int fd=accept(listener,(struct sockaddr *)&peer,&length);
@@ -32,11 +36,14 @@ static void serve(void *unused) {
                 while (n<ND_COMMAND_LIMIT) {
                     uint8_t ch=0; if (bridge_read_exact(&io,&ch,1,deadline)!=BRIDGE_OK) break;
                     if (ch=='\n') { complete=true; break; }
+                    if (ch=='\r') { if(bridge_read_exact(&io,&ch,1,deadline)==BRIDGE_OK && ch=='\n')complete=true; break; }
                     if (ch<32 || ch>126) break;
                     command[n++]=(char)ch;
                 }
                 command[n]=0;
-                if (complete && nd_server_command(&server,&link,command,output,sizeof output)==BRIDGE_OK)
+                if(complete && (strstr(command," HTTP/")!=NULL))
+                    (void)nd_http_serve(&http,&server,&link,&io,command,output,sizeof output,deadline);
+                else if (complete && nd_server_command(&server,&link,command,output,sizeof output)==BRIDGE_OK)
                     (void)bridge_write_exact(&io,(const uint8_t *)output,strlen(output),nd_now(NULL)+1000);
                 nd_socket_close(&socket);
             }

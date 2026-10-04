@@ -97,8 +97,11 @@ extraction rule.
 selectively implements the pinned pymobiledevice3 RemotePairing greeting schema
 under GPL-3.0-or-later. The combined distribution's GPL-3.0-only choice is unchanged.
 The existing bridge_core RSD/PNG operations and their provenance remain intact.
-No Device Hub, idevice, idevice_pair or rPlayHub implementation is vendored in
-this addition; read-only source revisions and file hashes are recorded in
+Device Hub’s pinned, patched idevice source and its PNG validator are now
+vendored in `ncm-dev/rust` under their original MIT terms. Full notices are in
+`ncm-dev/rust/DEVICE_HUB_LICENSE` and `vendor/idevice/LICENSE.txt`; exact hashes
+and local adaptations are in `ncm-dev/rust/SOURCE_MANIFEST.json`. idevice_pair
+and rPlayHub remain reference-only. Original reference hashes are recorded in
 `docs/ncm-coredevice/SOURCES.json`, with reuse boundaries in `REUSE.md`.
 
 The new build uses cJSON from the existing ESP-IDF checkout. cJSON is MIT,

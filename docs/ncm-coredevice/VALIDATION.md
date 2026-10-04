@@ -2,7 +2,7 @@
 
 验证日期：2026-10-04 UTC（本机 Xcode 日志显示 2026-10-05 凌晨）。基线 `80b1c8f99c2e6d35e52bbb37967aa8b0a4b6c7e3`，branch `feature/ncm-coredevice`。
 
-**未连接或操作实体设备。服务准入、真实截图、真实输入均没有本轮成功证据。** 下面的 TCP 对端仅为 `127.0.0.1` 上的合成程序；RSD/PNG 也只用合成 fixture。
+**未连接或操作实体设备。服务准入、真实截图、真实输入均没有本轮成功证据。** 下面的 TCP 对端仅为 `127.0.0.1` 上的合成程序；Rust 使用内存 duplex；RSD/PNG 也只用合成 fixture。
 
 | 层 / 命令 | 本次实际结果 | 不能推出的结论 |
 |---|---|---|
@@ -27,8 +27,8 @@
 产物均在忽略目录 `.build/`，没有提交二进制、屏幕、凭据或原始诊断日志。
 
 - S3 app image：`.build/ncm-developer/phoneagent_ncm_developer.bin`
-  - 大小 **383648 bytes**（`0x5daa0`），1 MiB app 分区剩余约 63%。大小不代表运行时 SRAM/PSRAM 或吞吐裕量。
-  - SHA-256：`ecf1cdd20805e510136b012ec514ec12c41ff23635508f8398ed3e9d6eb57afe`
+  - 大小 **387680 bytes**（`0x5ea60`），1 MiB app 分区剩余约 63%。大小不代表运行时 SRAM/PSRAM 或吞吐裕量。
+  - SHA-256：`87a9944c45518449dbc5347c2d6b1788da4d1fd5837e179dcdb5a801e29e3933`
   - Bootloader / partition table 也已构建；没有执行 flash。未启用 PSRAM，诊断任务栈预留 32 KiB，峰值未实测。
 - iOS Device：`.build/ncm-probe-app/Build/Products/Debug-iphoneos/NCMProbe.app`
   - 无签名 executable SHA-256：`7f7dc1ac710133b9208577cf89108243fd81ac71481529c225d79465eaffd5e4`
@@ -37,13 +37,27 @@
 
 本地重跑入口保留在 `tools/`。本次日志（均忽略）：`.build-ncm-build.log`、`.build-ncm-app-device.log`、`.build-ncm-app-simulator.log`、`.build-ncm-core-tests.log`、`.build-ncm-swift.log`、`.build-ncm-rsd-tests.log`、`.build-ncm-operations-tests.log`。构建日志带编译路径，不用于对外共享。
 
+## 第二轮：真实后端与浏览器诊断
+
+第二轮没有实体设备操作。代码位置 `ncm-dev/rust`，实际调用链及未接线部分见 [BACKEND.md](BACKEND.md)。
+
+| 验证 | 实际结果 | 边界 |
+|---|---|---|
+| `test_ncm_rust.sh` | 新增 13 项测试 + 固定 idevice 的 175 项测试通过 | PairVerify 独立向量/篡改/peer mismatch、TLS record/取消/长度、CDTunnel、RTP/HEVC/RTCP、HID 编码等均离线；不证明设备会接受 |
+| 新 backend 集成测试 | 实际 RPPairing 问候与 verifyManualPairing M1 字节通过内存流，模拟恶意对端截断 M2，确认不再拨号、不 PairSetup、不 fallback | 不是成功认证的端到端真机测试 |
+| `build_ncm_rust.sh device/simulator` | Rust 1.95.0，iOS arm64 和 arm64 Simulator release 静态库构建通过 | 未链接 Swift/C ABI，未签名或装机；库中有真实截图/媒体/触控代码，不等于 App 可操作手机 |
+| `cargo clippy … --all-targets -- -D warnings` | 本 backend 无 lint warning；`cargo fmt` 完成 | 不是安全审计，未覆盖所有第三方资源上限 |
+| 新版 `test_ncm_developer.sh` | C ASan/UBSan、loopback 与浏览器 GET/POST 测试通过；GET 无探测、Host/Origin/token、重复头、禁止 chunked/越权动作均检验 | 不连接手机；尚未在 Safari 实机验证路由和页面 |
+| 新版固件构建 / HTTP static analysis | 固件 387680 bytes，`clang --analyze nd_http.c` 无诊断 | 未 flash，无新硬件行为证据 |
+
+Rust outputs：`.build/ncm-rust/aarch64-apple-ios/release/libphoneagent_ncm_backend.a` 与 `aarch64-apple-ios-sim/release/libphoneagent_ncm_backend.a`。这是普通 Rust staticlib，不是完成 C ABI 的 XCFramework。产物 SHA/测试摘要另见 [BUILD_RESULTS.json](BUILD_RESULTS.json)。离线 Rust 缓存是相邻 app-only 既有 registry 的独立副本；没有写回 app-only 或下载第三方二进制。日志 `.build-ncm-rust-all.log`、`.build-ncm-rust-ios.log`、`.build-ncm-rust-simulator.log`、`.build-ncm-rust-clippy.log`、`.build-ncm-core-second.log`、`.build-ncm-firmware-second.log` 均忽略。
+
 ## 仍缺失的关键实现 / 证据
 
-1. 当前 S3 是原 PA3 固件，设备空闲状态未知；未获得新固件刷写、App 签名安装授权。故没有在该物理 NCM 接口上发现/QueryType/问候的结果。
-2. 没有配对记录加载/生成/持久化、Pair Setup/Verify、TLS-PSK、网络 lockdown session/CoreDeviceProxy 或可用的完整 authenticated tunnel。`nd_authenticated_tunnel` 是可信后端集成接口，参数不是认证实现，更不能从 ND1 JSON 反序列化获得。
-3. RSD/截图 C 代码可编译和 mock 测试，但无认证后端把它接到手机。只暴露既有四类已知服务（screenshot/display/universal HID/Indigo），不宣称完整列举系统所有服务。
-4. 触控接口固定 unsupported。媒体认证、音视频前置协商、RTP drain、会话安全停止、输入后屏幕确认未实现。
-5. PhoneAgent 重协议 + S3 限定转发的分工只完成设计，没有可用 relay；普通 App 自连接在 app-only 的旧证据中曾被明确拒绝，不能绕过此门槛宣称成功。
-6. 独立 DDI 来源/授权/匹配/个性化/挂载、拔除 Mac 后长期运行、重启恢复、后台执行、带宽/资源占用均待验证。保留当前 VPN，不依赖 LocalDevVPN。
+1. NCM 上 S3 来源的 mDNS/Lockdown QueryType/RPPairing 问候结果未知；当前 PA3 固件没有该入口。最小实验需备用板或另行授权临时刷写/恢复，不再必须安装新 App。
+2. Rust 已实现已有身份的 PairVerify、TLS-PSK/CDTunnel 和 retained RSD；没有配对身份导入/生成/持久化 UI、新配对流程，未实现网络 Lockdown Session/CoreDeviceProxy 路线，不随意混用两类记录。
+3. S3 双连接 relay 与 Swift↔Rust ABI/生命周期桥接尚未实现；当前 ND1、`nd_services.c` 和 `UnavailableDeveloperServices` 仍是诊断或受限集成接口。此为代码接线缺口，与 NCM 准入未知分别记录。
+4. 实际截图请求、DisplayService 音视频协商/RTP drain/HID Down-Up 已写入 Rust 库，但未对设备执行。视频流兼容性、媒体停止/触点取消确认、输入前后画面效果，以及端到端吞吐/内存上限未验证。jktcp 内部无界队列和 RemoteXPC 聚合资源配额仍需补齐，不能将本轮编译通过视为生产就绪。
+5. DDI 来源/授权/匹配/个性化/挂载、拔除 Mac 后长期运行、重启恢复、后台执行仍缺失。现有 Personalized 镜像 presence 检查不单独证明兼容或服务权限。
 
-已完成的授权范围是独立代码、构建与离线测试。下一次真机实验的数据、目标、替换固件/增加 App 的后果及授权边界见 [NEXT_EXPERIMENT.md](NEXT_EXPERIMENT.md)。
+已完成授权范围内的独立代码、构建与离线测试。下一项真机实验的数据、目标、固件替换后果及无需新配对/App 的边界见 [NEXT_EXPERIMENT.md](NEXT_EXPERIMENT.md)。

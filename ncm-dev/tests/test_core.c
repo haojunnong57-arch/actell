@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later: synthetic peers only. */
 #include "nd_server.h"
 #include "nd_services.h"
+#include "nd_http.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -31,7 +32,7 @@ static void discovery(void) {
     nd_catalog before=c;assert(nd_dns_ingest(&c,packet,length,0)==BRIDGE_OK);assert(!memcmp(&c,&before,sizeof c));
     puts("DNS: split replies, IPv4/IPv6, off-link filter, every truncation, compression cycle, TC, goodbye, TTL, TXT omission passed");
 }
-typedef struct { uint8_t input[20000],output[4096];size_t n,pos,written; } memory;
+typedef struct { uint8_t input[20000],output[16384];size_t n,pos,written; } memory;
 static ptrdiff_t rd(void *ctx,uint8_t *p,size_t n,uint32_t ms){(void)ms;memory *m=ctx;if(n>3)n=3;if(n>m->n-m->pos)n=m->n-m->pos;memcpy(p,m->input+m->pos,n);m->pos+=n;return (ptrdiff_t)n;}
 static ptrdiff_t wr(void *ctx,const uint8_t *p,size_t n,uint32_t ms){(void)ms;memory *m=ctx;if(n>2)n=2;assert(m->written+n<=sizeof m->output);memcpy(m->output+m->written,p,n);m->written+=n;return (ptrdiff_t)n;}
 static uint64_t clk(void *ctx){(void)ctx;return 1;}
@@ -53,7 +54,7 @@ static void greeting(void) {
     puts("Greeting: fragmented I/O, every EOF boundary, malformed/schema/role/duplicate/size/depth/timeout, metadata-only and wipe passed");
 }
 static void boundaries(void) {
-    nd_server s={0};nd_link link={.local4={127,0,0,1},.peer4={127,0,0,1},.interface_index=1};char output[4096];
+    nd_server s={0};nd_link link={.local4={127,0,0,1},.peer4={127,0,0,1},.interface_index=1};char output[16384];
     const char *blocked[]={"RSD","SCREENSHOT","TAP","PAIR","PROBE 1 0","PROBE 999999999999999999999999 0","PROBE -1 0"};
     for(size_t i=0;i<sizeof blocked/sizeof *blocked;i++){assert(nd_server_command(&s,&link,blocked[i],output,sizeof output)==BRIDGE_OK);assert(strstr(output,"\"authenticated\":false"));assert(!strstr(output,"\"result\":\"ok\""));}
     s.count=1;s.generation=17;s.expires=UINT64_MAX;nd_server_reset(&s);assert(!s.count && s.generation==18);
@@ -65,4 +66,28 @@ static void boundaries(void) {
     assert(nd_services_tap(&services,1,2)==BRIDGE_E_UNSUPPORTED);
     puts("Boundaries: stale generation, auth/DDI/record-kind gates, no capture/tap promotion passed");
 }
-int main(void){discovery();greeting();boundaries();return 0;}
+static void browser(void) {
+    memory m={0};bridge_io io={&m,rd,wr,clk};nd_server server={0};nd_link link={0};
+    nd_http http={.token="0123456789abcdef0123456789abcdef"};char body[ND_HTTP_BODY_LIMIT];
+    const char *cases[]={
+        "Host: 192.168.7.1:28767\r\n\r\n",
+        "Host: attacker.example\r\n\r\n",
+        "Host: 192.168.7.1:28767\r\nHost: 192.168.7.1:28767\r\n\r\n",
+        "Host: 192.168.7.1:28767\r\nTransfer-Encoding: chunked\r\n\r\n"};
+    for(size_t i=0;i<sizeof cases/sizeof *cases;i++){
+        memset(&m,0,sizeof m);m.n=strlen(cases[i]);memcpy(m.input,cases[i],m.n);
+        assert(nd_http_serve(&http,&server,&link,&io,"GET / HTTP/1.1",body,sizeof body,nd_now(NULL)+3000)==BRIDGE_OK);
+        assert(strstr((char *)m.output,i?"400 Bad Request":"200 OK"));assert(!server.generation);
+    }
+    const char *actions[]={"STATUS","PAIR","SCREENSHOT","CHECK4"};
+    for(size_t i=0;i<4;i++){
+        char request[128];snprintf(request,sizeof request,"token=%s&action=%s",i==3?"WRONG":http.token,actions[i]);
+        memset(&m,0,sizeof m);m.n=(size_t)snprintf((char *)m.input,sizeof m.input,"Host: 192.168.7.1:28767\r\nOrigin: http://192.168.7.1:28767\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %zu\r\n\r\n%s",strlen(request),request);
+        assert(nd_http_serve(&http,&server,&link,&io,"POST /probe HTTP/1.1",body,sizeof body,nd_now(NULL)+3000)==BRIDGE_OK);
+        assert(strstr((char *)m.output,i?"400 Bad Request":"diagnostic-only"));assert(!server.generation);
+    }
+    memset(&m,0,sizeof m);const char *cross="Host: 192.168.7.1:28767\r\nOrigin: https://evil.example\r\nContent-Length: 0\r\n\r\n";m.n=strlen(cross);memcpy(m.input,cross,m.n);
+    assert(nd_http_serve(&http,&server,&link,&io,"POST /probe HTTP/1.1",body,sizeof body,nd_now(NULL)+3000)==BRIDGE_OK);assert(strstr((char *)m.output,"400 Bad Request"));
+    puts("Browser: idle GET, same origin/host/token, no action escalation, duplicate and transfer-coding rejection passed (memory only)");
+}
+int main(void){discovery();greeting();boundaries();browser();return 0;}
