@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Combine
 import SwiftAgentKit
 import LLMProviderKit
 
@@ -22,11 +23,19 @@ struct AgentRunServices {
     @Published var bridgeStatus = "真实桥接未启动"
     let capture = ScreenCaptureController()
     @Published var allowCapturedScreenUpload = false
+    @Published var allowUSBBackgroundRun = false
     private var usbClient: USBCommandClient?
     @Published var errorMessage: String?
     @Published var storageWarning: String?
     @Published private(set) var selectedConversationID: UUID?
     let sessions: ConversationStore
+    let lifecycle: RunLifecycleCoordinator
+    private let captureScheduler = ScreenCaptureRunScheduler()
+    @Published private(set) var backgroundStatus = ""
+    private var lifecycleSubscription: AnyCancellable?
+    private var usbExecutionContext: ScreenUSBExecutionContext?
+    private var finishingRun = false
+    private var protectedDataAvailable = true
     private var runIdentity: RunIdentity?
     var currentRun: RunIdentity? { runIdentity }
     private var store: TaskStore?
@@ -48,14 +57,21 @@ struct AgentRunServices {
 
     var activeRecord: TaskRecord? { records.first(where: { $0.id == activeID }) ?? records.first }
     var canResume: Bool { !running && !stopping && [.stopped, .interrupted, .blocked].contains(activeRecord?.phase ?? .idle) }
-    init(sessions: ConversationStore? = nil, loadPersistentState: Bool = true, runServices: AgentRunServices? = nil) {
+    init(sessions: ConversationStore? = nil, loadPersistentState: Bool = true, runServices: AgentRunServices? = nil,
+         lifecycle: RunLifecycleCoordinator? = nil) {
         self.runServices = runServices
+        self.lifecycle = lifecycle ?? RunLifecycleFactory.make(persistent: loadPersistentState, scheduler: captureScheduler)
         var legacy: [TaskRecord] = []
         if loadPersistentState {
             do { let s = try TaskStore(); legacy = try s.load(); store = s; records = legacy }
             catch { storageWarning = "旧任务记录未能读取；原文件保留" }
         }
         self.sessions = sessions ?? ConversationStore(legacy: legacy)
+        self.lifecycle.onPause = { [weak self] message in self?.cancelRun(message: message, phase: .interrupted) }
+        lifecycleSubscription = self.lifecycle.$backgroundStatus.sink { [weak self] in self?.backgroundStatus = $0 }
+        if let saved = self.lifecycle.checkpoint, saved.phase == .paused || saved.phase == .waitingApproval {
+            self.sessions.addNotice(saved.message, in: saved.conversationID)
+        }
         capture.onLoss = { [weak self] in
             guard let self, self.usbClient != nil || self.running else { return }
             self.stop(message: "系统采集已停止，输入已禁用")
@@ -107,11 +123,25 @@ struct AgentRunServices {
     }
     func deleteBridgeKey() { stop(); do { try SecretStore.delete("bridge-psk-v1"); status = "桥接密钥已删除" } catch { errorMessage = error.localizedDescription } }
     func setForeground(_ active: Bool) {
+        setScene(active ? .active : .background)
+    }
+    func setScene(_ scene: ScreenUSBExecutionContext.Scene) {
+        let active = scene == .active
         foreground = active
-        // SwiftUI reports an initial inactive phase before the first foreground.
-        // Do not turn an idle welcome state into a fictitious interrupted run.
-        if !active, running || listenerTask != nil || liveBridge != nil || usbClient != nil {
-            stop(message: "App 离开前台，已中断；返回后需手动重新开始", interrupted: true)
+        usbExecutionContext?.setScene(scene)
+        lifecycle.setForeground(active)
+        if active { sessions.saveNow(); persist() }
+        // All established routes and idle connections retain their foreground boundary.
+        if !active, !stopping, usbExecutionContext?.backgroundEnabled != true,
+           running || listenerTask != nil || liveBridge != nil || usbClient != nil {
+            stop(message: "此路线仅限前台；本轮已中断，返回后需手动开始", interrupted: true)
+        }
+    }
+    func setProtectedDataAvailable(_ available: Bool) {
+        protectedDataAvailable = available
+        if !available {
+            usbExecutionContext?.revoke()
+            if running || usbClient != nil { stop(message: "设备已锁定或受保护数据不可用；输入已停止", interrupted: true) }
         }
     }
     func listen() {
@@ -169,7 +199,7 @@ struct AgentRunServices {
         _ = send(goal, in: id, cloudConsent: true)
     }
     @discardableResult func send(_ text: String, in conversationID: UUID, cloudConsent: Bool = false) -> Bool {
-        guard !running, !stopping, foreground, listenerTask == nil,
+        guard !running, !stopping, foreground, protectedDataAvailable, listenerTask == nil,
               selectedConversationID == conversationID, let session = sessions.conversation(conversationID) else { return false }
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, query.count <= 2_000 else { return false }
@@ -185,9 +215,11 @@ struct AgentRunServices {
                 let cloud = try PrivateVisionProvider(settings: settings, apiKey: key, limits: limits)
                 if let usbClient {
                     guard allowCapturedScreenUpload else { throw AppError.invalid("本次运行尚未允许将全屏截图发送给已配置的模型服务") }
-                    let usb = USBDeviceBridge(frames: capture.frames, transport: usbClient) { [weak self] in
+                    guard capture.active else { throw AppError.unavailable("请先通过系统选择器授权全屏采集") }
+                    let context = try ScreenUSBExecutionContext(frames: capture.frames, health: usbClient.health, backgroundEnabled: allowUSBBackgroundRun)
+                    let usb = USBDeviceBridge(frames: capture.frames, transport: usbClient, context: context) { [weak self] in
                         Task { @MainActor in
-                            guard self?.generation == token else { return }
+                            guard self?.generation == token, self?.finishingRun == false else { return }
                             self?.stop(message: "采集或 USB 连接失效，输入已停止")
                         }
                     }
@@ -200,7 +232,16 @@ struct AgentRunServices {
         }
         let history = sessions.history(in: conversationID)
         guard let identity = sessions.begin(in: conversationID, query: query) else { provider?.cancel(); provider = nil; return false }
-        runIdentity = identity; generation = token; mode = selectedMode
+        usbExecutionContext = (selectedBridge as? USBDeviceBridge)?.executionContext
+        captureScheduler.context = usbExecutionContext
+        do { try lifecycle.begin(identity: identity, generation: token) }
+        catch {
+            usbExecutionContext?.revoke(); usbExecutionContext = nil; captureScheduler.context = nil
+            provider?.cancel(); provider = nil
+            sessions.finish(identity, phase: .blocked, summary: "无法保存运行检查点；未开始执行")
+            errorMessage = "无法保存运行检查点；未开始执行"; return false
+        }
+        runIdentity = identity; generation = token; mode = selectedMode; finishingRun = false
         var record = TaskRecord(goal: query, mode: selectedMode); record.phase = .running
         activeID = record.id; records.insert(record, at: 0); records = Array(records.prefix(20))
         running = true; latestFrame = nil; errorMessage = nil
@@ -210,7 +251,7 @@ struct AgentRunServices {
             approve: { [weak self] request in await self?.askApproval(request, generation: token) ?? false },
             onImage: { [weak self] frame, callID in await self?.show(frame, callID: callID, generation: token) },
             onReceipt: { [weak self] text in await self?.record(text, generation: token) },
-            onExecuting: { [weak self] callID, name in await self?.markExecuting(callID: callID, name: name, generation: token) })
+            onExecuting: { [weak self] callID, name in await self?.markExecuting(callID: callID, name: name, generation: token) }, lifecycle: lifecycle, generation: token)
         coordinator = action
         let names = ["screenshot", "tap", "drag", "wait", "finish"]
         let config = AgentConfig(provider: selectedProvider, model: selectedMode == .demo ? "demo" : settings.model,
@@ -232,9 +273,19 @@ struct AgentRunServices {
             for await event in events.stream { self?.observe(event, generation: token) }
         }
         watchdog = Task { [weak self] in
-            do { try await Task.sleep(nanoseconds: UInt64(self?.limits.maxRunSeconds ?? 300) * 1_000_000_000) }
-            catch { return }
-            guard self?.generation == token else { return }; self?.stop(message: "达到 5 分钟运行上限，已停止")
+            let deadline = ProcessInfo.processInfo.systemUptime + (self?.limits.maxRunSeconds ?? 300)
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                    guard let self, self.generation == token else { return }
+                    try self.usbExecutionContext?.requireHealthy()
+                    guard ProcessInfo.processInfo.systemUptime < deadline else { throw AppError.timeout }
+                } catch {
+                    guard !Task.isCancelled, self?.generation == token else { return }
+                    self?.stop(message: "执行资格失效、采集 / USB 不健康或达到时限；输入已停止", interrupted: true)
+                    return
+                }
+            }
         }
         runTask = Task { [weak self, runner] in
             do {
@@ -258,25 +309,34 @@ struct AgentRunServices {
                 events.continuation.finish(); await eventTask.value
                 let summary = await action.finishSummary
                 let usedDeviceTools = await action.usedDeviceTools
-                await selectedBridge.stop()
-                guard let self, self.generation == token else { return }
+                guard let self, self.generation == token else { await selectedBridge.stop(); return }
                 let messages = self.sessions.conversation(conversationID)?.messages.filter { $0.runID == identity.runID } ?? []
                 // A pre-tool narration is not a final answer. An empty model
                 // turn must not reuse it to claim that the run completed.
                 let text = messages.last.flatMap { $0.role == .assistant ? $0.text : nil } ?? ""
                 let failure = messages.last(where: { $0.tool?.state == .failed })?.tool?.result
-                if let summary { self.end(.completed, result: summary) }
-                else if !text.isEmpty, !usedDeviceTools || failure != nil { self.end(.completed, result: text) }
-                else if let failure { self.end(.blocked, result: failure, publishNotice: false) }
-                else { self.end(.blocked, result: "尚未完成设备结果验收；可补充信息后继续") }
+                if let summary { await self.closeRun(.completed, result: summary, bridge: selectedBridge, generation: token) }
+                else if !text.isEmpty, !usedDeviceTools || failure != nil { await self.closeRun(.completed, result: text, bridge: selectedBridge, generation: token) }
+                else if let failure { await self.closeRun(.blocked, result: failure, publishNotice: false, bridge: selectedBridge, generation: token) }
+                else { await self.closeRun(.blocked, result: "尚未完成设备结果验收；可补充信息后继续", bridge: selectedBridge, generation: token) }
             } catch {
                 events.continuation.finish(); await eventTask.value
-                await selectedBridge.stop()
-                guard let self, self.generation == token else { return }
-                self.end(.blocked, result: Self.safeError(error))
+                guard let self, self.generation == token else { await selectedBridge.stop(); return }
+                await self.closeRun(.blocked, result: Self.safeError(error), bridge: selectedBridge, generation: token)
             }
         }
         persist(); return true
+    }
+    private func closeRun(_ phase: RunPhase, result: String, publishNotice: Bool = true,
+                          bridge: any DeviceBridge, generation token: UUID) async {
+        // Completion is already determined. Stop monitors before revoking the
+        // capability, so a slow STOP ACK cannot masquerade as an unexpected loss.
+        finishingRun = true; watchdog?.cancel()
+        lifecycle.finish(success: phase == .completed)
+        usbExecutionContext?.revoke()
+        await bridge.stop()
+        guard generation == token else { return }
+        end(phase, result: result, publishNotice: publishNotice)
     }
     func stop(message: String = "已停止；已发出的动作可能已执行，请核对设备", interrupted: Bool = false) {
         cancelRun(message: message, phase: interrupted ? .interrupted : .stopped)
@@ -286,6 +346,10 @@ struct AgentRunServices {
         // owns draining; a second cleanup must not unlock Start prematurely.
         guard !stopping else { return }
         generation = UUID() // Fence late callbacks before cancelling anything.
+        finishingRun = false
+        usbExecutionContext?.revoke(); usbExecutionContext = nil; captureScheduler.context = nil
+        runTask?.cancel(); watchdog?.cancel(); agent?.requestCancel(); provider?.cancel()
+        lifecycle.stop(message: message)
         if let identity = runIdentity { sessions.finish(identity, phase: phase, summary: publishNotice ? message : "") }
         runIdentity = nil
         listenerGeneration = UUID(); listenerTask?.cancel()
@@ -293,7 +357,7 @@ struct AgentRunServices {
         runTask?.cancel(); watchdog?.cancel(); agent?.requestCancel(); provider?.cancel()
         approvalContinuation?.resume(returning: false); approvalContinuation = nil; approval = nil
         let old = coordinator, oldBridge = bridge, oldLive = liveBridge, oldTask = runTask, oldUSB = usbClient
-        usbClient = nil; allowCapturedScreenUpload = false
+        usbClient = nil; allowCapturedScreenUpload = false; allowUSBBackgroundRun = false
         stopping = true
         Task {
             await old?.stop(); await oldBridge?.stop(); await oldLive?.stop(); await oldUSB?.stop()
@@ -307,7 +371,7 @@ struct AgentRunServices {
 
     }
     func approve(_ approved: Bool) {
-        guard running, !stopping, let request = approval, let identity = runIdentity,
+        guard running, !stopping, foreground, protectedDataAvailable, let request = approval, let identity = runIdentity,
               let continuation = approvalContinuation else { return }
         if !approved {
             sessions.updateTool(callID: request.callID ?? request.id.uuidString, name: request.tool, state: .denied, result: "用户拒绝；该动作未发送。本轮结束，不会自动重试。", identity: identity)
@@ -318,15 +382,18 @@ struct AgentRunServices {
         }
         sessions.updateTool(callID: request.callID ?? request.id.uuidString, name: request.tool, state: .approved, identity: identity)
         approvalContinuation = nil; approval = nil
-        status = "已批准一次动作"; mutate { $0.phase = .running }
+        status = usbExecutionContext?.backgroundEnabled == true ? "已批准一次；请在 15 秒内返回目标 App，匹配新画面后才发送" : "已批准一次动作"
+        mutate { $0.phase = .running }
         continuation.resume(returning: true)
     }
     private func askApproval(_ request: Approval, generation token: UUID) async -> Bool {
         guard generation == token, running, approvalContinuation == nil else { return false }
+        do { try lifecycle.waitForApproval(callID: request.callID ?? request.id.uuidString, generation: token) }
+        catch { return false }
         if let identity = runIdentity {
             sessions.updateTool(callID: request.callID ?? request.id.uuidString, name: request.tool, state: .awaitingApproval, detail: request.detail, identity: identity)
         }
-        status = "等待确认一次动作"; mutate { $0.phase = .awaitingApproval; $0.log("等待用户确认 \(request.tool)") }
+        status = "等待前台确认一次动作；没有发送输入"; mutate { $0.phase = .awaitingApproval; $0.log("等待用户确认 \(request.tool)") }
         return await withCheckedContinuation { continuation in approvalContinuation = continuation; approval = request }
     }
     private func show(_ frame: FrameImage, callID: String, generation token: UUID) {
@@ -335,7 +402,7 @@ struct AgentRunServices {
     }
     private func markExecuting(callID: String, name: String, generation token: UUID) {
         guard generation == token, running, let identity = runIdentity else { return }
-        status = "正在发送已批准的动作"
+        status = usbExecutionContext?.backgroundEnabled == true ? "等待返回匹配的目标画面；批准不代表已发送" : "正在发送已批准的动作"
         sessions.updateTool(callID: callID, name: name, state: .executing, identity: identity)
     }
     private func record(_ text: String, generation token: UUID) { guard generation == token, running else { return }; status = text; log(text) }
@@ -345,7 +412,10 @@ struct AgentRunServices {
         switch event {
         case .llmCallStarted(let turn):
             status = mode == .demo ? "演示脚本第 \(turn) 步" : "模型请求 \(turn)/\(limits.maxTurns)"
-        case .llmCallCompleted(_, let response):
+        case .streamChunk(let text):
+            if !text.isEmpty { lifecycle.activity(generation: token) }
+        case .llmCallCompleted(let turn, let response):
+            lifecycle.activity(generation: token, milestone: "model:\(turn)")
             mutate { r in
                 if let total = response.usage?.totalTokens { r.reportedTokens += max(0, total) }
                 else if r.mode == .live { r.usageComplete = false }
@@ -358,7 +428,10 @@ struct AgentRunServices {
         }
     }
     private func end(_ phase: RunPhase, result: String, publishNotice: Bool = true) {
-        usbClient = nil; allowCapturedScreenUpload = false
+        finishingRun = false
+        usbExecutionContext?.revoke(); usbExecutionContext = nil; captureScheduler.context = nil
+        lifecycle.finish(success: phase == .completed)
+        usbClient = nil; allowCapturedScreenUpload = false; allowUSBBackgroundRun = false
         if let identity = runIdentity { sessions.finish(identity, phase: phase, summary: phase == .completed || !publishNotice ? "" : result) }
         runIdentity = nil
         watchdog?.cancel(); provider?.cancel(); running = false
@@ -395,6 +468,6 @@ struct AgentRunServices {
     Use only screenshot, tap, drag, wait, finish. No typing, home, shell, filesystem, browser or delegation tools exist. Do not invent them.
     Do not explain private reasoning. Use concise public action purposes and final result summaries only.
     After inspecting a fresh screenshot that supports completion, call finish with a short outcome and any uncertainty. If blocked, say what the user must do; never claim completion merely because a command was delivered.
-    The app runs only in foreground. Switching away can stop it. Do not promise background execution.
+    Only an explicitly enabled ScreenCaptureKit + USB route can attempt bounded background execution with a valid capture and connection. Other routes stop outside foreground. Every input requires foreground human approval, then a matching fresh target screen. Never promise indefinite background execution or replay interrupted actions.
     """
 }

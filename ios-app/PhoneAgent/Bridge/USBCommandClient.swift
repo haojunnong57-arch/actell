@@ -27,12 +27,23 @@ enum USBWire {
 
 protocol USBCommandTransport: Sendable {
     func command(_ body: String) async throws
+    func command(_ body: String, permit: USBInputPermit?) async throws
     func stop() async
+}
+extension USBCommandTransport {
+    // Test transports can use this default. The production client overrides it
+    // to consume the permit at NWConnection.send, after its actor hop.
+    func command(_ body: String, permit: USBInputPermit?) async throws {
+        try permit?.enqueue({})
+        try await command(body)
+    }
 }
 
 // Dedicated Ethernet connection only. No default-route/VPN changes, HTTP redirects,
 // DNS discovery, automatic reconnect, or automatic replay of input.
 actor USBCommandClient: USBCommandTransport {
+    nonisolated let health = USBTransportHealth()
+    private var keepalive: Task<Void, Never>?
     private var connection: NWConnection?
     private var generation = UUID()
     private let queue = DispatchQueue(label: "phoneagent.usb.transport")
@@ -47,6 +58,7 @@ actor USBCommandClient: USBCommandTransport {
         let continuation: CheckedContinuation<Void, Error>
         var received = false
         let needsReceipt: Bool
+        let isPing: Bool
     }
     private var pending: [UInt64: Pending] = [:]
 
@@ -54,12 +66,17 @@ actor USBCommandClient: USBCommandTransport {
         fail(.stopped)
         key = try USBWire.key(pskHex)
         let token = UUID(); generation = token
+        health.begin(token)
         let parameters = NWParameters.tcp
         parameters.requiredInterfaceType = .wiredEthernet
         parameters.includePeerToPeer = false
         let c = NWConnection(host: "192.168.7.1", port: 28766, using: parameters)
         connection = c
-        c.stateUpdateHandler = { [weak self] state in
+        c.stateUpdateHandler = { [weak self, health] state in
+            switch state {
+            case .failed, .waiting, .cancelled: health.invalidate(token)
+            default: break
+            }
             if case .failed = state { Task { await self?.transportFailed(token) } }
             if case .waiting = state { Task { await self?.transportFailed(token) } }
             if case .cancelled = state { Task { await self?.transportFailed(token) } }
@@ -71,21 +88,37 @@ actor USBCommandClient: USBCommandTransport {
                 timeout(token, id: nil, seconds: 3)
             }
         } onCancel: { Task { await self.cancel(token) } }
+        keepalive = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await self?.command("PING"); try await Task.sleep(nanoseconds: 200_000_000) }
+                catch { return }
+            }
+        }
     }
     func command(_ body: String) async throws {
+        try await command(body, permit: nil)
+    }
+    func command(_ body: String, permit: USBInputPermit?) async throws {
         try Task.checkCancellation()
         guard ready, let key, !body.contains("\n"), body.utf8.count < 128 else { throw AppError.unavailable("USB 未认证连接") }
         if body.hasPrefix("TAP ") || body.hasPrefix("DRAG ") {
             guard supportsHID else { throw AppError.unavailable("当前固件仅 NCM；尚未启用 HID") }
+            guard permit != nil else { throw AppError.stopped }
         }
         guard pending.count < 8, nextID < UInt64(UInt32.max) else { throw AppError.unavailable("USB 请求达到上限") }
         nextID += 1; let id = nextID, token = generation
         let payload = "\(id) \(body)"
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                pending[id] = Pending(continuation: continuation, needsReceipt: body.hasPrefix("TAP ") || body.hasPrefix("DRAG "))
-                send(payload + " " + USBWire.mac("client|\(challenge)|\(payload)", key: key), token)
-                timeout(token, id: id, seconds: body.hasPrefix("DRAG ") ? 3 : 1)
+                do {
+                    let line = payload + " " + USBWire.mac("client|\(challenge)|\(payload)", key: key)
+                    let enqueue = {
+                        self.pending[id] = Pending(continuation: continuation, needsReceipt: body.hasPrefix("TAP ") || body.hasPrefix("DRAG "), isPing: body == "PING")
+                        self.send(line, token)
+                    }
+                    if let permit { try permit.enqueue(enqueue) } else { enqueue() }
+                    timeout(token, id: id, seconds: body.hasPrefix("DRAG ") ? 3 : 1)
+                } catch { continuation.resume(throwing: error) }
             }
         } onCancel: { Task { await self.cancel(token) } }
     }
@@ -136,6 +169,7 @@ actor USBCommandClient: USBCommandTransport {
             throw AppError.protocolViolation("USB ACK 签名或命令 ID 不匹配")
         }
         if try USBWire.acceptACK(parts[1], needsReceipt: request.needsReceipt, received: &request.received) {
+            if request.isPing { health.receivedPing(token) }
             pending.removeValue(forKey: id); request.continuation.resume()
         } else { pending[id] = request }
     }
@@ -153,6 +187,7 @@ actor USBCommandClient: USBCommandTransport {
     private func transportFailed(_ token: UUID) { if generation == token { fail(.unknownOutcome) } }
     private func cancel(_ token: UUID) { if generation == token { fail(.stopped) } }
     private func fail(_ error: AppError) {
+        health.invalidate(); keepalive?.cancel(); keepalive = nil
         generation = UUID(); ready = false; supportsHID = false
         connection?.cancel(); connection = nil; incoming.removeAll(); challenge = ""; nextID = 0; key = nil
         connectWaiter?.resume(throwing: error); connectWaiter = nil

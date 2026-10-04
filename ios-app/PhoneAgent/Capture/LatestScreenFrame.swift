@@ -52,6 +52,22 @@ final class LatestScreenFrame: @unchecked Sendable {
             return stamp
         }
     }
+    func sessionID() throws -> UUID {
+        try lock.withLock {
+            guard accepting, frame != nil else { throw AppError.stopped }
+            return epoch
+        }
+    }
+    func requireSession(_ expected: UUID, now: TimeInterval) throws {
+        try withSession(expected, now: now) {}
+    }
+    func withSession(_ expected: UUID, now: TimeInterval, sequence: UInt64? = nil, _ action: () -> Void) throws {
+        try lock.withLock {
+            guard accepting, epoch == expected, frame?.1.isFresh(now: now) == true,
+                  sequence == nil || frame?.1.sequence == sequence else { throw AppError.stopped }
+            action()
+        }
+    }
     func encoded(after sequence: UInt64 = 0, notBefore uptime: TimeInterval = 0,
                  maxDimension: Int = 1280) throws -> FrameImage {
         let snapshot = try lock.withLock { () throws -> (CVPixelBuffer, CaptureStamp, Date, UUID) in

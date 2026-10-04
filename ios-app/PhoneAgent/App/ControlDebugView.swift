@@ -117,14 +117,18 @@ private struct USBCapturePanel: View {
             Text("iOS 27 · USB Device").font(.headline)
             Text(capture.status).font(.caption)
             HStack {
-                Button("授权全屏采集") { capture.present() }.disabled(capture.active || !capture.isSupported).accessibilityIdentifier("startScreenCapture")
+                Button("授权全屏采集") { capture.present() }.disabled(capture.active || !capture.isSupported || model.running || model.stopping).accessibilityIdentifier("startScreenCapture")
                 Button("停止采集", role: .destructive) { model.stopCapture() }
             }.buttonStyle(.bordered)
-            Button("仅在本机预览截图") { model.previewCapture() }.disabled(!capture.active)
-            Button("连接 USB NCM") { model.connectUSB() }.accessibilityIdentifier("connectUSBNCM")
-            Toggle("允许本次 Agent 运行发送全屏截图到模型", isOn: $model.allowCapturedScreenUpload).accessibilityIdentifier("screenUploadConsent")
-            Text("先在 iPhone 的 USB 以太网设置中使用 192.168.7.2 / 255.255.255.0，路由器和 DNS 留空。采集授权不会自动发送图像；预览只在本机显示。Agent 仍在离开前台时停止，后台全屏流不代表后台自动控制已验证。")
+            Button("仅在本机预览截图") { model.previewCapture() }.disabled(!capture.active || model.running || model.stopping)
+            Button("连接 USB NCM") { model.connectUSB() }.disabled(model.running || model.stopping).accessibilityIdentifier("connectUSBNCM")
+            Toggle("允许本次 Agent 运行发送全屏截图到模型", isOn: $model.allowCapturedScreenUpload).disabled(model.running || model.stopping).accessibilityIdentifier("screenUploadConsent")
+            Toggle("允许本次采集 / USB 任务切换 App 继续", isOn: $model.allowUSBBackgroundRun).disabled(model.running || model.stopping).accessibilityIdentifier("usbBackgroundConsent")
+            Text("启用后，请开始任务并在 15 秒内切到目标 App。每次动作仍需返回前台批准，再在 15 秒内切回目标画面；画面变化会阻止发送。每段后台最多 60 秒，总计 5 分钟。锁屏、停止采集、2 秒无新帧、USB 失联或到期都会停止。真机闭环尚待验证。")
                 .font(.caption).foregroundStyle(.secondary)
-        }.disabled(model.running || model.stopping)
+            Text(model.backgroundStatus).font(.caption)
+            Text("先在 iPhone 的 USB 以太网设置中使用 192.168.7.2 / 255.255.255.0，路由器和 DNS 留空。采集授权不会自动发送图像；预览只在本机显示。")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 }

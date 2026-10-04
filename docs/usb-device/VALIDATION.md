@@ -1,6 +1,8 @@
 # 本地验证与真机验收边界 · 2026-10-04
 
-独立分支 `feature/ios27-usb-device-capture` 已实现采集、认证 NCM TCP、HID 复合固件及现有 Agent 接口；下列本地检查通过。**未烧录 S3、未安装/签名真机 App、未授权真机全屏采集、未控制 iPhone。Agent 仍在离开前台时停止；后台全屏采集和完整后台 Agent 闭环没有真机证明。**
+独立分支 `feature/ios27-usb-device-capture` 已实现采集、认证 NCM TCP、HID 复合固件及现有 Agent 接口；下列本地检查通过。**未烧录 S3、未安装/签名真机 App、未授权真机全屏采集、未控制 iPhone。第二阶段已补齐 SCK / USB 专属有限后台执行代码与离线测试；后台全屏采集和完整后台 Agent 闭环仍没有真机证明。**
+
+第二阶段复用分析、补充验证和 PSK 配置授权范围见 [BACKGROUND.md](BACKGROUND.md)。下表的 53 项 XCTest 与固件记录为首阶段结果，第二阶段独立记录见该文。
 
 ## 工具链与真实构建
 
@@ -86,6 +88,6 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 3. iPhone 上确认以太网枚举，手动固定 IP、空 Router/DNS；在 App 前台处理 Local Network 授权，验证认证 PING 往返。核实蜂窝及现有 VPN 的模型 HTTPS 路径仍可用；失败时记录路由，不修改 VPN 或填写假网关。发现和 DHCP 尚未实现。
 4. 按现有签名流程安装 App（如涉及账户/App ID 变更须另获明确同意），在系统 picker 中由用户确认全屏采集。先使用“仅在本机预览”，检查切 App、旋转、锁屏/取消、静态画面/idle、帧时延与内存；此步骤不需要模型或上传许可。
 5. 再经明确批准刷 NCM+HID，验证绝对鼠标与 iOS/AssistiveTouch 的兼容和坐标，使用无害画面测试点击/拖动、并发 PING、拔线、睡眠/恢复和释放。不能把 HID executed ACK 当作视觉成功。
-6. 最后启用本次模型截图上传许可，验证现有逐动作审批、停止和新帧闭环。当前仍保留前台 Agent 限制；完整跨 App 后台 Agent 执行需要另行实现/验证运行生命周期、审批往返和网络可用性，不能根据 screen-capture 后台 entitlement 作出成功结论。
+6. 最后启用本次模型截图上传许可，验证现有逐动作审批、停止和新帧闭环。第二阶段已经实现有限后台资格、审批往返和安全事务，详见 [BACKGROUND.md](BACKGROUND.md)。真机仍需验证：后台实时帧、有效网络 / 心跳、前台审批后返回匹配画面、到期取消与输入释放；不能根据 screen-capture 后台模式或编译成功作出闭环成功结论。
 
 未验证项还包括实物供电电流/启动浪涌、iOS NCM 休眠恢复、持续运行稳定性、真实转屏映射、Local Network 拒绝/再授权、现有 VPN 对有线私网的处理，以及模型视觉能力。未推送、未合并主分支。

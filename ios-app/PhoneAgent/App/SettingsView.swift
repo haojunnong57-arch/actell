@@ -36,7 +36,7 @@ struct SettingsView: View {
                         .font(.caption)
                 }
                 Section("本地记录") {
-                    Text("会话保留最近 200 条消息与工具记录，包含用户消息和模型公开回复。截图不写入磁盘，会话文件开启完整文件保护并排除备份。打开历史不会自动执行工具；锁屏 / 离开前台即停。")
+                    Text("会话保留最近 200 条消息与工具记录，包含用户消息和模型公开回复。截图不写入磁盘，会话文件开启完整文件保护并排除备份。打开历史不会自动执行工具；锁屏即停。只有本次明确启用的全屏采集 / USB 路线可在切换 App 后有限继续，其他路线离开前台即停。")
                         .font(.caption)
                     Button("清空本地会话与任务记录", role: .destructive) { clear = true }.disabled(model.running || model.stopping)
                 }
