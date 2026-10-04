@@ -1,0 +1,61 @@
+{
+  "resultBundle": ".build/SiriEvidence/route-fixes.xcresult",
+  "screenshots": [
+    {
+      "file": "siri-07-deferred-draft.png",
+      "test": "SiriEntryUITests/testBusyIntentKeepsExistingApprovalThenRoutesAfterStop()",
+      "sourceFile": "DD1D37D9-6C20-44F7-A406-29D417EF7B27.png",
+      "sha256": "3ecd45b541db586e817ab12bded6cc50c2a0f3c8d728b27ff9e23e8dbd588826",
+      "device": "iPhone 17",
+      "deviceId": "4105EC0E-1638-46A6-9E87-FB57B4A3E739"
+    },
+    {
+      "file": "siri-06-busy-keeps-approval.png",
+      "test": "SiriEntryUITests/testBusyIntentKeepsExistingApprovalThenRoutesAfterStop()",
+      "sourceFile": "F14E3746-B53E-4B4A-BE0A-099390ABA803.png",
+      "sha256": "1b5ac290aee37478f1b3c00443333eef58ef73986070a3e580cc93e843b39915",
+      "device": "iPhone 17",
+      "deviceId": "4105EC0E-1638-46A6-9E87-FB57B4A3E739"
+    },
+    {
+      "file": "siri-04-denied.png",
+      "test": "SiriEntryUITests/testColdRoutePersistsUntilExplicitConfirmationThenStillRequiresToolApproval()",
+      "sourceFile": "81449CF4-16C6-49C3-A79F-C2C407C30EB1.png",
+      "sha256": "26f0c8fdd855870255f5c00c827a94fabc0bb41a4a1edf1c621438ade03d9483",
+      "device": "iPhone 17",
+      "deviceId": "4105EC0E-1638-46A6-9E87-FB57B4A3E739"
+    },
+    {
+      "file": "siri-03-tool-approval-still-required.png",
+      "test": "SiriEntryUITests/testColdRoutePersistsUntilExplicitConfirmationThenStillRequiresToolApproval()",
+      "sourceFile": "B3578878-29B2-4273-BDE8-5FC1D1837C04.png",
+      "sha256": "3c126dc9ec865a5613bf6f0cc852d22dc2c7688fadfe38433fe55f8414491e7c",
+      "device": "iPhone 17",
+      "deviceId": "4105EC0E-1638-46A6-9E87-FB57B4A3E739"
+    },
+    {
+      "file": "siri-02-cold-route.png",
+      "test": "SiriEntryUITests/testColdRoutePersistsUntilExplicitConfirmationThenStillRequiresToolApproval()",
+      "sourceFile": "2A0C8BC7-55AB-4DD7-9898-9DCD17142458.png",
+      "sha256": "3ecd45b541db586e817ab12bded6cc50c2a0f3c8d728b27ff9e23e8dbd588826",
+      "device": "iPhone 17",
+      "deviceId": "4105EC0E-1638-46A6-9E87-FB57B4A3E739"
+    },
+    {
+      "file": "siri-01-persisted-draft.png",
+      "test": "SiriEntryUITests/testColdRoutePersistsUntilExplicitConfirmationThenStillRequiresToolApproval()",
+      "sourceFile": "6E0D88A5-590A-4252-863E-0F8DF497F168.png",
+      "sha256": "3ecd45b541db586e817ab12bded6cc50c2a0f3c8d728b27ff9e23e8dbd588826",
+      "device": "iPhone 17",
+      "deviceId": "4105EC0E-1638-46A6-9E87-FB57B4A3E739"
+    },
+    {
+      "file": "siri-05-warm-intent.png",
+      "test": "SiriEntryUITests/testWarmIntentRoutesToRecognizedDraft()",
+      "sourceFile": "FF45355B-2BE7-43DA-97FB-95738FBF2458.png",
+      "sha256": "34cb38bc87d2eaf46382b1de89c54284b81b0f907991a410f16868ec2e9d85f6",
+      "device": "iPhone 17",
+      "deviceId": "4105EC0E-1638-46A6-9E87-FB57B4A3E739"
+    }
+  ]
+}

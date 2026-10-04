@@ -35,7 +35,7 @@ struct ToolPresentation {
     var running: Bool { activeRun != nil && model.running }
     var stopping: Bool { model.stopping }
     var status: String { running ? model.status : session?.phase.label ?? "" }
-    var warning: String? { model.sessions.warning }
+    var warning: String? { model.errorMessage ?? model.sessions.warning }
     var modelName: String { model.settings.model.isEmpty ? "真实模型 · 尚未配置" : model.settings.model }
     var approvalID: UUID? { model.approval(in: sessionID)?.id }
     var pendingApproval: ToolPresentation? {
@@ -45,6 +45,11 @@ struct ToolPresentation {
 
     func open() { model.selectConversation(sessionID) }
     func close() { model.leaveConversation(sessionID) }
+    var awaitingTaskConfirmation: Bool { session?.entry?.state == .pendingConfirmation }
+    func dismissPreparedTask() {
+        do { try model.sessions.dismissPreparedTask(in: sessionID) }
+        catch { model.errorMessage = error.localizedDescription }
+    }
     func saveDraft(_ text: String) { model.sessions.setDraft(text, in: sessionID) }
 
     func presentation(for message: ChatMessage) -> ToolPresentation? {

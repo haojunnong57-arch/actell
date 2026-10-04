@@ -5,11 +5,15 @@ struct ContentView: View {
     @ObservedObject var statusPiP: StatusPiPController
     @ObservedObject private var sessions: ConversationStore
     @ObservedObject private var liveActivities: AgentLiveActivityController
+    let commands: SessionCommandService
+    @Environment(\.scenePhase) private var scenePhase
     @State private var path: [UUID] = []
     @State private var search = ""
     @State private var settingsOpen = false
-    init(model: AgentViewModel, statusPiP: StatusPiPController) {
-        self.model = model; self.statusPiP = statusPiP; self.sessions = model.sessions; self.liveActivities = model.liveActivities
+    init(model: AgentViewModel, statusPiP: StatusPiPController, commands: SessionCommandService) {
+        self.commands = commands
+        self.model = model; self.statusPiP = statusPiP; self.sessions = model.sessions
+        self.liveActivities = model.liveActivities
     }
     private var visible: [AgentConversation] {
         sessions.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.preview.localizedCaseInsensitiveContains(search) }
@@ -68,7 +72,7 @@ struct ContentView: View {
                 ConversationView(model: model, conversationID: id) {
                     if model.running { model.stop(message: "打开设置，本轮执行已中断", interrupted: true) }
                     settingsOpen = true
-                }
+                }.id(id)
             }
             .sheet(isPresented: $settingsOpen) { SettingsView(model: model, statusPiP: statusPiP) }
         }
@@ -83,6 +87,18 @@ struct ContentView: View {
         } message: { Text(model.activityLinkError ?? "") }
         .safeAreaInset(edge: .bottom) {
             if let notice = liveActivities.notice { Text(notice).font(.caption).foregroundStyle(.secondary).padding(8) }
+        }
+        .onChange(of: commands.pendingRoute, initial: true) { _, _ in routePreparedTask() }
+        .onChange(of: model.running) { _, _ in routePreparedTask() }
+        .onChange(of: model.stopping) { _, _ in routePreparedTask() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { routePreparedTask() } }
+        .onChange(of: settingsOpen) { _, open in if !open { routePreparedTask() } }
+    }
+    private func routePreparedTask() {
+        guard scenePhase == .active, !settingsOpen, let id = commands.pendingRoute,
+              path.last != id else { return }
+        if case .open(let destination) = try? commands.perform(SessionCommand(.open, sessionID: id, source: .app)) {
+            path = [destination]
         }
     }
     private func createConversation() {
