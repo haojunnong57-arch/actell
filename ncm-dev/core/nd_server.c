@@ -14,7 +14,7 @@ bridge_status nd_server_command(nd_server *s,const nd_link *link,const char *com
     if (!s || !link || !command || !out || cap<ND_REPLY_LIMIT || strlen(command)>ND_COMMAND_LIMIT) return BRIDGE_E_ARGUMENT;
     if (!strcmp(command,"STATUS")) return reply(out,cap,"ncm","diagnostic-only",0,false,0);
     if (!strcmp(command,"RSD") || !strcmp(command,"SCREENSHOT") || !strcmp(command,"TAP"))
-        return reply(out,cap,"authentication","backend-not-implemented",0,false,0);
+        return reply(out,cap,"authentication","authorization-required",0,false,0);
     if (!strcmp(command,"DISCOVER4") || !strcmp(command,"DISCOVER6")) {
         nd_server_reset(s); int os_error=0; int family=command[8]=='4'?4:6;
         bridge_status result=nd_discover(link,family,&s->catalog,nd_now(NULL)+3000,&os_error);

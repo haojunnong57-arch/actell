@@ -2,6 +2,7 @@
 #include "usb.h"
 #include "nd_server.h"
 #include "nd_http.h"
+#include "nd_relay.h"
 #include "esp_random.h"
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
@@ -11,6 +12,8 @@
 #include <string.h>
 static void rotate(nd_http *http) { uint8_t nonce[16]; esp_fill_random(nonce,sizeof nonce);for(size_t i=0;i<sizeof nonce;i++)snprintf(http->token+2*i,3,"%02x",nonce[i]); }
 static bool alive(void *context) { return nd_usb_online() && nd_usb_epoch()==*(uint32_t *)context; }
+typedef struct { nd_relay_job job; int fd; } relay_worker;
+static void relay_task(void *arg) { relay_worker *w=arg;(void)nd_relay_run(&w->job,w->fd,NULL);vTaskDelete(NULL); }
 static void serve(void *unused) {
     (void)unused;
     int listener=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
@@ -21,19 +24,20 @@ static void serve(void *unused) {
     ESP_ERROR_CHECK(listen(listener,1)?ESP_FAIL:ESP_OK);
     ESP_ERROR_CHECK(fcntl(listener,F_SETFL,O_NONBLOCK)<0?ESP_FAIL:ESP_OK);
     static nd_server server; static nd_http http; static char output[ND_HTTP_BODY_LIMIT]; rotate(&http);
-    uint32_t epoch=nd_usb_epoch();
+    static nd_relay relay; static relay_worker workers[2];
+    uint32_t epoch=nd_usb_epoch(),relay_epoch=epoch;
     nd_link link={.local4={192,168,7,1},.peer4={192,168,7,2},.interface_index=nd_network_index(),.alive=alive,.context=&epoch};
-    ESP_LOGI("ncm_dev","ND1 diagnostic-only; no credentials, capture, input, HID or radio; idle until command");
+    ESP_LOGI("ncm_dev","ND1 diagnostics / NR1 bounded relay; no keys, HID or radio; idle until command");
     for (;;) {
-        if (nd_usb_epoch()!=epoch) { epoch=nd_usb_epoch(); nd_server_reset(&server); rotate(&http); }
+        if (nd_usb_epoch()!=epoch) { nd_relay_cancel(&relay); epoch=nd_usb_epoch(); nd_server_reset(&server); rotate(&http); }
         if (nd_usb_online()) {
             struct sockaddr_in peer={0}; socklen_t length=sizeof peer;
             int fd=accept(listener,(struct sockaddr *)&peer,&length);
             if (fd>=0) {
                 if (memcmp(&peer.sin_addr,link.peer4,4) || fcntl(fd,F_SETFL,O_NONBLOCK)<0) { close(fd); continue; }
                 nd_socket socket={.fd=fd,.link=&link}; bridge_io io=nd_socket_io(&socket);
-                char command[ND_COMMAND_LIMIT+1]; size_t n=0; uint64_t deadline=nd_now(NULL)+3000; bool complete=false;
-                while (n<ND_COMMAND_LIMIT) {
+                char command[ND_RELAY_LINE_LIMIT+1]; size_t n=0; uint64_t deadline=nd_now(NULL)+3000; bool complete=false;
+                while (n<ND_RELAY_LINE_LIMIT) {
                     uint8_t ch=0; if (bridge_read_exact(&io,&ch,1,deadline)!=BRIDGE_OK) break;
                     if (ch=='\n') { complete=true; break; }
                     if (ch=='\r') { if(bridge_read_exact(&io,&ch,1,deadline)==BRIDGE_OK && ch=='\n')complete=true; break; }
@@ -41,7 +45,22 @@ static void serve(void *unused) {
                     command[n++]=(char)ch;
                 }
                 command[n]=0;
-                if(complete && (strstr(command," HTTP/")!=NULL))
+                if(complete && !strncmp(command,"NR1 ",4)) {
+                    nd_relay_job cancellation={0};
+                    relay_worker *w=!strncmp(command,"NR1 OPEN ",9)?&workers[0]:!strncmp(command,"NR1 TUNNEL ",11)?&workers[1]:NULL;
+                    if(!nd_relay_busy(&relay))relay_epoch=epoch;
+                    nd_link pinned=link;pinned.context=&relay_epoch;
+                    bridge_status result=nd_relay_prepare(&relay,&server,&pinned,command,w?&w->job:&cancellation);
+                    if(result==BRIDGE_OK && w) {
+                        w->fd=fd;
+                        if(xTaskCreate(relay_task,"ncm_relay",8192,w,4,NULL)==pdPASS)socket.fd=-1;
+                        else nd_relay_abandon(&w->job);
+                    } else {
+                        const char *reply=result==BRIDGE_OK?"NR1 OK\n":"NR1 ERR rejected\n";
+                        (void)bridge_write_exact(&io,(const uint8_t *)reply,strlen(reply),nd_now(NULL)+500);
+                    }
+                }
+                else if(complete && (strstr(command," HTTP/")!=NULL))
                     (void)nd_http_serve(&http,&server,&link,&io,command,output,sizeof output,deadline);
                 else if (complete && nd_server_command(&server,&link,command,output,sizeof output)==BRIDGE_OK)
                     (void)bridge_write_exact(&io,(const uint8_t *)output,strlen(output),nd_now(NULL)+1000);

@@ -61,7 +61,8 @@ public struct DiagnosticReply: Decodable, Sendable {
 
 /// Deliberately separate from diagnostic results. Implementations must own an
 /// authenticated generation, negotiated IPv6/RSD endpoint, DDI checks, and media.
-/// No implementation in this checkpoint authenticates or accesses a real screen.
+/// NativeDeveloperServices links the real backend; no device access happens until
+/// explicitly connected with an authorized identity and permissions.
 @MainActor public protocol DeveloperServices {
     func listServices() async throws -> [String]
     func capturePNG() async throws -> Data

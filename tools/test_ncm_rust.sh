@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# In-memory peers only. No device network, credential reads, or persistent keys.
+# In-memory and loopback peers only. No device access, key reads or persistent keys.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"

@@ -19,3 +19,8 @@ ${CC:-clang} -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined 
  "$core"/{bridge_io,bridge_bplist,bridge_lockdown_probe}.c "$build/cJSON.o" \
  -pthread -o "$build/socket"
 "$build/socket"
+${CC:-clang} -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+ -I ncm-dev/core -I "$core/include" -I "$json" ncm-dev/tests/test_relay.c \
+ ncm-dev/core/{nd_discovery,nd_socket,nd_relay}.c "$core/bridge_io.c" \
+ -pthread -o "$build/relay"
+"$build/relay"

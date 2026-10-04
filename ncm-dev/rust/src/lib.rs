@@ -2,7 +2,10 @@
 //! Real protocol backend for an iOS-hosted controller. All device I/O must be
 //! provided by an NCM/S3 connector; this backend does not discover a Mac tunnel or
 //! read/write a pairing file. Nothing runs just by linking this static library.
+mod ffi;
 mod media;
+mod relay;
+pub use relay::RelayConnector;
 mod png;
 mod transport;
 pub use idevice::remote_pairing::{RpPairingFile, VerifiedPeerIdentity};
@@ -22,6 +25,7 @@ pub use transport::{DialFuture, NcmConnector, Purpose, Stream};
 use transport::{Gated, OperationGuard, Owner};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
 pub enum Stage {
     Identity,
     NcmConnect,
@@ -37,6 +41,7 @@ pub enum Stage {
     Closed,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
 pub enum Cause {
     Protocol,
     Timeout,

@@ -7,6 +7,7 @@ import SwiftUI
 struct NCMProbeView: View {
     @Environment(\.scenePhase) private var phase
     @State private var client = NCMProbeClient()
+    @State private var backend = NativeDeveloperServices()
     @State private var job: Task<Void, Never>?
     @State private var busy = false
     @State private var reply: DiagnosticReply?
@@ -16,7 +17,9 @@ struct NCMProbeView: View {
         NavigationStack {
             List {
                 Section("实验范围") {
-                    Text("通过 S3 的 NCM 网络检查开发者服务入口。尚未实现认证、截图或输入。")
+                    Text("通过 S3 的 NCM 网络检查开发者服务入口。此页面仅执行只读诊断。")
+                    Text("原生后端 ABI：\(NativeDeveloperServices.linkedABIVersion)。控制会话需要显式提供已授权的内存身份；此页面不读取或生成凭据。")
+                        .font(.footnote).foregroundStyle(.secondary)
                     Toggle("已确认设备空闲，可运行只读诊断", isOn: $deviceIdle)
                     Text("请先安装本分支诊断固件。使用 IPv4 192.168.7.2/24，网关与 DNS 留空；此 App 不改网络设置。")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -47,12 +50,12 @@ struct NCMProbeView: View {
             .navigationTitle("NCM 开发者通道")
         }
         .onChange(of: phase) { _, value in
-            if value == .background { job?.cancel(); client.cancel(); reply = nil }
+            if value == .background { job?.cancel(); client.cancel(); backend.close(); reply = nil }
         }
         .onChange(of: deviceIdle) { _, value in
-            if !value { job?.cancel(); client.cancel(); reply = nil }
+            if !value { job?.cancel(); client.cancel(); backend.close(); reply = nil }
         }
-        .onDisappear { job?.cancel(); client.cancel() }
+        .onDisappear { job?.cancel(); client.cancel(); backend.close() }
     }
     private func action(_ title: String, command: DiagnosticCommand) -> some View {
         Button(title) { run(command) }

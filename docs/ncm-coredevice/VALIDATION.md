@@ -52,12 +52,28 @@
 
 Rust outputs：`.build/ncm-rust/aarch64-apple-ios/release/libphoneagent_ncm_backend.a` 与 `aarch64-apple-ios-sim/release/libphoneagent_ncm_backend.a`。这是普通 Rust staticlib，不是完成 C ABI 的 XCFramework。产物 SHA/测试摘要另见 [BUILD_RESULTS.json](BUILD_RESULTS.json)。离线 Rust 缓存是相邻 app-only 既有 registry 的独立副本；没有写回 app-only 或下载第三方二进制。日志 `.build-ncm-rust-all.log`、`.build-ncm-rust-ios.log`、`.build-ncm-rust-simulator.log`、`.build-ncm-rust-clippy.log`、`.build-ncm-core-second.log`、`.build-ncm-firmware-second.log` 均忽略。
 
-## 仍缺失的关键实现 / 证据
+## 第三轮：S3 转发与 Swift/Rust 接线已完成
 
-1. NCM 上 S3 来源的 mDNS/Lockdown QueryType/RPPairing 问候结果未知；当前 PA3 固件没有该入口。最小实验需备用板或另行授权临时刷写/恢复，不再必须安装新 App。
-2. Rust 已实现已有身份的 PairVerify、TLS-PSK/CDTunnel 和 retained RSD；没有配对身份导入/生成/持久化 UI、新配对流程，未实现网络 Lockdown Session/CoreDeviceProxy 路线，不随意混用两类记录。
-3. S3 双连接 relay 与 Swift↔Rust ABI/生命周期桥接尚未实现；当前 ND1、`nd_services.c` 和 `UnavailableDeveloperServices` 仍是诊断或受限集成接口。此为代码接线缺口，与 NCM 准入未知分别记录。
-4. 实际截图请求、DisplayService 音视频协商/RTP drain/HID Down-Up 已写入 Rust 库，但未对设备执行。视频流兼容性、媒体停止/触点取消确认、输入前后画面效果，以及端到端吞吐/内存上限未验证。jktcp 内部无界队列和 RemoteXPC 聚合资源配额仍需补齐，不能将本轮编译通过视为生产就绪。
-5. DDI 来源/授权/匹配/个性化/挂载、拔除 Mac 后长期运行、重启恢复、后台执行仍缺失。现有 Personalized 镜像 presence 检查不单独证明兼容或服务权限。
+第三轮详情见 [INTEGRATION.md](INTEGRATION.md)。第二轮表格中的“未链接 Swift/C ABI”是当时状态，现已由以下结果更新：
 
-已完成授权范围内的独立代码、构建与离线测试。下一项真机实验的数据、目标、固件替换后果及无需新配对/App 的边界见 [NEXT_EXPERIMENT.md](NEXT_EXPERIMENT.md)。
+| 验证 | 最终结果 | 证据边界 |
+|---|---|---|
+| `test_ncm_developer.sh` 新增 relay suite | ASan/UBSan 下双向各 1 MiB、慢消费者、4 KiB/流上限、取消双流、独立会话、stale/wrong nonce/duplicate 拒绝通过 | 真正 socket，但只有 localhost/socketpair；不代表 NCM 带宽或实体连接 |
+| `test_ncm_rust.sh` | 19 项 backend/ABI/relay 测试 + 175 项复用协议测试通过 | 包含 ABI buffer ownership、队列满、request ID、不串会话、失败/取消；没有真实手机认证 |
+| `test_ncm_chain.sh` | 14 项 Swift XCTest 通过 | 其中完整 Swift→实际 Rust worker→NR1→同一 C relay→模拟手机确实发送问候/M1；对端故意失败及取消后，上层错误/清理得到验证，不是认证成功 |
+| 原生权限与生命周期 | 验证权限在网卡查找/拨号前检查；独立截图/媒体/输入 gate，取消关闭句柄及专属 runtime | 只读 UI 不导入密钥或启动控制；没有运行 App 界面/系统后台切换 |
+| 最终 App | Device 与 **arm64 Simulator BUILD SUCCEEDED**；实际链接 C ABI/Rust 后端，`CODE_SIGNING_ALLOWED=NO` | 未签名、安装、启动；不提供 x86_64 Simulator archive |
+| 生产二进制隔离 | Device/Simulator 的已链接 dylib 均含五个 `ncm_backend_*` ABI 函数，没有 `ncm_test_start_loopback` | fixture 构建隔离到 `.build/ncm-rust-fixtures`，不会部署该测试入口 |
+| 最终 S3 固件 | ESP32-S3 NCM-only + ND1/HTTP + NR1 双 worker 构建通过 | 未 flash，单会话两个 8 KiB worker 栈及 lwIP 内存峰值待测 |
+| 代码检查 | Rust clippy `--all-targets --features offline-fixtures -- -D warnings` 通过；C 新 relay/HTTP analyzer 无诊断；diff/check 和来源 manifest 复核 | 不替代完整协议资源加固或真机验收 |
+
+最新产物大小、SHA、测试计数和忽略日志摘要统一见 [BUILD_RESULTS.json](BUILD_RESULTS.json)。前面的二轮产物 SHA 为历史记录。最终日志：`.build-ncm-relay-tests.log`、`.build-ncm-relay-firmware.log`、`.build-ncm-native-rust-tests.log`、`.build-ncm-native-clippy.log`、`.build-ncm-chain.log`、`.build-ncm-linked-app-device.log`、`.build-ncm-linked-app-simulator.log`。
+
+## 当前剩余条件 / 未验证项
+
+1. S3 来源的 NCM mDNS/QueryType/RPPairing 问候是否接受仍未知，当前实体板仍保留 PA3；没有争用设备或实际服务准入结果。
+2. 软件接线已经完成。启动实际 backend 需要调用方显式提供与目标绑定的、已授权的完整 RP 内存身份。没有新配对、自动提取旧密钥、身份导入 UI 或持久化；默认 App 页面只读诊断。未实现另一条网络 Lockdown Session/CoreDeviceProxy 认证路线。
+3. 完整真机 PairVerify、TLS/RSD、截图、音视频协商、真实触控效果尚未验证。新增 relay/ABI 背压不代表 jktcp 和 RemoteXPC 全局资源已加固；媒体/触点远端清理仍无确认。
+4. DDI 来源/匹配/个性化/挂载、无 Mac 冷启动、重启恢复、App 后台、NCM 吞吐、S3 运行栈/内存仍缺证据。已有 Personalized 镜像 presence 检查不单独证明兼容或服务权限。
+
+最终需要的最小一次真机动作仍是 [NEXT_EXPERIMENT.md](NEXT_EXPERIMENT.md)：备用 S3 或经授权临时刷写维护窗口，然后 Safari 手动只读发现/问候。无需新 App、新配对或私钥。任何实体操作都保持待授权。

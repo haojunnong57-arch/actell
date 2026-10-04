@@ -1,6 +1,6 @@
 # NCM 开发者服务路线：独立诊断与真实协议后端
 
-这是一条独立的 **USB 仅 NCM → iPhone 开发者服务** 路线。目前可构建并离线验证的是 NCM-only 固件、手机诊断 App、浏览器探针，以及实现 PairVerify/TLS-PSK/RSD/截图/媒体与触控调用的 Rust 后端库；**尚未证明 NCM 准入，尚未把后端通过 S3 relay/Swift ABI 接到 App，未取得真实截图或输入成功证据**。
+这是一条独立的 **USB 仅 NCM → iPhone 开发者服务** 路线。目前可构建并离线验证的是 NCM-only 固件、手机诊断 App、浏览器探针，以及实现 PairVerify/TLS-PSK/RSD/截图/媒体与触控调用的 Rust 后端库；**尚未证明 NCM 准入，后端已通过 S3 relay/Swift ABI 接到独立 App，未取得真实截图或输入成功证据**。
 
 - worktree：`/Users/developer/Developer/AI/ios-use/ncm-coredevice`
 - branch：`feature/ncm-coredevice`
@@ -17,14 +17,14 @@ USB Host/Device 是 USB 总线角色，TCP client/server 是网络角色；iPhon
 |---|---|---|
 | `ncm-dev/firmware` | 独立 S3 NCM-only 工程；IPv4 `.1/24`、IPv6 link-local、IGMP/MLD；TCP 28767 的只读诊断服务 | 已交叉编译，未刷写；IPv6/NCM 的 DAD、广播和吞吐未实测 |
 | `ncm-dev/core/nd_discovery.c` | 有界 DNS-SD PTR/SRV/A/AAAA、压缩指针检查、分包聚合、TTL/goodbye、重复端点去重 | mDNS 未认证；不保存 TXT；只接受指定 `.2` 的 A 和同链路 link-local AAAA |
-| `nd_socket.c` / `nd_server.c` | 指定 NCM 出口、3 秒 deadline、USB epoch 撤销、失效候选拒绝、无后台轮询/自动重试 | 没有通用任意目标代理、NAT 或端口扫描 |
+| `nd_socket.c` / `nd_server.c` | 指定 NCM 出口、3 秒 deadline、USB epoch 撤销、失效候选拒绝、无后台轮询/自动重试 | NR1 仅对选定 RP 目标双流转发，没有任意地址代理/NAT/端口扫描 |
 | `nd_http.c` | 同端口本地浏览器入口，GET 无动作，POST 同源/token 门控；一轮发现后立即问候首个 RP 候选 | 只读诊断，免装 App；未在 Safari 真机运行 |
-| `ncm-dev/rust` | 实际 PairVerify → TLS-PSK/CDTunnel → retained RSD → Developer/DDI 检查 → CoreDevice 截图/媒体/HID | iOS 静态库和内存测试；尚未接线至诊断 App，见 [BACKEND.md](BACKEND.md) |
+| `ncm-dev/rust` | 实际 PairVerify → TLS-PSK/CDTunnel → retained RSD → Developer/DDI 检查 → CoreDevice 截图/媒体/HID | iOS 静态库、C ABI、Swift wrapper 和受限 relay 已接线，见 [BACKEND.md](BACKEND.md) |
 | `nd_pairing.c` | RemotePairing 明文问候，严格封装/角色/序号/版本检查，解析后清空缓冲 | 只证明问候被接受；没有 Pair Setup、Pair Verify、TLS-PSK |
 | 既有 `bridge_lockdown_probe` | 复用 QueryType 的 XML/bplist 编解码及分块 I/O | 不调用 Pair / StartSession / StartService，不读取任何旧凭据 |
 | `nd_services.c` | 对接既有 RSD 和 CoreDevice PNG streaming；仅接收可信后端提供的认证隧道、动态 IPv6/RSD 端口和 DeveloperMode/DDI 检查结果 | **集成接口**，当前诊断固件没有认证后端/调用路径；触控返回 unsupported，不发送 HID |
-| `PhoneAgentNCM` Swift package | 强绑定实际 `.2` 所在网卡及 local endpoint；有界 ND1 请求、取消/超时、协议验证；截图/输入协议接口 | 当前 `UnavailableDeveloperServices` 明确抛错；ND1 的 ACK/问候不能授予权限 |
-| `NCMProbe` iOS App | 小型独立诊断界面，需手动确认设备空闲、手动操作；后台撤销连接；结果仅留内存 | Device/Simulator 无签名构建；未安装、未运行界面，不替换 PhoneAgent |
+| `PhoneAgentNCM` Swift package | 强绑定实际 `.2` 所在网卡及 local endpoint；有界 ND1 请求、取消/超时、协议验证；截图/输入协议接口 | `NativeDeveloperServices` 已连接实际后端；ND1 ACK 不授予权限，启动需已授权内存身份 |
+| `NCMProbe` iOS App | 小型独立诊断界面，需手动确认设备空闲、手动操作；后台撤销连接；结果仅留内存 | Device/arm64 Simulator 已链接 Rust、无签名构建；未安装、未运行界面，不替换 PhoneAgent |
 
 原仓库的 USB Host/usbmux、USB HID 和 ScreenCaptureKit 文件仍因基线存在，但新固件 CMake 不编译它们，独立 iOS target 也不引入这些组件。USB 描述符只含 NCM 两个 interface；编译期拒绝 HID/CDC/MSC。
 
@@ -33,6 +33,7 @@ USB Host/Device 是 USB 总线角色，TCP client/server 是网络角色；iPhon
 从本 worktree 执行：
 
 ```sh
+bash tools/test_ncm_chain.sh
 bash tools/test_ncm_rust.sh
 bash tools/build_ncm_rust.sh device
 bash tools/build_ncm_rust.sh simulator
@@ -60,7 +61,7 @@ App 从本机 `.2` 的真实 Ethernet-like interface 连接 `.1:28767`，每连�
 | `DISCOVER4` / `DISCOVER6` | 在 NCM 上查询 `_remotepairing._tcp`、`_apple-mobdev2._tcp`、`_remotepairing-pairable-host._tcp`，3 秒内收集并补查 SRV/A/AAAA |
 | `LOCKDOWN` | 从 S3 `.1` 连接指定 `.2:62078`，只发 QueryType；62078 是 lockdown 已知入口，不是 RSD 端口 |
 | `PROBE generation index` | 仅连接本轮发现候选，返回 TCP 与问候/QueryType 独立状态；候选最多存活 5 秒且尊重更短 TTL |
-| `RSD` / `SCREENSHOT` / `TAP` | 明确返回 `authentication/backend-not-implemented`，无 I/O；App UI 不提供这些动作 |
+| `RSD` / `SCREENSHOT` / `TAP` | 明确返回 `authentication/authorization-required`，无 I/O；App UI 不提供这些动作 |
 
 `pairable-host` 候选只可见，不主动连接；返回 `authorization-required`。本版不发布 pairable-host 广播，不产生持久身份，不展示/记录 PIN。问候仅携带固定版本与 `attemptPairVerify=true` 的意向，收到问候后立即关闭，不发送密钥挑战。
 
@@ -72,9 +73,9 @@ IPv6 范围仅支持同链路 link-local，不把 `.2` 映射成隧道内部地�
 
 当前实现：PhoneAgentNCM → **S3 发起** → iPhone 服务问候。它能检验外部来源是否改善 app-only 的本机拒绝；App 的普通反向 socket 仅是诊断入口，完全不等于系统开发者服务已开放。
 
-若 S3 的 NCM 服务准入获得证据，再选择后续实现，当前没有暗中启用以下任一分支：
+软件已实现第一条分支；它只在显式授权调用时启动，准入和控制效果仍需真机证据。另列出未采用的固件后端路线：
 
-1. **优先候选：PhoneAgent 承载协议，S3 承载受限字节转发。** 将 device-hub-ios/idevice 的 socket 边界换成经过认证的 App↔S3 流；由 S3 建立外向 RemotePairing 和协商产生的 TCP tunnel 连接，PhoneAgent 处理 SRP/PairVerify/TLS-PSK、用户态 IPv6/TCP、RSD、PNG 及媒体 drain。这样 S3 不需完整 Python/Rust runtime。必须验证 iPhone 服务实际看到 S3 来源、反向初配与后续会话均能跨转发层、App 后台可持续以及媒体带宽；本版**没有实现这个 relay**。
+1. **优先候选：PhoneAgent 承载协议，S3 承载受限字节转发。** 将 device-hub-ios/idevice 的 socket 边界换成经过认证的 App↔S3 流；由 S3 建立外向 RemotePairing 和协商产生的 TCP tunnel 连接，PhoneAgent 处理 SRP/PairVerify/TLS-PSK、用户态 IPv6/TCP、RSD、PNG 及媒体 drain。这样 S3 不需完整 Python/Rust runtime。必须验证 iPhone 服务实际看到 S3 来源、反向初配与后续会话均能跨转发层、App 后台可持续以及媒体带宽；本版已实现这一 relay 和 Swift/Rust 接线，详见 [INTEGRATION](INTEGRATION.md)。
 2. **C 固件后端：**沿用已有 C 协议核心，在 S3 上实现网络 lockdown+TLS+CoreDeviceProxy 或 RemotePairing 认证/TLS-PSK，再复用 CDTunnel/lwIP/RSD/PNG。密钥存储、TLS、配对状态与 DDI 仍需完整实现；不能把目前 host 测试算作这一组合已经成功。
 
 两条认证路线不得混用身份：

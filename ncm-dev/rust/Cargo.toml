@@ -10,7 +10,11 @@ crate-type = ["rlib", "staticlib"]
 members = ["vendor/idevice"]
 [dependencies]
 idevice = { path = "vendor/idevice", default-features = false, features = ["ring", "remote_pairing", "tunnel_tcp_stack", "display_stream", "mobile_image_mounter"] }
-tokio = { version = "1.53", features = ["io-util", "rt", "sync", "time", "macros"] }
+tokio = { version = "1.53", features = ["io-util", "net", "rt", "sync", "time", "macros"] }
+libc = "0.2"
+zeroize = "1.9"
+serde_json = "1.0"
+ed25519-dalek = "2.2"
 plist = "1.10"
 uuid = { version = "1.24", features = ["v4"] }
 crc32fast = "1.5"
@@ -18,6 +22,9 @@ crc32fast = "1.5"
 tracing = { version = "0.1.41", features = ["max_level_off", "release_max_level_off"] }
 [dev-dependencies]
 ed25519-dalek = "2.2"
+[features]
+# Test-only exports accept loopback peers and public fixtures; absent from iOS builds.
+offline-fixtures = []
 [profile.release]
 opt-level = "s"
 codegen-units = 1
