@@ -31,7 +31,7 @@ actor USBDeviceBridge: DeviceBridge {
         approvedImageID = imageID
     }
     func arm() throws {
-        _ = try frames.latestStamp()
+        if executionContext == nil { _ = try frames.latestStamp() }
         try executionContext?.requireHealthy()
         guard !stopped else { throw AppError.stopped }
         monitor?.cancel()
@@ -44,7 +44,7 @@ actor USBDeviceBridge: DeviceBridge {
     }
     private func heartbeat() async throws {
         guard !stopped else { throw AppError.stopped }
-        _ = try frames.latestStamp()
+        if executionContext == nil { _ = try frames.latestStamp() }
         try executionContext?.requireHealthy()
         try await transport.command("PING")
     }

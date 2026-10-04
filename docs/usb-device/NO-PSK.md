@@ -130,3 +130,48 @@ UART 115200 捕获 15 秒：TinyUSB 正常启动，日志包含 `NCM only; 192.1
 构建日志：`.build/validation/usb-interface-binding/{ios-tests.log,ios-device-build.log}`；结果包 `.build/ios/Logs/Test/Test-PhoneAgent-2026.10.04_21-16-48-+0800.xcresult`。证据摘要见 usb-interface-binding-20261004.log（本地文件 `evidence/usb-interface-binding-20261004.log`，已忽略）。改动位于 `with-esp/main`，实现基线 `883d0e8e61e62b2c9db3361985dc43c9db45ed9a`；未推送。
 
 下一步由用户重新构建并安装 App，COM 断开后接原生 USB 到 iPhone，保留既有固定 IP。在前台点“连接 USB NCM”，如有本地网络提示则由用户确认；等成功或本次 30 秒等待结束，点“复制 USB 日志”，在重启 App 前提供完整报告。报告应含新版 revision 和 binding 结果。无需重烧 ESP32，也无需开启屏幕采集或模型上传。实际手机 TCP/PING、HID、VPN 共存与后台闭环仍未验证。
+
+## App 截图与 USB 输入分离 · 2026-10-04
+
+用户在确认双向 PING 后，让 Agent“查看屏幕”，仍收到“设备未连接……连接桥接”。代码检查发现：`AgentViewModel.send` 原先用 `usbClient` 是否存在决定是否选择 App 采集路径；客户端不存在就回退到旧 TLS/UnavailableBridge，即使 App 已有采集帧也不能单独截图。另一个状态问题是任务结束清空了客户端，但没有清除“PING 已验证”的界面状态。这些是已确认的代码缺陷；未读取本次真机事件日志，不能确定用户此次客户端失效的具体时点。
+
+修正后，每轮分别选择本机读取与 USB 输入能力：
+
+- 系统采集已授权时优先读取 App 的 `LatestScreenFrame`，不需要 ESP32 或 HID 固件，也不会为了截图发送 USB 命令。无 USB、NCM-only 或输入健康条件失效均可选择只读路径。
+- 按用户后续要求移除独立截图上传开关：用户开始模型任务后，screenshot 可按需发送系统已授权的画面。系统采集授权仍必须由用户确认；授权本身不会调用模型，仅本机预览也不会上传。
+- 只读路径拒绝点击/拖动，并在动作审批前说明 USB/HID 尚未就绪。允许后台时可申请仅用于截图任务的有限执行资格，不授予 USB 输入能力。
+- 已就绪的 HID 控制任务沿用原 `ScreenUSBExecutionContext`，保留逐动作批准、帧/会话校验、动作后新帧屏障和 USB 失效停止。不会在运行中自动把只读任务升级为控制任务。
+- 读取器绑定本次采集会话，拒绝过期画面、换代采集和取消后的读取。停止本轮读取不关闭用户的系统采集会话；系统采集丢失则停止使用该画面的任务。
+- 任务结束明确关闭其 USB 客户端并更新界面为已断开。授权不足时引导“授权全屏采集”，不再笼统要求连接桥接；系统提示词同步区分截图与输入来源。
+
+真机操作：安装更新后的 App，在“设置 → 控制调试 → 真实模型”授权全屏采集，先点“仅在本机预览截图”确认画面。要让模型查看时，返回会话发送“查看屏幕”。此步骤无需重烧 ESP32 或连接 USB，也无需再开截图上传开关。真正的 iPhone ScreenCaptureKit 授权、采集与跨 App 行为仍需由用户验证，不能用模拟器合成帧替代。
+
+本次回归与编译输出仅保留在 Git 忽略的 `.build/validation/local-screen-route/`；可读结果见 [VALIDATION.md](VALIDATION.md)。没有访问设备串口、上传实际屏幕、更改签名设置或新增系统权限。
+
+
+## 首帧等待、后台偏好与停止采集 · 2026-10-04
+
+用户报告已授权但“采集尚未提供画面”、返回设置后开关关闭，以及停止时系统报 `SCStreamErrorDomain -3808`。此次检查确认以下代码路径，实际 iPhone 样本是否还存在其他问题需新版日志判断：
+
+- 旧只读桥在初始化时调用要求已有帧的 `sessionID()`，并永久保存失败的 nil；之后首帧到来也无法恢复。现在绑定已授权的采集 epoch，截图/本机预览最多等待 5 秒，停止、取消、换代立即失效。首次等待不会放宽 USB 输入所需的新帧校验；已观测到的失效不会被迟到帧恢复。
+- 接收器原先只接受 `.complete`，忽略 `.started`。本地 iOS 27 SDK 将 `.started` 定义为首帧，现在两者均需有效像素、PTS 和 `videoOrientation` 才入缓存，仍不把 idle 当新帧或猜测方向。状态区分“启动完成等待首帧”和“已收到画面”。
+- “切换 App 后继续采集任务”现在是保存到本机 UserDefaults 的偏好，对下一轮生效；停止或完成只撤销执行资格，不改用户选择。纯截图任务无需 USB 也可使用有限后台资格，每段最多 60 秒、总计 300 秒。锁屏/会话丢失/画面过期仍终止，偏好不等于永久后台许可，也不会自动重启任务。
+- 旧系统 `didStopWithError` 回调、启动失败清理又调用 `stopCapture()`；用户停止还先关闭 picker，可能与流停止竞争。现在用共享生命周期状态区分系统已停止、启动中待停止、正在停止，SDK stop 每个流至多请求一次，且流停止后才关闭 picker。系统停止/启动失败只清理，不再次 stop；旧回调不能结束新流。无法消除系统自主停止恰好与唯一一次请求同时发生的竞争；此时 -3808 作为已结束处理，不重试，其他停止错误仍显示错误码。
+- “复制诊断日志”保留最近 600 条采集/USB 元数据；采集每 2 秒汇总 `samples`、`accepted`、`sequence`、`age` 及 `missingAttachments` / `missingStatus` / `missingPixelBuffer` / `missingVideoOrientation` / `invalidTimestamp` / `idle` 等原因。记录 start、stop 和系统错误码，不记录像素、附件原文、任务正文或模型密钥；导出不会建立连接或上传屏幕。
+
+复测只需重建安装 App，不烧录 ESP32。授权全屏采集后先点本机预览，再发送看屏任务；切换设置检查后台偏好保留，最后测试停止采集。若仍无画面，在重启 App 前复制诊断日志。iPhone 真正的 `.started`/`.complete` 附件、方向、静态屏幕、锁屏恢复及跨 App 执行尚需实测，模拟器合成帧与编译不能替代。
+
+
+## videoOrientation 附件读取修正 · 2026-10-04 22:29
+
+本次用户的完整诊断中，采集启动后持续收到样本，最终累计 `samples=781 accepted=0`，全部被旧 `missingVideoOrientation` 分支丢弃。该分支已经经过状态和像素缓冲检查，所以可确定拒绝发生在 App 的方向解析环节；不能再解释为系统没有送帧。旧日志把字段不存在与无法解析混为一种原因，尚不能仅凭该日志判定手机实际把方向放在哪一层。
+
+检查发现旧接收器只查 `CMSampleBufferGetSampleAttachmentsArray` 的每 sample 字典，漏查 `CMSampleBuffer` 自身附件。CoreMedia 的这两类附件存储不同；[CMGetAttachment](https://developer.apple.com/documentation/coremedia/cmgetattachment(_:key:attachmentmodeout:)) 从目标缓冲区取得附件，[SCK videoOrientation](https://developer.apple.com/documentation/screencapturekit/scstreamframeinfo/videoorientation) 的值使用 CGImagePropertyOrientation。
+
+现在使用同一个公开 `SCStreamFrameInfo.videoOrientation.rawValue` 同时查询 sample 字典和 `CMGetAttachment(buffer, ...)`。只采用该帧有效的 1…8 整数方向；缺失、非法类型/数值、两处方向冲突分别拒绝。不使用 UIKit 当前方向、缓存上一帧方向、默认竖屏、私有键或 ReplayKit 采集。
+
+启动日志版本为 `metadataReader=sck-orientation-2`。每次既有汇总新增类似 `orientation=[sample=absent buffer=number:6 source=buffer]`；source 可以是 buffer / sample / both。拒绝分为 missing / invalid / conflictingVideoOrientation。仅输出方向值、类型和来源，不输出附件字典、任意字符串、屏幕内容或新增设备标识。
+
+四项新增回归使用真实 CoreMedia `CMSampleBuffer` 与 `CMSetAttachment`，验证：buffer-only 方向在旧 sample 查找中确实不可见但可被新读取器编码，全部 8 种方向的输出尺寸；sample-only 与双层相同值；冲突/非法值不得回退；诊断脱敏及采集换代隔离。**完整 144 项单元测试一次通过，iPhoneOS 27 无签名编译通过。** 本轮未改 UI 操作流程，未重跑 UI 测试。日志与结果包见 [VALIDATION.md](VALIDATION.md)。
+
+真机需用户重新构建安装后授权、点本机预览，成功标准是 `accepted` 和 `sequence` 增长且预览方向正确。若仍 accepted=0，应复制带 metadataReader / orientation 字段的完整新报告；它能区分键缺失、值格式不符或来源冲突。当前已证明代码能处理 buffer-level 方向，尚无新版 iPhone 接收成功证据。无需烧录 ESP32。

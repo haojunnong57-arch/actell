@@ -124,12 +124,21 @@ import XCTest
         XCTAssertGreaterThanOrEqual(usbStatus.frame.minY, app.buttons["connectUSBNCM"].frame.maxY)
         XCTAssertLessThan(usbStatus.frame.minY - app.buttons["connectUSBNCM"].frame.maxY, 40)
         XCTAssertTrue(app.staticTexts["此 Simulator SDK 不含 ScreenCaptureKit；需 iOS 27 真机授权"].exists)
-        XCTAssertEqual(app.switches["screenUploadConsent"].value as? String, "0")
+        XCTAssertTrue(app.staticTexts["screenCaptureRouteHelp"].label.contains("无需连接 ESP32"))
+        XCTAssertFalse(app.switches["screenUploadConsent"].exists)
         XCTAssertEqual(app.switches["usbBackgroundConsent"].value as? String, "0")
         XCTAssertFalse(app.buttons["仅在本机预览截图"].isEnabled)
         XCTAssertFalse(app.buttons["startScreenCapture"].isEnabled)
         capture("usb-capture-simulator-unavailable")
+        let preference = app.switches["usbBackgroundConsent"]
+        if !preference.isHittable { app.scrollViews.firstMatch.swipeUp() }
+        preference.tap()
+        XCTAssertEqual(preference.value as? String, "1")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["controlDebug"].tap()
+        XCTAssertEqual(app.switches["usbBackgroundConsent"].value as? String, "1")
         let copy = app.buttons["copyUSBDiagnostics"]
+        if !copy.isHittable { app.scrollViews.firstMatch.swipeUp() }
         XCTAssertTrue(copy.isHittable)
         copy.tap()
         XCTAssertTrue(app.staticTexts["usbDiagnosticsCopied"].waitForExistence(timeout: 3))
@@ -139,6 +148,7 @@ import XCTest
         XCTAssertTrue(report.label.contains("PhoneAgent USB Diagnostics v1"))
         XCTAssertTrue(report.label.contains("usb-diag-20261004-2"))
         XCTAssertTrue(report.label.contains("interfaces reason=export"))
+        XCTAssertTrue(report.label.contains("capture active=false samples=0"))
         XCTAssertFalse(report.label.contains("connect.begin"), "Exporting diagnostics must not connect")
         XCTAssertTrue(app.buttons["refreshUSBDiagnostics"].exists)
         XCTAssertTrue(app.buttons["copyUSBReport"].exists)
@@ -186,8 +196,8 @@ import XCTest
         input.tap(); input.typeText("View screen\n")
         XCTAssertTrue(app.staticTexts["已结束"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["失败"].exists)
-        XCTAssertTrue(app.staticTexts["当前没有连接设备，暂时无法查看屏幕。连接桥接后可以再试；我们也可以继续文字对话。"].exists)
-        let reason = "设备未连接。可继续文字对话；设备操作需在设置 → 控制调试中连接桥接。"
+        XCTAssertTrue(app.staticTexts["当前尚未授权全屏采集。请先授权 App 采集，再试一次；查看屏幕无需连接 ESP32。"].exists)
+        let reason = "尚未授权 App 全屏采集。请在设置 → 控制调试中授权全屏采集；查看屏幕无需连接 ESP32。"
         XCTAssertFalse(app.staticTexts[reason].exists) // No separate notice outside the closed tool.
         app.staticTexts["失败"].tap()
         XCTAssertTrue(app.staticTexts[reason].waitForExistence(timeout: 5))

@@ -1,5 +1,6 @@
 import Foundation
 import CoreVideo
+import CoreMedia
 import CoreImage
 import ImageIO
 
@@ -16,6 +17,74 @@ struct CaptureStamp: Sendable, Equatable {
     }
 }
 
+struct CaptureDiagnostics: Sendable {
+    let active: Bool
+    let received: Int
+    let accepted: Int
+    let sequence: UInt64?
+    let age: TimeInterval?
+    let rejected: [String: Int]
+    let orientationMetadata: String?
+    var summary: String {
+        let counts = rejected.keys.sorted().map { "\($0)=\(rejected[$0]!)" }.joined(separator: ",")
+        return "capture active=\(active) samples=\(received) accepted=\(accepted) sequence=\(sequence.map(String.init) ?? "none") age=\(age.map { String(format: "%.2fs", $0) } ?? "none") rejected=[\(counts)] orientation=[\(orientationMetadata ?? "unread")]"
+    }
+}
+
+enum CaptureSampleMetadata {
+    struct VideoOrientation {
+        let value: UInt32?
+        let rejection: String?
+        let diagnostic: String
+    }
+
+    /// CoreMedia has separate buffer-level and per-sample attachment stores.
+    /// Read the same public SCK key in both; never infer orientation from the
+    /// PhoneAgent scene, dimensions, another frame, or an assumed portrait value.
+    static func videoOrientation(in buffer: CMSampleBuffer, key: String) -> VideoOrientation {
+        let info = (CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: false) as? [[String: Any]])?.first
+        let sampleValue = info?[key]
+        let bufferValue = CMGetAttachment(buffer, key: key as CFString, attachmentModeOut: nil)
+        let sampleOrientation = orientation(sampleValue), bufferOrientation = orientation(bufferValue)
+        let shape = "sample=\(describe(sampleValue)) buffer=\(describe(bufferValue))"
+        if sampleValue == nil && bufferValue == nil {
+            return VideoOrientation(value: nil, rejection: "missingVideoOrientation", diagnostic: shape)
+        }
+        if (sampleValue != nil && sampleOrientation == nil) || (bufferValue != nil && bufferOrientation == nil) {
+            return VideoOrientation(value: nil, rejection: "invalidVideoOrientation", diagnostic: shape)
+        }
+        if let sampleOrientation, let bufferOrientation, sampleOrientation != bufferOrientation {
+            return VideoOrientation(value: nil, rejection: "conflictingVideoOrientation", diagnostic: shape)
+        }
+        let source = bufferOrientation != nil ? (sampleOrientation != nil ? "both" : "buffer") : "sample"
+        return VideoOrientation(value: bufferOrientation ?? sampleOrientation, rejection: nil,
+                                diagnostic: "\(shape) source=\(source)")
+    }
+
+    // Only type labels and numeric orientation values. Never dump attachment
+    // dictionaries, arbitrary strings, screen pixels, or system identifiers.
+    private static func describe(_ value: Any?) -> String {
+        guard let value else { return "absent" }
+        if let value = value as? CGImagePropertyOrientation { return "enum:\(value.rawValue)" }
+        if let number = value as? NSNumber {
+            if CFGetTypeID(number) == CFBooleanGetTypeID() { return "boolean" }
+            return "number:\(String(format: "%.6g", number.doubleValue))"
+        }
+        if value is String { return "string" }
+        if value is Data { return "data" }
+        if value is [Any] { return "array" }
+        if value is NSDictionary { return "dictionary" }
+        return "unsupportedType"
+    }
+
+    static func orientation(_ value: Any?) -> UInt32? {
+        if let value = value as? CGImagePropertyOrientation { return value.rawValue }
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.rounded() == number.doubleValue, (1...8).contains(number.doubleValue) else { return nil }
+        return number.uint32Value
+    }
+}
+
 // One retained pixel buffer, no per-frame Task or PNG backlog. All access is locked.
 final class LatestScreenFrame: @unchecked Sendable {
     private let lock = NSLock()
@@ -23,10 +92,18 @@ final class LatestScreenFrame: @unchecked Sendable {
     private var frame: (CVPixelBuffer, CaptureStamp, Date)?
     private var accepting = false
     private var epoch = UUID()
+    private var samples = 0
+    private var accepted = 0
+    private var rejected: [String: Int] = [:]
+    private var orientationMetadata: String?
     private let context = CIContext(options: [.cacheIntermediates: false])
 
     @discardableResult func begin() -> UUID {
-        lock.withLock { epoch = UUID(); accepting = true; frame = nil; return epoch }
+        lock.withLock {
+            epoch = UUID(); accepting = true; frame = nil
+            samples = 0; accepted = 0; rejected = [:]; orientationMetadata = nil
+            return epoch
+        }
     }
     func invalidate(epoch expected: UUID? = nil) {
         lock.withLock {
@@ -39,10 +116,47 @@ final class LatestScreenFrame: @unchecked Sendable {
         lock.withLock {
             guard accepting, epoch == expected, (1...8).contains(orientation), presentationSeconds.isFinite else { return }
             sequence += 1
+            accepted += 1
             frame = (pixel, CaptureStamp(sequence: sequence, uptime: now,
                 presentationSeconds: presentationSeconds, width: CVPixelBufferGetWidth(pixel),
                 height: CVPixelBufferGetHeight(pixel), videoOrientation: orientation), Date())
         }
+    }
+    // Reasons are fixed local labels, never raw attachments or image contents.
+    func recordSample(epoch expected: UUID, rejection: String? = nil, orientation: String? = nil) {
+        lock.withLock {
+            guard epoch == expected else { return }
+            samples += 1
+            if let rejection { rejected[rejection, default: 0] += 1 }
+            if let orientation { orientationMetadata = orientation }
+        }
+    }
+    func diagnostics(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> CaptureDiagnostics {
+        lock.withLock { CaptureDiagnostics(active: accepting, received: samples, accepted: accepted,
+            sequence: frame?.1.sequence, age: frame.map { max(0, now - $0.1.uptime) }, rejected: rejected,
+            orientationMetadata: orientationMetadata) }
+    }
+    /// Capture authorization exists before the first frame. Input callers retain
+    /// the stricter sessionID/requireSession checks below.
+    func captureSessionID() throws -> UUID {
+        try lock.withLock { guard accepting else { throw AppError.stopped }; return epoch }
+    }
+    func requireCaptureSession(_ expected: UUID) throws {
+        try lock.withLock { guard accepting, epoch == expected else { throw AppError.stopped } }
+    }
+    func waitForFrame(epoch expected: UUID, timeout: TimeInterval = 5,
+                      notBefore: TimeInterval = 0, check: @Sendable () throws -> Void = {}) async throws -> FrameImage {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        repeat {
+            try Task.checkCancellation(); try check(); try requireCaptureSession(expected)
+            if let stamp = try? latestStamp(), stamp.uptime > notBefore {
+                let result = try encoded(notBefore: notBefore)
+                try requireCaptureSession(expected); try Task.checkCancellation(); try check()
+                return result
+            }
+            try await Task.sleep(nanoseconds: 40_000_000)
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        throw AppError.unavailable("等待有效采集画面超时。\(diagnostics().summary)。请复制诊断日志检查接收状态。")
     }
     func latestStamp(now: TimeInterval = ProcessInfo.processInfo.systemUptime) throws -> CaptureStamp {
         try lock.withLock {

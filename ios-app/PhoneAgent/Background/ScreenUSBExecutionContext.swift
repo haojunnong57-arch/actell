@@ -30,20 +30,22 @@ final class ScreenUSBExecutionContext: @unchecked Sendable {
     let backgroundEnabled: Bool
     let epoch: UUID
     private let frames: LatestScreenFrame
-    private let health: USBTransportHealth
+    private let health: USBTransportHealth?
     private let lock = NSLock()
     private let now: @Sendable () -> TimeInterval
     private let deadline: TimeInterval
+    private let firstFrameDeadline: TimeInterval
     private var revoked = false
     private var scene = Scene.active
     private var revision: UInt64 = 0
     private var entered: TimeInterval
     private var backgroundDeadline: TimeInterval?
 
-    init(frames: LatestScreenFrame, health: USBTransportHealth, backgroundEnabled: Bool,
+    init(frames: LatestScreenFrame, health: USBTransportHealth? = nil, backgroundEnabled: Bool,
          now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
         self.frames = frames; self.health = health; self.backgroundEnabled = backgroundEnabled; self.now = now
-        epoch = try frames.sessionID(); entered = now(); deadline = now() + 300
+        epoch = try frames.captureSessionID(); entered = now(); deadline = now() + 300
+        firstFrameDeadline = now() + 5
         try requireHealthy()
     }
     func setScene(_ next: Scene) {
@@ -61,8 +63,13 @@ final class ScreenUSBExecutionContext: @unchecked Sendable {
         do {
             let time = now()
             guard !revoked, time < deadline, backgroundDeadline.map({ time < $0 }) ?? true else { throw AppError.stopped }
-            try frames.requireSession(epoch, now: time)
-            try health.requireHealthy(now: time)
+            try frames.requireCaptureSession(epoch)
+            // Starting the stream does not imply a sample already arrived.
+            // Only the initial empty session gets this bounded startup grace.
+            if frames.diagnostics(now: time).accepted == 0 {
+                guard time < firstFrameDeadline else { throw AppError.unavailable("采集启动后 5 秒仍未收到有效画面；本轮已停止。\(frames.diagnostics(now: time).summary)") }
+            } else { try frames.requireSession(epoch, now: time) }
+            try health?.requireHealthy(now: time)
         } catch {
             revoked = true // A late frame/PING never revives an observed loss.
             throw error
@@ -82,9 +89,17 @@ final class ScreenUSBExecutionContext: @unchecked Sendable {
             return Observation(revision: revision, after: backgroundEnabled ? entered + 0.2 : 0)
         }
     }
+    func captureObservation() throws -> Observation? {
+        try lock.withLock {
+            try validate()
+            guard scene == .active || (backgroundEnabled && scene == .background) else { return nil }
+            return Observation(revision: revision, after: scene == .background ? entered + 0.2 : 0)
+        }
+    }
     func enqueue(observation: Observation, sequence: UInt64, _ send: () -> Void) throws {
         try lock.withLock {
             try validate()
+            guard health != nil else { throw AppError.unavailable("只读采集不能授权 USB 输入") }
             guard revision == observation.revision, scene == (backgroundEnabled ? .background : .active) else { throw AppError.stopped }
             // Invalidation/scene changes are serialized with this last send fence.
             try frames.withSession(epoch, now: now(), sequence: sequence, send)

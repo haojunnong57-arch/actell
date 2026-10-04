@@ -97,6 +97,28 @@ import XCTest
         XCTFail("Timed out waiting for deterministic offline runtime")
         throw AppError.timeout
     }
+    func testBackgroundPreferenceSurvivesStopCompletionAndNewViewModel() async throws {
+        let suite = "capture-preference-tests-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+            runServices: AgentRunServices(provider: ToolErrorFixtureProvider(), bridge: UnavailableBridge()),
+            capturePreferences: preferences)
+        XCTAssertFalse(model.allowUSBBackgroundRun)
+        model.allowUSBBackgroundRun = true
+        model.stop()
+        try await waitUntil { !model.stopping }
+        XCTAssertTrue(model.allowUSBBackgroundRun)
+        let id = model.createConversation(mode: .live)
+        XCTAssertTrue(model.send("查看屏幕", in: id, cloudConsent: true))
+        try await waitUntil { !model.running }
+        XCTAssertTrue(model.allowUSBBackgroundRun)
+        let reopened = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+            capturePreferences: preferences)
+        XCTAssertTrue(reopened.allowUSBBackgroundRun)
+        reopened.allowUSBBackgroundRun = false
+        XCTAssertFalse(preferences.bool(forKey: "captureContinueInBackground"))
+    }
     func testDemoUsesRealAgentLoopAndStructuredToolEvents() async throws {
         let store = ConversationStore(inMemory: true)
         let model = AgentViewModel(sessions: store, loadPersistentState: false)
@@ -126,7 +148,7 @@ import XCTest
         XCTAssertEqual(tools.count, 1)
         XCTAssertEqual(tools.first?.callID, "fixture-screenshot")
         XCTAssertEqual(tools.first?.state, .failed)
-        XCTAssertEqual(tools.first?.result, "设备未连接。可继续文字对话；设备操作需在设置 → 控制调试中连接桥接。")
+        XCTAssertEqual(tools.first?.result, UnavailableBridge.screenshotMessage)
         // The fixture emits this only after validating the exact ERROR result,
         // role=tool and matching call ID in the real framework's next request.
         XCTAssertEqual(session.messages.last?.role, .assistant)

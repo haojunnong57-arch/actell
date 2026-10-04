@@ -117,11 +117,13 @@ private struct USBCapturePanel: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("iOS 27 · USB Device").font(.headline)
             Text(capture.status).font(.caption)
+            Text("查看屏幕使用 App 全屏采集，无需连接 ESP32。点击或拖动才需要 USB HID。开始模型任务后，Agent 会按需发送截图，无需额外开启许可。")
+                .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("screenCaptureRouteHelp")
             HStack {
-                Button("授权全屏采集") { capture.present() }.disabled(capture.active || !capture.isSupported || model.running || model.stopping).accessibilityIdentifier("startScreenCapture")
+                Button("授权全屏采集") { capture.present() }.disabled(capture.active || capture.busy || !capture.isSupported || model.running || model.stopping).accessibilityIdentifier("startScreenCapture")
                 Button("停止采集", role: .destructive) { model.stopCapture() }
             }.buttonStyle(.bordered)
-            Button("仅在本机预览截图") { model.previewCapture() }.disabled(!capture.active || model.running || model.stopping)
+            Button("仅在本机预览截图") { model.previewCapture() }.disabled(!capture.active || model.running || model.stopping || model.previewingCapture)
             HStack {
                 Button(model.usbConnectionStatus.isConnecting ? "正在连接…" : "连接 USB NCM") { model.connectUSB() }
                     .disabled(model.running || model.stopping || model.usbConnectionStatus.isConnecting).accessibilityIdentifier("connectUSBNCM")
@@ -136,9 +138,8 @@ private struct USBCapturePanel: View {
             USBDiagnosticsControls(model: model)
             Text("USB 免 PSK，无需配对。可访问此 USB 网络的其他程序也能发送命令；本 App 的输入仍需逐动作确认。")
                 .font(.caption).foregroundStyle(.secondary)
-            Toggle("允许本次 Agent 运行发送全屏截图到模型", isOn: $model.allowCapturedScreenUpload).disabled(model.running || model.stopping).accessibilityIdentifier("screenUploadConsent")
-            Toggle("允许本次采集 / USB 任务切换 App 继续", isOn: $model.allowUSBBackgroundRun).disabled(model.running || model.stopping).accessibilityIdentifier("usbBackgroundConsent")
-            Text("启用后，请开始任务并在 15 秒内切到目标 App。每次动作仍需返回前台批准，再在 15 秒内切回目标画面；画面变化会阻止发送。每段后台最多 60 秒，总计 5 分钟。锁屏、停止采集、2 秒无新帧、USB 失联或到期都会停止。真机闭环尚待验证。")
+            Toggle("切换 App 后继续采集任务", isOn: $model.allowUSBBackgroundRun).disabled(model.running || model.stopping).accessibilityIdentifier("usbBackgroundConsent")
+            Text("此偏好会保存，停止任务不会关闭它；对之后开始的截图和 USB 控制任务生效。后台每段最多 60 秒、任务总计 5 分钟，依赖系统继续提供画面。锁屏、采集失效或到期会停止；USB 控制还要求连接正常、返回前台逐次批准，并在 15 秒内切回匹配画面。真机后台执行仍待验证。")
                 .font(.caption).foregroundStyle(.secondary)
             Text(model.backgroundStatus).font(.caption)
             Text("先在 iPhone 的 USB 以太网设置中使用 192.168.7.2 / 255.255.255.0，路由器和 DNS 留空。采集授权不会自动发送图像；预览只在本机显示。")
@@ -164,11 +165,11 @@ private struct USBDiagnosticsControls: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Button("复制 USB 日志", action: copy).accessibilityIdentifier("copyUSBDiagnostics")
+                Button("复制诊断日志", action: copy).accessibilityIdentifier("copyUSBDiagnostics")
                 Button("查看日志") { refresh(); showingLog = true }.accessibilityIdentifier("showUSBDiagnostics")
             }.buttonStyle(.bordered)
-            if copied { Text("USB 日志已复制").font(.caption).accessibilityIdentifier("usbDiagnosticsCopied") }
-            Text("保留本次 App 运行最近 600 条 USB 诊断；连接失败后可直接复制。重启 App 会清空，不含截图、任务正文或密钥。")
+            if copied { Text("诊断日志已复制").font(.caption).accessibilityIdentifier("usbDiagnosticsCopied") }
+            Text("保留本次 App 运行最近 600 条采集与 USB 诊断，含首帧状态及丢帧原因；失败后可直接复制。重启 App 会清空，不含截图、任务正文或密钥。")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .sheet(isPresented: $showingLog) {
@@ -178,7 +179,7 @@ private struct USBDiagnosticsControls: View {
                         .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding()
                         .accessibilityIdentifier("usbDiagnosticsReport")
                 }
-                .navigationTitle("USB 诊断日志")
+                .navigationTitle("采集与 USB 诊断日志")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { Button("完成") { showingLog = false } }

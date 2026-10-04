@@ -23,14 +23,14 @@ flowchart LR
     Capture --> PNG[按请求旋转、缩放、PNG]
     PNG --> Agent[现有 SwiftAgentKit / ActionCoordinator]
     Agent --> Approval[每次 tap / drag 人工批准]
-    Approval --> Client[认证 TCP / wiredEthernet]
+    Approval --> Client[PA2 TCP / 指定 USB 接口]
     Client <-->|同一 USB 线 NCM| Server[S3 lwIP / TCP 28766]
     Server --> HID[绝对鼠标 + 释放报告]
     HID -->|同一 USB 线 HID| iPhone[iPhone USB Host]
     iPhone -->|VBUS 供电| Server
 ```
 
-图像只在 iPhone 内存，不传给 S3。用户在本次运行中明确开启“允许发送全屏截图到模型”后，现有视觉模型适配器才可发送截图；本次所有验证只使用合成帧/测试 provider，没有真实屏幕上传。模型网络仍使用原 HTTPS 设置和系统路由；仅设备 TCP 连接要求 `.wiredEthernet`，不会更改系统 VPN、默认路由或 DNS。
+图像只在 iPhone 内存，不传给 S3。2026-10-04 按用户要求取消单独的截图上传开关：用户开始模型任务后按工具调用发送已获系统授权的截图；授权采集和本机预览自身不会上传。模型网络仍使用原 HTTPS 设置和系统路由；设备 TCP 已改为按固定本地 IP 解析并绑定实际有线接口，详见 [当前实现](NO-PSK.md)。本地验证只使用合成帧/离线 provider，没有实际屏幕上传。
 
 本实验分支最低版本为 iOS 27；主 Bundle ID 仍为 `com.ja1chen.PhoneAgent`。没有签名账户、App ID 注册或签名权限变更。
 
@@ -43,7 +43,7 @@ flowchart LR
 `LatestScreenFrame` 用锁保护一个原始 pixel buffer，没有逐帧 Task 或编码队列。截图时旋转为显示方向、最长边缩到 1280 px 并编码 PNG；元数据包括单调递增 sequence、单调时钟到达时间、源 PTS、墙钟时间、源尺寸、输出尺寸和原始 orientation。画面和序号不落盘；测试证据仅包含合成画面。
 
 - 新 session 使用独立 epoch，旧 stream 迟到的数据/停止事件不能覆盖新 stream。
-- complete 帧超过 2 秒未更新视为过期；blank/suspended/stopped 清空采集缓存。idle 不伪装成新帧。此策略偏保守，静态画面是否持续产生 complete 帧必须真机检查。
+- complete / started 有效帧超过 2 秒未更新视为过期；blank/suspended/stopped 清空采集缓存。idle 不伪装成新帧。此策略偏保守，静态画面是否持续产生 complete 帧必须真机检查。
 - 发送输入前重验缓存、批准帧 ID、方向和尺寸。前台帧最多 5 秒，跨 App 审批帧最多 45 秒；实际发送仍需 2 秒内新帧、返回目标后的匹配画面和一次性许可。拒绝重入与范围外坐标。
 - 收到动作 `executed` 后设置 sequence 和单调时间双重屏障；下一截图必须在 ACK 之后到达。不能用动作期间缓存的图证明执行结果。
 - 第二阶段选择性复用 `feature/background-runs@2509d709` 的生命周期与事务模块。本次明确启用的 SCK / USB 路线允许有限后台执行（每段 60 秒，总计 5 分钟），其它路线仍离开前台即停。审批只在前台接受，批准后等待返回匹配目标画面；详见 [BACKGROUND.md](BACKGROUND.md)。这是已测试的代码路径，**不是真机后台闭环证明**。

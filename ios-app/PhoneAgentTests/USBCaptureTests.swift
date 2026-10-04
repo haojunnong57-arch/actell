@@ -1,5 +1,7 @@
 import XCTest
 import CoreVideo
+import CoreMedia
+import ImageIO
 import Network
 import Darwin
 @testable import PhoneAgent
@@ -63,6 +65,276 @@ final class USBCaptureTests: XCTestCase {
         XCTAssertThrowsError(try frames.encoded())
         let stamp = CaptureStamp(sequence: 1, uptime: 100, presentationSeconds: 1, width: 8, height: 4, videoOrientation: 1)
         XCTAssertFalse(stamp.isFresh(now: 99)); XCTAssertFalse(stamp.isFresh(now: 103))
+    }
+    func testLocalCaptureRoutesWithoutUSBAndTakesPrecedenceOverLegacy() async throws {
+        let frames = LatestScreenFrame(), epoch = frames.begin()
+        frames.put(try pixel(), orientation: 6, presentationSeconds: 1, epoch: epoch)
+        let bridge = try LiveDeviceBridgeRouter.make(frames: frames, captureActive: true, usb: nil, backgroundEnabled: false, legacy: DemoBridge())
+        let frame = try await bridge.screenshot()
+        XCTAssertFalse(frame.isDemo)
+        XCTAssertEqual(frame.capture?.sequence, 1)
+        XCTAssertEqual(frame.width, 4); XCTAssertEqual(frame.height, 8)
+        XCTAssertEqual(Array(frame.png.prefix(8)), [137,80,78,71,13,10,26,10])
+        let background = await bridge.supportsBackgroundExecution(tool: "screenshot")
+        XCTAssertFalse(background, "Capture-only does not grant background Agent execution")
+        await bridge.stop()
+        XCTAssertNoThrow(try frames.encoded(), "Ending a reader must not revoke the shared system capture")
+    }
+    func testCaptureRouteRequiresSystemAuthorizationButNoExtraUploadToggle() async throws {
+        let frames = LatestScreenFrame(), epoch = frames.begin()
+        frames.put(try pixel(), orientation: 1, presentationSeconds: 1, epoch: epoch)
+        let blocked = try LiveDeviceBridgeRouter.make(frames: frames, captureActive: false,
+            usb: nil, backgroundEnabled: false)
+        do { _ = try await blocked.screenshot(); XCTFail("System authorization is mandatory") }
+        catch { XCTAssertEqual(error.localizedDescription, UnavailableBridge.screenshotMessage) }
+        let allowed = try LiveDeviceBridgeRouter.make(frames: frames, captureActive: true,
+            usb: nil, backgroundEnabled: false)
+        let image = try await allowed.screenshot()
+        XCTAssertNotNil(image.capture)
+    }
+    func testReaderCreatedBeforeFirstFrameWaitsForTheSameCaptureSession() async throws {
+        let frames = LatestScreenFrame(), epoch = frames.begin()
+        let bridge = try LiveDeviceBridgeRouter.make(frames: frames, captureActive: true,
+            usb: nil, backgroundEnabled: false)
+        let read = Task { try await bridge.screenshot() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        frames.put(try pixel(), orientation: 6, presentationSeconds: 1, epoch: epoch)
+        let image = try await read.value
+        XCTAssertEqual(image.capture?.sequence, 1)
+        XCTAssertEqual(image.capture?.videoOrientation, 6)
+        await bridge.stop()
+    }
+    func testFirstFrameWaitTimesOutWithMetadataAndRejectsReplacementSession() async throws {
+        let frames = LatestScreenFrame(), epoch = frames.begin()
+        frames.recordSample(epoch: epoch, rejection: "missingVideoOrientation")
+        do { _ = try await frames.waitForFrame(epoch: epoch, timeout: 0.05); XCTFail("Must time out") }
+        catch {
+            XCTAssertTrue(error.localizedDescription.contains("samples=1"))
+            XCTAssertTrue(error.localizedDescription.contains("missingVideoOrientation=1"))
+        }
+        let bridge = try LiveDeviceBridgeRouter.make(frames: frames, captureActive: true,
+            usb: nil, backgroundEnabled: false)
+        let read = Task { try await bridge.screenshot() }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let replacement = frames.begin()
+        frames.put(try pixel(), orientation: 1, presentationSeconds: 1, epoch: replacement)
+        do { _ = try await read.value; XCTFail("A reader cannot adopt a later authorization") } catch {}
+        let cancel = Task { try await frames.waitForFrame(epoch: replacement, notBefore: .greatestFiniteMagnitude) }
+        cancel.cancel()
+        do { _ = try await cancel.value; XCTFail("Cancelled") } catch { XCTAssertTrue(error is CancellationError) }
+    }
+    func testCaptureOnlyBackgroundNeedsPreferenceAndNewTargetFrameButNeverAuthorizesInput() async throws {
+        let frames = LatestScreenFrame(), epoch = frames.begin(), image = try pixel()
+        frames.put(image, orientation: 1, presentationSeconds: 1, epoch: epoch)
+        let bridge = try LiveDeviceBridgeRouter.make(frames: frames, captureActive: true,
+            usb: nil, backgroundEnabled: true)
+        let supports = await bridge.supportsBackgroundExecution(tool: "screenshot")
+        XCTAssertTrue(supports)
+        let supportsInput = await bridge.supportsBackgroundExecution(tool: "tap")
+        XCTAssertFalse(supportsInput)
+        let context = try XCTUnwrap(bridge.executionContext)
+        context.setScene(.inactive); context.setScene(.background)
+        let read = Task { try await bridge.screenshot() }
+        try await Task.sleep(nanoseconds: 250_000_000)
+        frames.put(image, orientation: 1, presentationSeconds: 2, epoch: epoch)
+        let result = try await read.value
+        XCTAssertEqual(result.capture?.sequence, 2)
+        let scope = try XCTUnwrap(context.captureObservation())
+        XCTAssertThrowsError(try context.enqueue(observation: scope, sequence: 2) { XCTFail("Read-only cannot send HID") })
+        context.revoke()
+        do { _ = try await bridge.screenshot(); XCTFail("Revoked") } catch {}
+    }
+    func testOrientationMetadataAcceptsTypedAndNumericValuesWithoutGuessing() {
+        XCTAssertEqual(CaptureSampleMetadata.orientation(CGImagePropertyOrientation.right), 6)
+        XCTAssertEqual(CaptureSampleMetadata.orientation(NSNumber(value: 8)), 8)
+        let invalidValues: [Any?] = [nil, NSNumber(value: true), NSNumber(value: 0), NSNumber(value: 9), NSNumber(value: 1.5), "6"]
+        for invalid in invalidValues {
+            XCTAssertNil(CaptureSampleMetadata.orientation(invalid))
+        }
+    }
+    private let orientationKey = "fixture.videoOrientation"
+    private func sampleBuffer() throws -> CMSampleBuffer {
+        let image = try pixel()
+        var format: CMVideoFormatDescription?
+        XCTAssertEqual(CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault,
+            imageBuffer: image, formatDescriptionOut: &format), noErr)
+        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 60),
+            presentationTimeStamp: CMTime(value: 1, timescale: 60), decodeTimeStamp: .invalid)
+        var buffer: CMSampleBuffer?
+        XCTAssertEqual(CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault,
+            imageBuffer: image, formatDescription: try XCTUnwrap(format),
+            sampleTiming: &timing, sampleBufferOut: &buffer), noErr)
+        return try XCTUnwrap(buffer)
+    }
+    private func setSampleOrientation(_ value: NSNumber, in buffer: CMSampleBuffer) throws {
+        let array = try XCTUnwrap(CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: true))
+        let dictionary = unsafeBitCast(CFArrayGetValueAtIndex(array, 0), to: CFMutableDictionary.self)
+        let key = orientationKey as CFString
+        CFDictionarySetValue(dictionary, Unmanaged.passUnretained(key).toOpaque(), Unmanaged.passUnretained(value).toOpaque())
+    }
+    func testBufferLevelOrientationReachesEncodedFrameEvenWhenSampleDictionaryHasNoOrientation() throws {
+        for orientation in 1...8 {
+            let buffer = try sampleBuffer()
+            CMSetAttachment(buffer, key: orientationKey as CFString,
+                value: NSNumber(value: orientation), attachmentMode: kCMAttachmentMode_ShouldPropagate)
+            let perSample = (CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: true) as? [[String: Any]])?.first
+            XCTAssertNil(perSample?[orientationKey], "The old per-sample-only reader would discard this valid buffer")
+            let metadata = CaptureSampleMetadata.videoOrientation(in: buffer, key: orientationKey)
+            XCTAssertEqual(metadata.value, UInt32(orientation)); XCTAssertNil(metadata.rejection)
+            XCTAssertTrue(metadata.diagnostic.contains("sample=absent buffer=number:"))
+            XCTAssertTrue(metadata.diagnostic.contains("source=buffer"))
+            let frames = LatestScreenFrame(), epoch = frames.begin()
+            frames.recordSample(epoch: epoch, orientation: metadata.diagnostic)
+            frames.put(try XCTUnwrap(CMSampleBufferGetImageBuffer(buffer)), orientation: try XCTUnwrap(metadata.value),
+                presentationSeconds: buffer.presentationTimeStamp.seconds, epoch: epoch)
+            let image = try frames.encoded()
+            XCTAssertEqual(image.capture?.videoOrientation, UInt32(orientation))
+            XCTAssertEqual(image.width, orientation <= 4 ? 8 : 4)
+            XCTAssertEqual(image.height, orientation <= 4 ? 4 : 8)
+            XCTAssertEqual(frames.diagnostics().accepted, 1)
+            XCTAssertTrue(frames.diagnostics().summary.contains("source=buffer"))
+        }
+    }
+    func testPerSampleOrientationAndMatchingBufferMetadataRemainSupported() throws {
+        let buffer = try sampleBuffer()
+        try setSampleOrientation(NSNumber(value: 6), in: buffer)
+        XCTAssertNil(CMGetAttachment(buffer, key: orientationKey as CFString, attachmentModeOut: nil))
+        var metadata = CaptureSampleMetadata.videoOrientation(in: buffer, key: orientationKey)
+        XCTAssertEqual(metadata.value, 6); XCTAssertNil(metadata.rejection)
+        XCTAssertTrue(metadata.diagnostic.contains("source=sample"))
+        CMSetAttachment(buffer, key: orientationKey as CFString, value: NSNumber(value: 6),
+            attachmentMode: kCMAttachmentMode_ShouldNotPropagate)
+        metadata = CaptureSampleMetadata.videoOrientation(in: buffer, key: orientationKey)
+        XCTAssertEqual(metadata.value, 6); XCTAssertNil(metadata.rejection)
+        XCTAssertTrue(metadata.diagnostic.contains("source=both"))
+    }
+    func testConflictingOrMalformedOrientationCannotFallBackToAnotherValue() throws {
+        let buffer = try sampleBuffer()
+        try setSampleOrientation(NSNumber(value: 6), in: buffer)
+        CMSetAttachment(buffer, key: orientationKey as CFString, value: NSNumber(value: 8),
+            attachmentMode: kCMAttachmentMode_ShouldPropagate)
+        var metadata = CaptureSampleMetadata.videoOrientation(in: buffer, key: orientationKey)
+        XCTAssertNil(metadata.value); XCTAssertEqual(metadata.rejection, "conflictingVideoOrientation")
+        for invalid in [NSNumber(value: 0), NSNumber(value: 9), NSNumber(value: 1.5), NSNumber(value: true)] {
+            CMSetAttachment(buffer, key: orientationKey as CFString, value: invalid,
+                attachmentMode: kCMAttachmentMode_ShouldPropagate)
+            metadata = CaptureSampleMetadata.videoOrientation(in: buffer, key: orientationKey)
+            XCTAssertNil(metadata.value); XCTAssertEqual(metadata.rejection, "invalidVideoOrientation")
+        }
+    }
+    func testOrientationDiagnosticsDistinguishMissingAndInvalidWithoutExportingAttachmentContents() throws {
+        let buffer = try sampleBuffer()
+        let missing = CaptureSampleMetadata.videoOrientation(in: buffer, key: orientationKey)
+        XCTAssertNil(missing.value); XCTAssertEqual(missing.rejection, "missingVideoOrientation")
+        XCTAssertEqual(missing.diagnostic, "sample=absent buffer=absent")
+        let privateValue = "private-content-must-not-be-logged"
+        CMSetAttachment(buffer, key: orientationKey as CFString, value: privateValue as CFString,
+            attachmentMode: kCMAttachmentMode_ShouldPropagate)
+        CMSetAttachment(buffer, key: "unrelated" as CFString, value: privateValue as CFString,
+            attachmentMode: kCMAttachmentMode_ShouldPropagate)
+        let invalid = CaptureSampleMetadata.videoOrientation(in: buffer, key: orientationKey)
+        XCTAssertNil(invalid.value); XCTAssertEqual(invalid.rejection, "invalidVideoOrientation")
+        XCTAssertEqual(invalid.diagnostic, "sample=absent buffer=string")
+        let frames = LatestScreenFrame(), old = frames.begin()
+        frames.recordSample(epoch: old, rejection: invalid.rejection, orientation: invalid.diagnostic)
+        XCTAssertFalse(frames.diagnostics().summary.contains(privateValue))
+        XCTAssertFalse(frames.diagnostics().summary.contains("unrelated"))
+        _ = frames.begin()
+        frames.recordSample(epoch: old, orientation: invalid.diagnostic)
+        XCTAssertNil(frames.diagnostics().orientationMetadata, "Late metadata must not cross capture epochs")
+    }
+    func testSystemStopAndFailedStartNeverRequestAnotherSDKStop() throws {
+        for didStart in [false, true] {
+            var state = CaptureStreamLifecycle()
+            let first = try XCTUnwrap(state.begin())
+            if didStart { XCTAssertFalse(state.started(first)) }
+            XCTAssertTrue(state.ended(first)) // delegate stop or failed start
+            XCTAssertFalse(state.requestStop())
+            XCTAssertFalse(state.ended(first))
+            let next = try XCTUnwrap(state.begin())
+            XCTAssertFalse(state.ended(first), "Old callbacks cannot end a new stream")
+            XCTAssertTrue(state.owns(next))
+        }
+    }
+    func testStopDuringStartWaitsAndRepeatedStopsAreIdempotent() throws {
+        for stopDuringStart in [false, true] {
+            var state = CaptureStreamLifecycle()
+            let token = try XCTUnwrap(state.begin())
+            if stopDuringStart {
+                XCTAssertFalse(state.requestStop(), "Never stop an unstarted stream")
+                XCTAssertFalse(state.requestStop())
+                XCTAssertTrue(state.started(token), "Start completion owns the deferred stop")
+            } else {
+                XCTAssertFalse(state.started(token))
+                XCTAssertTrue(state.requestStop())
+            }
+            XCTAssertFalse(state.requestStop(), "Exactly one SDK stop per stream")
+            XCTAssertNil(state.begin(), "Do not overlap a new capture with shutdown")
+            XCTAssertTrue(state.ended(token))
+            XCTAssertFalse(state.started(token), "Late start completion must not stop again")
+        }
+    }
+    func testNCMOnlyCaptureFeedsAgentToolButRejectsInputsBeforeApproval() async throws {
+        let frames = LatestScreenFrame(), epoch = frames.begin(), transport = USBSpy()
+        frames.put(try pixel(), orientation: 1, presentationSeconds: 1, epoch: epoch)
+        // Deliberately no healthy PING: read-only capture cannot depend on USB.
+        let bridge = try LiveDeviceBridgeRouter.make(frames: frames, captureActive: true, usb: .init(transport: transport, health: USBTransportHealth(), supportsHID: false), backgroundEnabled: true)
+        let action = ActionCoordinator(bridge: bridge, limits: AgentLimits(),
+            approve: { _ in XCTFail("NCM-only must not present a useless input approval"); return true },
+            onImage: { _, _ in }, onReceipt: { _ in })
+        let shot = try await action.execute(name: "screenshot", parameters: [:], callID: "local-shot")
+        XCTAssertEqual(shot.images.count, 1)
+        let frame = try await bridge.screenshot()
+        do {
+            _ = try await action.execute(name: "tap", parameters: ["x": 1, "y": 1, "based_on_image_id": frame.id, "purpose": "fixture"], callID: "no-hid")
+            XCTFail("NCM-only cannot send input")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("HID")) }
+        let commands = await transport.commands
+        XCTAssertTrue(commands.isEmpty, "Capturing must not issue USB commands")
+        await action.stop()
+    }
+    func testUnhealthyHIDTransportDoesNotBlockLocalScreenshotOrGainInputPermission() async throws {
+        let frames = LatestScreenFrame(), epoch = frames.begin(), transport = USBSpy()
+        frames.put(try pixel(), orientation: 1, presentationSeconds: 1, epoch: epoch)
+        let bridge = try LiveDeviceBridgeRouter.make(frames: frames, captureActive: true, usb: .init(transport: transport, health: USBTransportHealth(), supportsHID: true), backgroundEnabled: false)
+        let frame = try await bridge.screenshot()
+        do { try await bridge.tap(x: 0, y: 0, imageID: frame.id); XCTFail("No USB lease") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("USB 输入条件已失效")) }
+        let commands = await transport.commands
+        XCTAssertTrue(commands.isEmpty)
+        await bridge.stop()
+    }
+    func testCaptureReaderCannotSurviveCancellationStaleFrameOrNewCaptureEpoch() async throws {
+        let frames = LatestScreenFrame(), image = try pixel(), epoch = frames.begin()
+        frames.put(image, orientation: 1, presentationSeconds: 1, epoch: epoch)
+        let bridge = try LiveDeviceBridgeRouter.make(frames: frames, captureActive: true, usb: nil, backgroundEnabled: false)
+        _ = try await bridge.screenshot()
+        frames.put(image, orientation: 1, presentationSeconds: 2, epoch: epoch, now: ProcessInfo.processInfo.systemUptime - 3)
+        do { _ = try await bridge.screenshot(); XCTFail("Stale screen") } catch {}
+        let replacement = frames.begin()
+        frames.put(image, orientation: 1, presentationSeconds: 3, epoch: replacement)
+        do { _ = try await bridge.screenshot(); XCTFail("Must not cross system capture authorization epochs") } catch {}
+        let current = try LiveDeviceBridgeRouter.make(frames: frames, captureActive: true, usb: nil, backgroundEnabled: false)
+        current.cancelTransport()
+        do { _ = try await current.screenshot(); XCTFail("Synchronous scene/lock cancellation must revoke reads") } catch {}
+        XCTAssertNoThrow(try frames.encoded())
+    }
+    func testHealthyHIDRouteKeepsApprovalAndDisconnectFences() async throws {
+        let frames = LatestScreenFrame(), image = try pixel(), epoch = frames.begin()
+        frames.put(image, orientation: 1, presentationSeconds: 1, epoch: epoch)
+        let health = USBTransportHealth(), token = UUID(), transport = USBSpy()
+        health.begin(token); health.receivedPing(token)
+        let bridge = try LiveDeviceBridgeRouter.make(frames: frames, captureActive: true, usb: .init(transport: transport, health: health, supportsHID: true), backgroundEnabled: false)
+        XCTAssertTrue(bridge is USBDeviceBridge)
+        let frame = try await bridge.screenshot()
+        do { try await bridge.tap(x: 0, y: 0, imageID: frame.id); XCTFail("Approval is required") } catch {}
+        var commands = await transport.commands; XCTAssertTrue(commands.isEmpty)
+        try await bridge.acceptApproval(imageID: frame.id)
+        try await bridge.tap(x: 0, y: 0, imageID: frame.id)
+        commands = await transport.commands; XCTAssertEqual(commands, ["TAP 0 0"])
+        health.invalidate(token)
+        do { _ = try await bridge.screenshot(); XCTFail("Input-capable runs still stop on USB loss") } catch {}
+        await bridge.stop()
     }
     func testPostACKBarrierRejectsFrameThatArrivedDuringAction() async throws {
         let frames = LatestScreenFrame(), image = try pixel(), epoch = frames.begin()

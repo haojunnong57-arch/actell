@@ -188,7 +188,7 @@ struct DemoProvider: LLMProvider {
 // Its second turn only answers if the failed tool result actually reaches it.
 struct ToolErrorFixtureProvider: LLMProvider {
     static let name = "offline-tool-error-fixture"
-    static let reply = "当前没有连接设备，暂时无法查看屏幕。连接桥接后可以再试；我们也可以继续文字对话。"
+    static let reply = "当前尚未授权全屏采集。请先授权 App 采集，再试一次；查看屏幕无需连接 ESP32。"
     var initialText = ""
     var finalReply = Self.reply
     let configuration = LLMProviderConfiguration(name: Self.name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
@@ -211,7 +211,7 @@ struct ToolErrorFixtureProvider: LLMProvider {
         if request.messages.contains(where: { $0.role == .tool }) {
             guard request.messages.contains(where: {
                 $0.role == .tool && $0.toolCallId == "fixture-screenshot" &&
-                $0.content == "[Tool: screenshot] ERROR\n设备未连接。可继续文字对话；设备操作需在设置 → 控制调试中连接桥接。"
+                $0.content == "[Tool: screenshot] ERROR\n" + UnavailableBridge.screenshotMessage
             }) else { throw AppError.invalid("测试未收到对应工具的完整失败结果") }
             return LLMResponse(text: finalReply, finishReason: .stop, request: request, providerName: Self.name)
         }
