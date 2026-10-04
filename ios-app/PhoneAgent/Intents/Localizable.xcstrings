@@ -239,19 +239,19 @@
         }
       }
     },
-    "A task is running in the foreground.": {
+    "A task is running.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "A task is running in the foreground."
+            "value": "A task is running."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "有任务正在前台运行。"
+            "value": "有任务正在运行。"
           }
         }
       }

@@ -1,10 +1,10 @@
 // Selectively ported from feature/background-runs @ 2509d7098fc8a3af4c62bd8fc20e911df4aa4933.
-// The scheduler supplied here is a capture-context adapter, not BGContinuedProcessingTask.
+// Integration selects either a capture context or a system processing lease.
 import Foundation
 import Combine
 
 /// A delivered execution capability, never a successful scheduler submission.
-/// The production adapter validates an active SCK/USB context, not a BGTask grant.
+/// The source is either SCK/USB health or a handler-delivered system task.
 @MainActor protocol RunBackgroundLease: AnyObject {
     var expirationHandler: (() -> Void)? { get set }
     func report(completed: Int, subtitle: String)
@@ -57,11 +57,15 @@ struct RunCheckpoint: Codable, Equatable {
         var excludedRoot = root
         var attributes = URLResourceValues(); attributes.isExcludedFromBackup = true
         try excludedRoot.setResourceValues(attributes)
-        file = root.appendingPathComponent("usb-run-checkpoint-v1.json")
+        file = root.appendingPathComponent("run-checkpoint-v1.json")
     }
     func load() throws -> RunCheckpoint? {
-        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
-        return try JSONDecoder().decode(RunCheckpoint.self, from: Data(contentsOf: file))
+        // Preserve the old SCK-only journal when upgrading. Recovery never
+        // restores execution, and the old file is retained for inspection.
+        let legacy = file.deletingLastPathComponent().appendingPathComponent("usb-run-checkpoint-v1.json")
+        let source = FileManager.default.fileExists(atPath: file.path) ? file : legacy
+        guard FileManager.default.fileExists(atPath: source.path) else { return nil }
+        return try JSONDecoder().decode(RunCheckpoint.self, from: Data(contentsOf: source))
     }
     func save(_ checkpoint: RunCheckpoint) throws {
         // This route stops on lock. The journal excludes text, screenshots and secrets.
@@ -80,9 +84,10 @@ struct RunCheckpoint: Codable, Equatable {
 /// between a durable dispatching transition and returning dispatch permission.
 @MainActor final class RunLifecycleCoordinator: ObservableObject {
     @Published private(set) var checkpoint: RunCheckpoint?
-    @Published private(set) var backgroundStatus = "后台仅限本次授权的采集 / USB 会话"
+    @Published private(set) var backgroundStatus = "后台需有效采集资格或系统实际授予的有限片段"
     private(set) var foreground = true
     private(set) var hasLease = false
+    var canAwaitApprovalInBackground: Bool { checkpoint?.phase == .waitingApproval && activeToolBackgroundCapable }
     var onPause: ((String) -> Void)?
     private let scheduler: any RunBackgroundScheduler
     private let storage: any RunCheckpointStorage
@@ -146,7 +151,7 @@ struct RunCheckpoint: Codable, Equatable {
         checkpoint?.segment += 1
         let id = identifierPrefix + "." + UUID().uuidString
         checkpoint?.segmentID = id
-        backgroundStatus = "检查本次采集 / USB 执行资格"
+        backgroundStatus = "检查本次后台执行资格"
         do {
             try persist()
             try scheduler.submit(identifier: id) { [weak self] lease in
@@ -156,7 +161,7 @@ struct RunCheckpoint: Codable, Equatable {
         } catch {
             scheduler.cancel(identifier: id)
             if checkpoint?.segmentID == id { checkpoint?.segmentID = nil }
-            backgroundStatus = "采集 / USB 执行资格未获准；本轮仅前台继续，离开即暂停"
+            backgroundStatus = "后台执行资格未获准；本轮仅前台继续，离开即暂停"
             saveOrPause()
         }
     }
@@ -168,9 +173,9 @@ struct RunCheckpoint: Codable, Equatable {
         lease = incoming; hasLease = true
         incoming.expirationHandler = { [weak self] in
             guard self?.checkpoint?.segmentID == identifier, self?.hasLease == true else { return }
-            self?.pause("采集 / USB 执行资格失效或到期；已暂停，请核对设备后手动继续")
+            self?.pause("后台执行资格失效或到期；已暂停，请核对设备后手动继续")
         }
-        backgroundStatus = "有效全屏采集 / USB 会话；每段后台最多 60 秒，未验证真机闭环"
+        backgroundStatus = "有限后台资格有效；设备工具仍需独立校验，真机能力待验证"
         incoming.report(completed: checkpoint?.milestones.count ?? 0, subtitle: "等待实际模型响应或工具结果；总步骤未知")
     }
     func setForeground(_ active: Bool) {
@@ -232,7 +237,7 @@ struct RunCheckpoint: Codable, Equatable {
         checkpoint?.pendingApproval = callID; checkpoint?.phase = .waitingApproval
         try persistOrPause()
         endSegment(success: true)
-        backgroundStatus = "等待前台确认；执行资格已暂停，无输入；采集健康检查继续"
+        backgroundStatus = "等待前台确认；执行资格已暂停；无输入，需前台确认"
     }
     func resumeApproved(callID: String, digest: String, generation: UUID) throws {
         guard ownsRun, foreground, checkpoint?.generation == generation, checkpoint?.phase == .waitingApproval,

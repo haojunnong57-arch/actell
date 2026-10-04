@@ -18,6 +18,7 @@ actor USBDeviceBridge: DeviceBridge {
         self.frames = frames; self.transport = transport; self.onLoss = onLoss
         executionContext = context
     }
+    nonisolated func cancelTransport() { executionContext?.revoke() }
     func supportsBackgroundExecution(tool: String) -> Bool { executionContext?.backgroundEnabled == true }
     func approvalContext(imageID: String) throws -> String {
         guard !stopped, image?.id == imageID else { throw AppError.stopped }

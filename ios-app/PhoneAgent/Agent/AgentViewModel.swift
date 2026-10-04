@@ -30,7 +30,8 @@ struct AgentRunServices {
     @Published private(set) var selectedConversationID: UUID?
     let sessions: ConversationStore
     let lifecycle: RunLifecycleCoordinator
-    private let captureScheduler = ScreenCaptureRunScheduler()
+    private let executionScheduler = RunExecutionScheduler()
+    private let allowSystemProcessing: Bool
     @Published private(set) var backgroundStatus = ""
     private var lifecycleSubscription: AnyCancellable?
     private var usbExecutionContext: ScreenUSBExecutionContext?
@@ -72,7 +73,8 @@ struct AgentRunServices {
         self.approvalRecords = approvalRecords ?? ApprovalRecordStore(inMemory: !loadPersistentState)
         self.liveActivities = AgentLiveActivityController(enabled: liveActivitiesEnabled ?? loadPersistentState)
         self.runServices = runServices
-        self.lifecycle = lifecycle ?? RunLifecycleFactory.make(persistent: loadPersistentState, scheduler: captureScheduler)
+        self.allowSystemProcessing = loadPersistentState
+        self.lifecycle = lifecycle ?? RunLifecycleFactory.make(persistent: loadPersistentState, scheduler: executionScheduler)
         var legacy: [TaskRecord] = []
         if loadPersistentState {
             do { let s = try TaskStore(); legacy = try s.load(); store = s; records = legacy }
@@ -144,10 +146,13 @@ struct AgentRunServices {
         usbExecutionContext?.setScene(scene)
         lifecycle.setForeground(active)
         if active { sessions.saveNow(); persist() }
-        // All established routes and idle connections retain their foreground boundary.
-        if !active, !stopping, usbExecutionContext?.backgroundEnabled != true,
-           running || listenerTask != nil || liveBridge != nil || usbClient != nil {
-            stop(message: "此路线仅限前台；本轮已中断，返回后需手动开始", interrupted: true)
+        // System CPU/network time does not authorize the legacy TLS tools.
+        if !active, usbExecutionContext == nil { bridge?.cancelTransport(); liveBridge?.cancelTransport() }
+        if !active, !stopping, !running, listenerTask != nil || liveBridge != nil || usbClient != nil {
+            stop(message: "空闲桥接已关闭；返回后需手动连接", interrupted: true)
+        }
+        if !active, running, approval != nil, !lifecycle.canAwaitApprovalInBackground {
+            stop(message: "此工具的审批需要保持前台；请重新获取截图", interrupted: true)
         }
     }
     func setProtectedDataAvailable(_ available: Bool) {
@@ -246,10 +251,10 @@ struct AgentRunServices {
         let history = sessions.history(in: conversationID)
         guard let identity = sessions.begin(in: conversationID, query: query) else { provider?.cancel(); provider = nil; return false }
         usbExecutionContext = (selectedBridge as? USBDeviceBridge)?.executionContext
-        captureScheduler.context = usbExecutionContext
+        executionScheduler.configure(context: usbExecutionContext, allowSystemProcessing: allowSystemProcessing)
         do { try lifecycle.begin(identity: identity, generation: token) }
         catch {
-            usbExecutionContext?.revoke(); usbExecutionContext = nil; captureScheduler.context = nil
+            usbExecutionContext?.revoke(); usbExecutionContext = nil; executionScheduler.configure(context: nil, allowSystemProcessing: false)
             provider?.cancel(); provider = nil
             sessions.finish(identity, phase: .blocked, summary: "无法保存运行检查点；未开始执行")
             errorMessage = "无法保存运行检查点；未开始执行"; return false
@@ -362,8 +367,9 @@ struct AgentRunServices {
         guard !stopping else { return }
         generation = UUID() // Fence late callbacks before cancelling anything.
         finishingRun = false
-        usbExecutionContext?.revoke(); usbExecutionContext = nil; captureScheduler.context = nil
+        usbExecutionContext?.revoke(); usbExecutionContext = nil; executionScheduler.configure(context: nil, allowSystemProcessing: false)
         runTask?.cancel(); watchdog?.cancel(); agent?.requestCancel(); provider?.cancel()
+        bridge?.cancelTransport(); liveBridge?.cancelTransport()
         lifecycle.stop(message: message)
         publishActivity(phase == .interrupted ? .interrupted : (phase == .blocked ? .blocked : .stopped))
         if let identity = runIdentity { invalidateApprovals(identity) }
@@ -412,7 +418,7 @@ struct AgentRunServices {
         continuation.resume(returning: true)
     }
     private func askApproval(_ request: Approval, generation token: UUID) async -> Bool {
-        guard generation == token, running, (foreground || usbExecutionContext?.backgroundEnabled == true), approvalContinuation == nil,
+        guard generation == token, running, (foreground || lifecycle.hasLease), approvalContinuation == nil,
               let identity = runIdentity else { return false }
         do {
             try lifecycle.waitForApproval(callID: request.callID ?? request.id.uuidString, generation: token)
@@ -483,7 +489,7 @@ struct AgentRunServices {
     }
     private func end(_ phase: RunPhase, result: String, publishNotice: Bool = true) {
         finishingRun = false
-        usbExecutionContext?.revoke(); usbExecutionContext = nil; captureScheduler.context = nil
+        usbExecutionContext?.revoke(); usbExecutionContext = nil; executionScheduler.configure(context: nil, allowSystemProcessing: false)
         lifecycle.finish(success: phase == .completed)
         usbClient = nil; allowCapturedScreenUpload = false; allowUSBBackgroundRun = false
         publishActivity(phase == .completed ? .completed : .blocked)
@@ -570,6 +576,6 @@ struct AgentRunServices {
     Use only screenshot, tap, drag, wait, finish. No typing, home, shell, filesystem, browser or delegation tools exist. Do not invent them.
     Do not explain private reasoning. Use concise public action purposes and final result summaries only.
     After inspecting a fresh screenshot that supports completion, call finish with a short outcome and any uncertainty. If blocked, say what the user must do; never claim completion merely because a command was delivered.
-    Only an explicitly enabled ScreenCaptureKit + USB route can attempt bounded background execution with a valid capture and connection. Other routes stop outside foreground. Every input requires foreground human approval, then a matching fresh target screen. Never promise indefinite background execution or replay interrupted actions.
+    Only an explicitly enabled ScreenCaptureKit + USB route can attempt bounded background execution with a valid capture and connection. Other routes may obtain finite system CPU/network time, but legacy device tools still require foreground. Every input requires foreground human approval, then a matching fresh target screen. Never promise indefinite background execution or replay interrupted actions.
     """
 }

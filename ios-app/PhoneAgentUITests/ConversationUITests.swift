@@ -133,6 +133,21 @@ import XCTest
         app.buttons["sendMessage"].tap()
         XCTAssertTrue(app.buttons["approveTool"].waitForExistence(timeout: 10))
     }
+    func testApprovalRemainsPendingAfterReturningFromHome() {
+        let app = launch(demoHistory: true); pendingDemo(app)
+        let status = app.staticTexts["backgroundRunStatus"]
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        XCTAssertTrue(status.label.contains("后台片段已结束"))
+        capture("background-segment-ended-waiting-approval")
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(app.buttons["approveTool"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["等待确认"].exists)
+        XCTAssertFalse(app.staticTexts["已结束"].exists)
+        app.buttons["rejectTool"].tap()
+        XCTAssertTrue(app.staticTexts["已拒绝"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["approveTool"].exists)
+    }
     func testDenialEndsRoundWithoutExecutingAction() {
         let app = launch(demoHistory: true); pendingDemo(app)
         app.buttons["rejectTool"].tap()

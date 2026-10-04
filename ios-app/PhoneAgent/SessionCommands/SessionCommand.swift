@@ -50,7 +50,7 @@ enum SessionPublicStatus: String, Sendable {
         switch self {
         case .idle: return String(localized: "No task is currently running.")
         case .pendingConfirmation: return String(localized: "A task draft is waiting for your confirmation in PhoneAgent. It has not started.")
-        case .running: return String(localized: "A task is running in the foreground.")
+        case .running: return String(localized: "A task is running.")
         case .awaitingApproval: return String(localized: "A task is waiting for your approval in PhoneAgent.")
         case .stopping: return String(localized: "The current task is stopping.")
         }

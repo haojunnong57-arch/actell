@@ -43,6 +43,8 @@ assert 'sec_protocol_options_set_verify_block' not in bridge
 assert 'NWParameters(tls: tls, tcp: tcp)' in bridge
 assert 'guard await approve' in tools and 'image = nil' in tools
 assert 'requiresConfirmationEvenWhenAutonomous' not in tools # app-owned gate cannot be waived
-assert 'UIBackgroundModes' not in (ROOT / 'project.yml').read_text()
+background_plist = plistlib.loads((ROOT / 'PhoneAgent/Info.plist').read_bytes())
+assert background_plist['UIBackgroundModes'] == ['screen-capture', 'processing']
+assert background_plist['BGTaskSchedulerPermittedIdentifiers'] == ['$(PRODUCT_BUNDLE_IDENTIFIER).backgroundRun.*']
 print(f'PASS: {len(files)} Swift files parsed; project/plist/pins and source guardrail assertions checked')
 print('This script does not perform Swift type-check, dependency resolution, Xcode, XCTest, Simulator, or device/TLS tests.')

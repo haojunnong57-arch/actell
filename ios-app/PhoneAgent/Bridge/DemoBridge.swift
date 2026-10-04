@@ -5,6 +5,10 @@ actor DemoBridge: DeviceBridge {
     private var count = 0
     private var stopped = false
     private var currentID: String?
+    func approvalContext(imageID: String) throws -> String {
+        guard !stopped, currentID == imageID else { throw AppError.stopped }
+        return "synthetic-demo"
+    }
     func screenshot() async throws -> FrameImage {
         try Task.checkCancellation(); guard !stopped else { throw AppError.stopped }
         let value = count

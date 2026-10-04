@@ -32,6 +32,7 @@ struct ToolPresentation {
     var activityNavigation: ActivityNavigation? { model.activityNavigation.flatMap { $0.route.sessionID == sessionID ? $0 : nil } }
     var session: AgentConversation? { model.sessions.conversation(sessionID) }
     var activeRun: RunIdentity? { model.currentRun.flatMap { $0.conversationID == sessionID ? $0 : nil } }
+    var backgroundStatus: String { model.backgroundStatus }
     var running: Bool { activeRun != nil && model.running }
     var stopping: Bool { model.stopping }
     var status: String { running ? model.status : session?.phase.label ?? "" }

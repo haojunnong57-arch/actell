@@ -207,3 +207,116 @@ import LLMProviderKit
         c.stop(message: "cleanup")
     }
 }
+
+private actor BackgroundSpyBridge: DeviceBridge {
+    private(set) var sent = 0
+    private(set) var closed = false
+    private var deviceSession = "fake-device-session"
+    func changeDevice() { deviceSession = "different-device" }
+    let uncertain: Bool
+    init(uncertain: Bool = false) { self.uncertain = uncertain }
+    func supportsBackgroundExecution(tool: String) async -> Bool { true }
+    func approvalContext(imageID: String) async throws -> String { deviceSession }
+    func screenshot() async throws -> FrameImage { .init(id: "fresh", png: Data(), width: 390, height: 844, capturedAt: Date(), isDemo: true) }
+    func tap(x: Int, y: Int, imageID: String) async throws { sent += 1; if uncertain { throw AppError.unknownOutcome } }
+    func drag(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMS: Int, imageID: String) async throws { sent += 1 }
+    func stop() async { closed = true }
+}
+private struct DisconnectedModel: LLMProvider {
+    static let name = "disconnected-test-model"
+    let configuration = LLMProviderConfiguration(name: Self.name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
+    func complete(_ request: LLMRequest) async throws -> LLMResponse {
+        try await Task.sleep(nanoseconds: 100_000_000)
+        throw LLMError.invalidRequest("测试模型网络断开；没有重试")
+    }
+    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do { _ = try await complete(request); continuation.finish() }
+                catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+@MainActor final class BackgroundRunIntegrationTests: XCTestCase {
+    private func waitUntil(_ condition: @escaping () -> Bool) async throws {
+        for _ in 0..<150 {
+            if condition() { return }
+            try await Task.sleep(nanoseconds: 40_000_000)
+        }
+        throw AppError.timeout
+    }
+    func testRealAgentLoopWaitingApprovalSurvivesBackgroundAndDenialNeverSends() async throws {
+        let scheduler = FakeScheduler(), bridge = BackgroundSpyBridge()
+        let c = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+                                  runServices: .init(provider: DemoProvider(), bridge: bridge), lifecycle: c)
+        model.start(); let lease = scheduler.grant()
+        try await waitUntil { model.approval != nil }
+        XCTAssertEqual(c.checkpoint?.phase, .waitingApproval); XCTAssertEqual(lease.completions, [true])
+        model.setForeground(false); model.approve(true)
+        XCTAssertNotNil(model.approval); XCTAssertEqual(scheduler.identifiers.count, 1)
+        model.setForeground(true); model.approve(false)
+        try await waitUntil { !model.stopping }
+        let sent = await bridge.sent, closed = await bridge.closed
+        XCTAssertEqual(sent, 0); XCTAssertTrue(closed)
+        XCTAssertEqual(c.checkpoint?.phase, .stopped)
+    }
+    func testUnknownDispatchStopsRealAgentAndFreshRunDoesNotReplay() async throws {
+        let scheduler = FakeScheduler(), bridge = BackgroundSpyBridge(uncertain: true)
+        let c = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+                                  runServices: .init(provider: DemoProvider(), bridge: bridge), lifecycle: c)
+        model.start(); _ = scheduler.grant()
+        try await waitUntil { model.approval != nil }; model.approve(true)
+        try await waitUntil { !model.running && !model.stopping }
+        XCTAssertEqual(c.checkpoint?.phase, .paused)
+        XCTAssertEqual(c.checkpoint?.tools.last?.delivery, .outcomeUnknown)
+        XCTAssertEqual(scheduler.identifiers.count, 2)
+        let sent = await bridge.sent, closed = await bridge.closed
+        XCTAssertEqual(sent, 1); XCTAssertTrue(closed)
+        model.setForeground(false); model.setForeground(true)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let stillSent = await bridge.sent; XCTAssertEqual(stillSent, 1)
+    }
+    func testModelNetworkLossPausesWithoutProgressAndClosesTransport() async throws {
+        let scheduler = FakeScheduler(), bridge = BackgroundSpyBridge()
+        let c = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+                                  runServices: .init(provider: DisconnectedModel(), bridge: bridge), lifecycle: c)
+        model.start(); let lease = scheduler.grant(); model.setForeground(false)
+        try await waitUntil { !model.running && !model.stopping }
+        XCTAssertEqual(c.checkpoint?.phase, .paused)
+        XCTAssertEqual(c.checkpoint?.milestones.count, 0)
+        XCTAssertEqual(lease.completions, [false])
+        let sent = await bridge.sent, closed = await bridge.closed
+        XCTAssertEqual(sent, 0); XCTAssertTrue(closed)
+    }
+    func testApprovalRevalidatesDeviceBeforeNewSegmentOrInput() async throws {
+        let scheduler = FakeScheduler(), bridge = BackgroundSpyBridge()
+        let c = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+                                  runServices: .init(provider: DemoProvider(), bridge: bridge), lifecycle: c)
+        model.start(); _ = scheduler.grant()
+        try await waitUntil { model.approval != nil }
+        await bridge.changeDevice(); model.approve(true)
+        try await waitUntil { !model.running && !model.stopping }
+        let sent = await bridge.sent
+        XCTAssertEqual(sent, 0); XCTAssertEqual(scheduler.identifiers.count, 1)
+        XCTAssertEqual(c.checkpoint?.phase, .paused)
+    }
+    func testExpirationClosesFakeTransportAndCancelsModel() async throws {
+        let scheduler = FakeScheduler(), bridge = BackgroundSpyBridge()
+        let c = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+                                  runServices: .init(provider: DemoProvider(), bridge: bridge), lifecycle: c)
+        model.start(); let lease = scheduler.grant()
+        model.setForeground(false); XCTAssertTrue(model.running)
+        lease.expirationHandler?()
+        try await waitUntil { !model.running && !model.stopping }
+        let closed = await bridge.closed, sent = await bridge.sent
+        XCTAssertTrue(closed); XCTAssertEqual(sent, 0); XCTAssertEqual(lease.completions, [false])
+        XCTAssertEqual(model.activeRecord?.phase, .interrupted)
+    }
+}

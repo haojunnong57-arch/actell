@@ -12,6 +12,14 @@ final class ModelStreamTests: XCTestCase {
         let json = try JSONSerialization.data(withJSONObject: ["id": "test", "choices": [choice]])
         return "data: " + String(decoding: json, as: UTF8.self)
     }
+    func testSSEHeartbeatsDoNotBecomeProgressOrACompletedResponse() throws {
+        var decoder = ModelStreamDecoder()
+        for value in [": keep-alive", ": ping", "", "event: heartbeat"] {
+            XCTAssertTrue(try decoder.consume(line: value, request: request, encoder: encoder).isEmpty)
+        }
+        XCTAssertFalse(decoder.sawDone)
+        XCTAssertThrowsError(try decoder.finish())
+    }
     func testRealTextDeltasAndFragmentedToolAssembly() throws {
         var decoder = ModelStreamDecoder()
         let chunks = try decoder.consume(line: line(["content": "你好", "reasoning_content": "private reasoning"]), request: request, encoder: encoder)
