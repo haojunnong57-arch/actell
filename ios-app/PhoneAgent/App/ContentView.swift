@@ -4,10 +4,13 @@ struct ContentView: View {
     @ObservedObject var model: AgentViewModel
     @ObservedObject var statusPiP: StatusPiPController
     @ObservedObject private var sessions: ConversationStore
+    let commands: SessionCommandService
+    @Environment(\.scenePhase) private var scenePhase
     @State private var path: [UUID] = []
     @State private var search = ""
     @State private var settingsOpen = false
-    init(model: AgentViewModel, statusPiP: StatusPiPController) {
+    init(model: AgentViewModel, statusPiP: StatusPiPController, commands: SessionCommandService) {
+        self.commands = commands
         self.model = model; self.statusPiP = statusPiP; self.sessions = model.sessions
     }
     private var visible: [AgentConversation] {
@@ -67,9 +70,21 @@ struct ContentView: View {
                 ConversationView(model: model, conversationID: id) {
                     if model.running { model.stop(message: "打开设置，本轮执行已中断", interrupted: true) }
                     settingsOpen = true
-                }
+                }.id(id)
             }
             .sheet(isPresented: $settingsOpen) { SettingsView(model: model, statusPiP: statusPiP) }
+        }
+        .onChange(of: commands.pendingRoute, initial: true) { _, _ in routePreparedTask() }
+        .onChange(of: model.running) { _, _ in routePreparedTask() }
+        .onChange(of: model.stopping) { _, _ in routePreparedTask() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { routePreparedTask() } }
+        .onChange(of: settingsOpen) { _, open in if !open { routePreparedTask() } }
+    }
+    private func routePreparedTask() {
+        guard scenePhase == .active, !settingsOpen, let id = commands.pendingRoute,
+              path.last != id else { return }
+        if case .open(let destination) = try? commands.perform(SessionCommand(.open, sessionID: id, source: .app)) {
+            path = [destination]
         }
     }
     private func createConversation() {

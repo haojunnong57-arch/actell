@@ -30,6 +30,7 @@ struct AgentRunServices {
     private var activeID: UUID?
     private var generation = UUID()
     private var runTask: Task<Void, Never>?
+    var isListening: Bool { listenerTask != nil }
     private var listenerTask: Task<Void, Never>?
     private var listenerGeneration = UUID()
     private var foreground = true

@@ -30,7 +30,18 @@ struct ConversationView: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 12) {
-                                if session.messages.isEmpty { welcome(session.mode) }
+                                if presentation.awaitingTaskConfirmation {
+                                    VStack(alignment: .leading, spacing: 12) {
+                                        Label("Siri · 待确认", systemImage: "waveform").font(.headline)
+                                        Text("任务已保存，尚未开始。请核对或编辑下方识别文本，再点“确认开始”。确认后会发送给当前模型；设备动作仍需逐次批准。")
+                                            .foregroundStyle(.secondary)
+                                        Text(session.draft).textSelection(.enabled).accessibilityIdentifier("siriRecognizedTask")
+                                        Button("取消这份草稿", role: .cancel) {
+                                            presentation.dismissPreparedTask()
+                                            if !presentation.awaitingTaskConfirmation { draft = "" }
+                                        }.accessibilityIdentifier("dismissSiriTask")
+                                    }.padding(.vertical, 20)
+                                } else if session.messages.isEmpty { welcome(session.mode) }
                                 ForEach(session.messages) { message in
                                     messageView(message).id(message.id)
                                 }
@@ -117,6 +128,10 @@ struct ConversationView: View {
                 if running {
                     Button { if let run = presentation.activeRun { presentation.dispatch(.stop(run: run)) } } label: { Image(systemName: "stop.fill").font(.body.bold()).frame(width: 38, height: 38).background(Color(uiColor: .label), in: Circle()).foregroundStyle(Color(uiColor: .systemBackground)) }
                         .accessibilityLabel("停止执行").accessibilityIdentifier("stopRun")
+                } else if presentation.awaitingTaskConfirmation {
+                    Button("确认开始") { sendConfirmedTask() }
+                        .buttonStyle(.borderedProminent).disabled(!canSend)
+                        .accessibilityIdentifier("confirmSiriTask")
                 } else {
                     Button { send() } label: { Image(systemName: "arrow.up").font(.body.bold()).frame(width: 38, height: 38).background(.blue, in: Circle()).foregroundStyle(.white) }
                         .disabled(!canSend)
@@ -140,6 +155,10 @@ struct ConversationView: View {
         }
     }
     private func send() {
+        guard !presentation.awaitingTaskConfirmation else { return }
+        sendConfirmedTask()
+    }
+    private func sendConfirmedTask() {
         guard canSend else { return }
         // The Send button and keyboard submission both authorize this request.
         if presentation.dispatch(.send(sessionID: presentation.sessionID, text: draft, cloudConsent: true)) {

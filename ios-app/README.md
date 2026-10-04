@@ -79,3 +79,7 @@ python3 scripts/test_contract.py
 # 使用单独的 venv / 环境安装 scripts/requirements-qa.txt 后：
 python3 scripts/check_source.py
 ```
+
+## Siri 任务入口
+
+通过“用 PhoneAgent 创建任务”保存待确认草稿，回到新会话核对并点击“确认开始”。支持概括状态查询和停止当前运行。方案、启动方式与集成点见 [SIRI-ENTRY.md](docs/SIRI-ENTRY.md)，验证边界见 [SIRI-VALIDATION.md](docs/SIRI-VALIDATION.md)。

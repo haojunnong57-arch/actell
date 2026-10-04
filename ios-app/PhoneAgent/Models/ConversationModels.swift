@@ -68,11 +68,13 @@ struct AgentConversation: Identifiable, Codable, Sendable {
     var mode: RunMode
     var createdAt = Date()
     var updatedAt = Date()
+    var entry: SessionEntry?
     var draft = ""
     var phase: RunPhase = .idle
     var messages: [ChatMessage] = []
     var preview: String {
-        messages.last(where: { $0.role == .user || $0.role == .assistant })?.text ?? "开始一个新的任务或问题"
+        if entry?.state == .pendingConfirmation { return "Siri · 待确认：" + draft }
+        return messages.last(where: { $0.role == .user || $0.role == .assistant })?.text ?? "开始一个新的任务或问题"
     }
 }
 extension RunPhase {

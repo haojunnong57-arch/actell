@@ -21,7 +21,7 @@ import Combine
             var values = URLResourceValues(); values.isExcludedFromBackup = true
             try folderURL.setResourceValues(values)
             file = folder.appendingPathComponent("conversations-v1.json")
-        } catch { file = nil; warning = "会话暂时只能保存在内存中"; return }
+        } catch { file = nil; canWrite = false; warning = "会话暂时只能保存在内存中"; return }
         do {
             if let file, FileManager.default.fileExists(atPath: file.path) {
                 let data = try Data(contentsOf: file)
@@ -60,6 +60,41 @@ import Combine
         conversations.insert(conversation, at: 0); saveNow()
         return conversation.id
     }
+    /// Prepare and route are one durable record. Commit first so Siri never
+    /// reports a saved task when the archive is locked, corrupt, or full.
+    func prepare(_ command: SessionCommand, task: String) throws -> UUID {
+        let text = task.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.count <= 2_000 else { throw SessionCommandError.invalidTask }
+        if let previous = conversations.first(where: { $0.entry?.commandID == command.commandID }) {
+            guard previous.entry?.source == command.source else { throw SessionCommandError.conflictingCommand }
+            return previous.id
+        }
+        var conversation = AgentConversation(mode: .live)
+        conversation.createdAt = command.createdAt; conversation.updatedAt = command.createdAt
+        conversation.title = String(text.prefix(48)); conversation.draft = text
+        conversation.entry = SessionEntry(commandID: command.commandID, sessionID: conversation.id,
+            source: command.source, createdAt: command.createdAt, updatedAt: command.createdAt)
+        try commit([conversation] + conversations)
+        return conversation.id
+    }
+    func dismissPreparedTask(in id: UUID) throws {
+        guard let index = index(id), conversations[index].entry?.state == .pendingConfirmation else { return }
+        var next = conversations
+        next[index].entry?.state = .dismissed; next[index].entry?.routePending = false
+        next[index].entry?.updatedAt = Date(); next[index].draft = ""
+        try commit(next)
+    }
+    private func commit(_ next: [AgentConversation]) throws {
+        guard canWrite else { throw SessionCommandError.unavailableStorage }
+        do {
+            if let file {
+                let data = try JSONEncoder().encode(Archive(conversations: next))
+                guard data.count <= 64 * 1_024 * 1_024 else { throw SessionCommandError.unavailableStorage }
+                try data.write(to: file, options: [.atomic, .completeFileProtection])
+            }
+            conversations = next
+        } catch { throw SessionCommandError.unavailableStorage }
+    }
     func setDraft(_ text: String, in id: UUID) {
         guard let index = index(id) else { return }
         conversations[index].draft = String(text.prefix(2_000)); scheduleSave()
@@ -78,6 +113,12 @@ import Combine
         activeRun = identity
         if conversations[index].messages.isEmpty { conversations[index].title = String(query.prefix(48)) }
         conversations[index].phase = .running; conversations[index].draft = ""
+        if conversations[index].entry?.state == .pendingConfirmation {
+            conversations[index].entry?.state = .submitted
+            conversations[index].entry?.routePending = false
+            conversations[index].entry?.runID = identity.runID
+            conversations[index].entry?.updatedAt = Date()
+        }
         conversations[index].messages.append(ChatMessage(runID: identity.runID, role: .user, text: query))
         touch(index); saveNow()
         return identity
