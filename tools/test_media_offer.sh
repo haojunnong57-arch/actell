@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source tools/host_test_platform.sh
 mkdir -p .build/media_offer
 cc=${CC:-gcc}
 common=(-std=c11 -O1 -g -Wall -Wextra -Werror -Wconversion -Wshadow -I firmware/components/bridge_core/include)
@@ -46,7 +47,7 @@ int main(void) {
     return 0;
 }
 C
-"$cc" "${common[@]}" -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie \
+"$cc" "${common[@]}" -fsanitize=address,undefined -fno-omit-frame-pointer "${host_no_pie[@]}" \
   "$source" .build/media_offer/sanitizer.c -lz -o .build/media_offer/test_sanitized
 ASAN_OPTIONS=detect_leaks=0 .build/media_offer/test_sanitized
 printf 'Media offer: pinned byte equivalence, bounds, ASan and UBSan passed; device acceptance untested\n'

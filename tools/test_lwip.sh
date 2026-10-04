@@ -21,6 +21,8 @@ actual=$(git -C "$lwip" rev-parse HEAD)
 cc=${CC:-gcc}
 port="$lwip/contrib/ports/unix/port"
 flags=(-std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -g -O1 -Wall -Wextra -Werror -pthread -fno-omit-frame-pointer)
+# Darwin hides the upstream port's relative pthread wait under strict POSIX.
+if [[ "$(uname -s)" == Darwin ]]; then flags+=(-D_DARWIN_C_SOURCE); fi
 case ${SANITIZE:-1} in
   1|address) mode=address; flags+=(-fsanitize=address,undefined) ;;
   thread) mode=thread; flags+=(-fsanitize=thread) ;;

@@ -19,7 +19,7 @@ xpc = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = xpc
 spec.loader.exec_module(xpc)
 remote = reference_file('remotexpc.py')
-rsd_path = Path('research/pymobiledevice3/pymobiledevice3/remote/remote_service_discovery.py')
+rsd_path = reference_file('remote_service_discovery.py')
 assert hashlib.sha256(rsd_path.read_bytes()).hexdigest() == '654d4c2cdb6876d0e0e0035e07ffeaa0b2db2e1d576c4b19179823d9b48a32cf'
 
 def methods(path, class_name, names):

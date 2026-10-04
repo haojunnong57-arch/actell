@@ -11,6 +11,10 @@ ${CC:-gcc} "${flags[@]}" -std=c11 -Wall -Wextra -Werror -Wconversion -Wshadow -f
  -o .build/libbridge_requests.so
 if [[ "${SANITIZE:-0}" == 1 ]]; then
   export ASAN_OPTIONS=detect_leaks=0
-  export LD_PRELOAD="$(${CC:-gcc} -print-file-name=libasan.so)${LD_PRELOAD:+:$LD_PRELOAD}"
+  if [[ "$(uname -s)" == Darwin ]]; then
+    export DYLD_INSERT_LIBRARIES="$(${CC:-gcc} -print-file-name=libclang_rt.asan_osx_dynamic.dylib)${DYLD_INSERT_LIBRARIES:+:$DYLD_INSERT_LIBRARIES}"
+  else
+    export LD_PRELOAD="$(${CC:-gcc} -print-file-name=libasan.so)${LD_PRELOAD:+:$LD_PRELOAD}"
+  fi
 fi
 ${PYTHON:-python3} tests/test_requests.py "$PWD/.build/libbridge_requests.so"

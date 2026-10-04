@@ -46,7 +46,7 @@ static void sim_reset(bool available) {
 }
 static sim_transfer *sim_find(usb_transfer_t *t) {
     for(size_t i=0;i<16;i++) if(sim.transfers[i].t==t) return &sim.transfers[i];
-    assert(!"unowned transfer");return NULL;
+    assert(0 && "unowned transfer");return NULL;
 }
 static void sim_check_clean(void) {
     assert(!sim.installed && !sim.client && !sim.claimed && !sim.opened);
@@ -154,7 +154,7 @@ esp_err_t usb_host_transfer_alloc(size_t bytes,int iso,usb_transfer_t **out) {
     for(size_t i=0;i<16;i++)if(!sim.transfers[i].t){
         usb_transfer_t *t=calloc(1,sizeof *t);assert(t);t->data_buffer=calloc(1,bytes);assert(t->data_buffer);t->data_buffer_size=bytes;
         sim.transfers[i].t=t;*out=t;return ESP_OK;
-    }assert(!"too many transfers");return ESP_FAIL;
+    }assert(0 && "too many transfers");return ESP_FAIL;
 }
 esp_err_t usb_host_transfer_free(usb_transfer_t *t) {
     sim_transfer *q=sim_find(t);assert(!q->inflight && !q->completion);

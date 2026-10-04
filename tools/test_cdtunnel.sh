@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source tools/host_test_platform.sh
 mkdir -p .build/cdtunnel-fixtures
 "${PYTHON:-python3}" - <<'PY'
 from pathlib import Path
@@ -134,7 +135,7 @@ print(f'Generated {len(rows)} CDTunnel schema fixtures')
 PY
 cc=${CC:-gcc}
 "$cc" -std=c11 -O1 -g -Wall -Wextra -Werror -Wconversion -Wshadow \
-  -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
+  -fsanitize=address,undefined -fno-omit-frame-pointer "${host_no_pie[@]}" \
   -I firmware/components/bridge_core/include -I .build/cdtunnel-fixtures \
   firmware/components/bridge_core/bridge_io.c \
   firmware/components/bridge_core/bridge_cdtunnel.c \

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source tools/host_test_platform.sh
 mkdir -p .build/operations-fixtures
 "${PYTHON:-python3}" - <<'PY'
 import importlib.util,sys,struct,zlib
@@ -15,7 +16,7 @@ def decl(name,data):return 'static const uint8_t '+name+'[]={'+','.join(map(str,
 Path('.build/operations-fixtures/operations_fixtures.h').write_text(decl('png_bytes',png)+decl('capture_reply',body))
 PY
 ${CC:-gcc} -std=c11 -g -O1 -Wall -Wextra -Werror -Wconversion -Wshadow \
- -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
+ -fsanitize=address,undefined -fno-omit-frame-pointer "${host_no_pie[@]}" \
  -I firmware/components/bridge_core/include -I .build/operations-fixtures \
  tests/test_operations.c firmware/components/bridge_core/{bridge_io,bridge_xpc,bridge_hid,bridge_requests,bridge_screenshot_stream,bridge_remotexpc,bridge_operations}.c \
  -o .build/test_operations
