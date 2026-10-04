@@ -23,10 +23,11 @@ struct SettingsView: View {
                         .font(.caption)
                     Button("删除当前地址的 API 密钥", role: .destructive) { model.deleteProviderKey() }
                 }
-                Section("实验桥接 · 独立 TLS-PSK") {
+                Section("实验桥接 · 独立 PSK") {
                     SecureField("32 字节随机 PSK 的 64 位十六进制", text: $psk).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Text("由你通过可信渠道在开发桥接设备中配置同一随机 PSK。不是 Apple 配对文件、证书或设备密码。App 不自动生成或传出密钥。TCP 端口 28765；固件 v0.3 尚不兼容。")
+                    Text("通过可信渠道给 USB Device 固件配置相同 PSK。USB TCP 28766 使用 HMAC 认证；旧 Host TLS 入口使用 28765。不是 Apple 配对文件、证书或设备密码。App 不自动生成或传出密钥。")
                         .font(.caption)
+                    Button("仅保存桥接 PSK") { model.saveUSBPSK(psk); psk = "" }.disabled(psk.isEmpty || model.running || model.stopping)
                     Button("删除桥接 PSK", role: .destructive) { model.deleteBridgeKey() }
                 }
                 Section("运行限制") {
@@ -35,7 +36,7 @@ struct SettingsView: View {
                         .font(.caption)
                 }
                 Section("本地记录") {
-                    Text("会话保留最近 200 条消息与工具记录，包含用户消息和模型公开回复。截图不写入磁盘，会话文件开启完整文件保护并排除备份。打开历史不会自动执行工具；锁屏 / 离开前台即停。")
+                    Text("会话保留最近 200 条消息与工具记录，包含用户消息和模型公开回复。截图不写入磁盘，会话文件开启完整文件保护并排除备份。打开历史不会自动执行工具；锁屏即停。只有本次明确启用的全屏采集 / USB 路线可在切换 App 后有限继续，其他路线离开前台即停。")
                         .font(.caption)
                     Button("清空本地会话与任务记录", role: .destructive) { clear = true }.disabled(model.running || model.stopping)
                 }

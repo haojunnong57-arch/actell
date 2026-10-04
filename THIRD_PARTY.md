@@ -86,3 +86,7 @@ Additional research-only cross-reference: idevice
 d32c8189c51c2789496b0768039419c3705498c3. No implementation copied or vendored.
 Its display-stream client also uses global stopAll, not a verified stream-token
 extraction rule.
+
+## USB Device 实验工程
+
+`firmware-device/main/idf_component.yml` 与锁文件固定 esp_tinyusb 2.2.0（Apache-2.0）及 TinyUSB 0.21.0~2（MIT）；许可证副本位于 `firmware-device/licenses/`。组件通过 Espressif 官方 registry 下载到忽略的 managed_components，没有下载商业控制器固件。ESP-IDF 5.5.5、lwIP 和 mbedTLS 沿用官方工具链及各自许可。宿主机协议夹具用系统 CommonCrypto 替换 mbedTLS API 以便测试，生产代码不依赖 CommonCrypto。

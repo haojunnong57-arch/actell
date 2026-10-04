@@ -91,7 +91,7 @@ def generate():
                         LD_RUNPATH_SEARCH_PATHS=["$(inherited)", "@executable_path/Frameworks"])
         dependencies = []
         if name == "PhoneAgent":
-            settings.update(INFOPLIST_KEY_CFBundleDisplayName="Phone Agent",
+            settings.update(INFOPLIST_FILE="PhoneAgent/Info.plist", INFOPLIST_KEY_CFBundleDisplayName="Phone Agent",
                             INFOPLIST_KEY_NSLocalNetworkUsageDescription="Connect to your explicitly paired development bridge while this app is open.",
                             INFOPLIST_KEY_UIApplicationSceneManifest_Generation="YES",
                             INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents="YES",
@@ -108,7 +108,7 @@ def generate():
                            buildPhases=phases, buildRules=[], dependencies=dependencies, packageProductDependencies=package_products))
     products_group = add("Products", "PBXGroup", name="Products", children=products, sourceTree="<group>")
     main_group = add("RootGroup", "PBXGroup", children=groups + [products_group], sourceTree="<group>")
-    common = dict(SDKROOT="iphoneos", IPHONEOS_DEPLOYMENT_TARGET="17.0", SWIFT_VERSION="5.0", SWIFT_STRICT_CONCURRENCY="complete",
+    common = dict(SDKROOT="iphoneos", IPHONEOS_DEPLOYMENT_TARGET="27.0", SWIFT_VERSION="5.0", SWIFT_STRICT_CONCURRENCY="complete",
                   CLANG_ENABLE_MODULES="YES", CLANG_ENABLE_OBJC_ARC="YES", GCC_C_LANGUAGE_STANDARD="gnu17")
     project = add("Project", "PBXProject", attributes=dict(LastUpgradeCheck="2700", BuildIndependentTargetsInParallel="YES"),
                   buildConfigurationList=configs("Project", common), compatibilityVersion="Xcode 14.0", developmentRegion="en",

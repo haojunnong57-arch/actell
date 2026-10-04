@@ -17,7 +17,7 @@ struct ControlDebugView: View {
                     }
                     Text(model.status).font(.subheadline).accessibilityLabel("当前状态：\(model.status)").accessibilityIdentifier("debugStatus")
                     Picker("运行模式", selection: $model.mode) { ForEach(RunMode.allCases) { Text($0.label).tag($0) } }.pickerStyle(.segmented).disabled(model.running || model.stopping)
-                    if model.mode == .live { bridgeCard }
+                    if model.mode == .live { USBCapturePanel(model: model, capture: model.capture); bridgeCard }
                     VStack(alignment: .leading, spacing: 10) {
                         Text("任务").font(.headline)
                         TextEditor(text: $model.goal).frame(minHeight: 95).padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 12)).disabled(model.running || model.stopping).accessibilityLabel("任务输入")
@@ -73,7 +73,7 @@ struct ControlDebugView: View {
     private var bridgeCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(model.bridgeStatus).font(.caption)
-            Text("ESP32 v0.3 未实现 App 通道；本入口是待联调的 TLS-PSK 接口，不代表设备已可控。")
+            Text("旧 USB Host 方案的实验 TLS-PSK 入口；Device NCM 方案使用上方连接按钮。")
                 .font(.caption).foregroundStyle(.orange)
             HStack { Button("开始监听") { model.listen() }; Button("断开") { model.disconnect() } }.buttonStyle(.bordered).disabled(model.running || model.stopping)
         }.padding(12).background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
@@ -106,5 +106,29 @@ struct ControlDebugView: View {
     private func requestStart(_ resume: Bool) {
         if model.mode == .live || (resume && model.activeRecord?.mode == .live) { resumeAfterConsent = resume; cloudConsent = true }
         else { model.start(resuming: resume) }
+    }
+}
+
+private struct USBCapturePanel: View {
+    @ObservedObject var model: AgentViewModel
+    @ObservedObject var capture: ScreenCaptureController
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("iOS 27 · USB Device").font(.headline)
+            Text(capture.status).font(.caption)
+            HStack {
+                Button("授权全屏采集") { capture.present() }.disabled(capture.active || !capture.isSupported || model.running || model.stopping).accessibilityIdentifier("startScreenCapture")
+                Button("停止采集", role: .destructive) { model.stopCapture() }
+            }.buttonStyle(.bordered)
+            Button("仅在本机预览截图") { model.previewCapture() }.disabled(!capture.active || model.running || model.stopping)
+            Button("连接 USB NCM") { model.connectUSB() }.disabled(model.running || model.stopping).accessibilityIdentifier("connectUSBNCM")
+            Toggle("允许本次 Agent 运行发送全屏截图到模型", isOn: $model.allowCapturedScreenUpload).disabled(model.running || model.stopping).accessibilityIdentifier("screenUploadConsent")
+            Toggle("允许本次采集 / USB 任务切换 App 继续", isOn: $model.allowUSBBackgroundRun).disabled(model.running || model.stopping).accessibilityIdentifier("usbBackgroundConsent")
+            Text("启用后，请开始任务并在 15 秒内切到目标 App。每次动作仍需返回前台批准，再在 15 秒内切回目标画面；画面变化会阻止发送。每段后台最多 60 秒，总计 5 分钟。锁屏、停止采集、2 秒无新帧、USB 失联或到期都会停止。真机闭环尚待验证。")
+                .font(.caption).foregroundStyle(.secondary)
+            Text(model.backgroundStatus).font(.caption)
+            Text("先在 iPhone 的 USB 以太网设置中使用 192.168.7.2 / 255.255.255.0，路由器和 DNS 留空。采集授权不会自动发送图像；预览只在本机显示。")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 }

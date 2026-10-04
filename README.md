@@ -1,3 +1,5 @@
+> **独立 USB Device 实验分支**：本分支从 `b372438` 新增 iOS 27 ScreenCaptureKit + 无无线 NCM/HID 路径，源码位于 `ios-app/` 和 `firmware-device/`。实际编译与测试、未验证真机项见 [USB Device 验证记录](docs/usb-device/VALIDATION.md)，架构见 [设计说明](docs/usb-device/ARCHITECTURE.md)。下文原 Host 方案内容保留作历史基线。本分支尚未烧录或成功控制 iPhone。
+
 # ESP32 控制 iPhone：源码与方案检查点
 
 这里集中保存 ESP32-S3 固件 v0.3 和配套 Phone Agent iOS 源码候选版。**两份工程尚未完成联调，也没有实体 ESP32-S3 / iPhone 全链路成功记录。** `../app-only` 使用其他方案，独立维护，本次未修改。
