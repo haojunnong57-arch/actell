@@ -17,6 +17,20 @@
 
 当前主线提交、快进结果、各来源最终状态及后台分支归档参见 [交接记录](handoff.json)。
 
+## 旧后台分支退役与恢复
+
+旧后台源码已完整合并，通用能力和回归测试已复用。相关任务处于 idle；删除前再次核对 HEAD、干净状态、合并祖先关系及归档摘要。已使用不带 force 的 `git worktree remove` 删除 `with-esp-background-runs`，并用 `git branch -d` 删除 `feature/background-runs`。其他 feature 工作树保留。
+
+恢复点为 `archive/background-runs-20261004`，指向 `2509d7098fc8a3af4c62bd8fc20e911df4aa4933`。完整归档位于 `/Users/developer/Developer/AI/ios-use/worktree-archives/background-runs-20261004.tar.gz`，330,080,348 bytes，保留忽略的 DerivedData 等构建输出；9,013 个文件/链接均与原工作树逐项核对。见 [归档哈希](background-archive.json)。没有强删未提交内容。
+
+需要恢复源码时，在主仓库运行：
+
+```sh
+git worktree add -b feature/background-runs ../with-esp-background-runs archive/background-runs-20261004
+```
+
+需要历史构建产物时，先将 tar 解压到新的临时目录，再选择性复制 `ios-app/DerivedData`；不要用归档中的旧 `.git` 指针覆盖新 worktree 的 `.git`。历史 DerivedData 仅作证据，新代码仍应重新构建。
+
 ## 冲突处理与复用
 
 - `AgentViewModel` 仍是 Agent、审批、连接与停止的所有者。`PhoneAgentRuntime.shared` 给 App 和 App Intents 提供同一 model、ConversationStore、SessionCommandService。未创建第二个后台 Agent。
