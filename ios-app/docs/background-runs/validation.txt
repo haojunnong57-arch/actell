@@ -1,0 +1,47 @@
+Background runs validation — 2026-10-04
+Baseline: b3724382d5161555f0130fa984f72f251e7a07d8
+Branch: feature/background-runs
+Workspace: /Users/developer/Developer/AI/ios-use/with-esp-background-runs
+Xcode: 27.0 (27A266a), Swift 5 language mode, complete concurrency checking
+Simulator: iPhone 17, iOS 27.0, 4105EC0E-1638-46A6-9E87-FB57B4A3E739
+Validation bundle: com.ja1chen.PhoneAgent.BackgroundValidation
+Signing: CODE_SIGNING_ALLOWED=NO; no device installation or account resource changes
+
+FINAL BUILD + UNIT TESTS: PASS, 63 tests, 0 failures.
+Includes 12 RunLifecycleTests, 5 BackgroundRunIntegrationTests and 5 ModelStreamTests.
+Other existing test suites also passed.
+Command: ios-app/scripts/test_background_runs.sh 4105EC0E-1638-46A6-9E87-FB57B4A3E739
+Raw local evidence: ios-app/.build/background-runs/run.kFsPos/tests.log
+Result bundle: ios-app/.build/background-runs/run.kFsPos/Tests.xcresult
+
+FULL UI REGRESSION: PASS, 9 tests, 0 failures (153.012 seconds).
+Raw evidence: /tmp/background-runs-edit/ui-tests.log
+Result bundle: /tmp/background-runs-edit/ui-tests.xcresult
+TARGETED RETURN/APPROVAL/DENIAL UI RECHECK: PASS, 1 test, 0 failures (21.279 seconds).
+Raw evidence: /tmp/background-runs-edit/ui-delivery.log
+Result bundle: /tmp/background-runs-edit/ui-delivery.xcresult
+UI coverage uses the offline foreground-only scheduler and synthetic image, not a real OS lease.
+The final later TLS-only cancellation-state guard was compiled and covered by unit regression;
+it does not participate in this offline UI fixture.
+
+CONFIG / SOURCE CHECKS: PASS.
+Built Info.plist BGTaskSchedulerPermittedIdentifiers:
+  [com.ja1chen.PhoneAgent.BackgroundValidation.backgroundRun.*]
+Built Info.plist UIBackgroundModes: [processing]
+No audio/GPU/APNs/AppGroups entitlement was added.
+Keychain wrapper restored from committed source archive; SHA256 matches SOURCE_MANIFEST:
+  0702d14580a628524801731819608c3f5e325dcce9c7165396fd0ef13ffcfdd2
+bash -n scripts/test_background_runs.sh: PASS
+Git diff --check: PASS
+Main repository HEAD and status were rechecked without modification.
+
+Warnings retained: existing Swift 6-mode TLS continuation/SafetyTests diagnostics;
+SwiftUI state-update warning during UI testing; no AppIntents metadata dependency.
+Earlier direct xcodebuild UI runs reported a simctl diagnostic-collection error because
+system xcode-select points to CLT, but the test cases and xcodebuild result were successful.
+The new script exports DEVELOPER_DIR and its final unit run succeeds without that collection error.
+
+UNVERIFIED: real BGContinuedProcessingTask grant/expiration/system UI, indeterminate Progress
+presentation, free-account signing, lock screen execution, real model network, ESP App TLS backend,
+remote screenshots/privacy boundaries and end-to-end same-phone background control.
+No merger, push, physical-device install, flashing, or credential/account resource registration.

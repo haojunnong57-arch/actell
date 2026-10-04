@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Combine
 import SwiftAgentKit
 import LLMProviderKit
 
@@ -24,6 +25,9 @@ struct AgentRunServices {
     @Published var storageWarning: String?
     @Published private(set) var selectedConversationID: UUID?
     let sessions: ConversationStore
+    let lifecycle: RunLifecycleCoordinator
+    @Published private(set) var backgroundStatus = ""
+    private var lifecycleSubscription: AnyCancellable?
     private var runIdentity: RunIdentity?
     var currentRun: RunIdentity? { runIdentity }
     private var store: TaskStore?
@@ -45,8 +49,9 @@ struct AgentRunServices {
 
     var activeRecord: TaskRecord? { records.first(where: { $0.id == activeID }) ?? records.first }
     var canResume: Bool { !running && !stopping && [.stopped, .interrupted, .blocked].contains(activeRecord?.phase ?? .idle) }
-    init(sessions: ConversationStore? = nil, loadPersistentState: Bool = true, runServices: AgentRunServices? = nil) {
+    init(sessions: ConversationStore? = nil, loadPersistentState: Bool = true, runServices: AgentRunServices? = nil, lifecycle: RunLifecycleCoordinator? = nil) {
         self.runServices = runServices
+        self.lifecycle = lifecycle ?? RunLifecycleFactory.make(persistent: loadPersistentState)
         var legacy: [TaskRecord] = []
         if loadPersistentState {
             do { let s = try TaskStore(); legacy = try s.load(); store = s; records = legacy }
@@ -54,6 +59,11 @@ struct AgentRunServices {
         }
         self.sessions = sessions ?? ConversationStore(legacy: legacy)
         if loadPersistentState, let data = UserDefaults.standard.data(forKey: "providerSettings"), let saved = try? JSONDecoder().decode(ProviderSettings.self, from: data) { settings = saved }
+        self.lifecycle.onPause = { [weak self] message in self?.cancelRun(message: message, phase: .interrupted) }
+        lifecycleSubscription = self.lifecycle.$backgroundStatus.sink { [weak self] in self?.backgroundStatus = $0 }
+        if let saved = self.lifecycle.checkpoint, saved.phase == .paused || saved.phase == .waitingApproval {
+            self.sessions.addNotice(saved.message, in: saved.conversationID)
+        }
     }
     @discardableResult func createConversation(mode: RunMode) -> UUID {
         let id = sessions.create(mode: mode); selectConversation(id); return id
@@ -93,10 +103,19 @@ struct AgentRunServices {
     func deleteBridgeKey() { stop(); do { try SecretStore.delete("bridge-psk-v1"); status = "桥接密钥已删除" } catch { errorMessage = error.localizedDescription } }
     func setForeground(_ active: Bool) {
         foreground = active
-        // SwiftUI reports an initial inactive phase before the first foreground.
-        // Do not turn an idle welcome state into a fictitious interrupted run.
-        if !active, running || listenerTask != nil || liveBridge != nil {
-            stop(message: "App 离开前台，已中断；返回后需手动重新开始", interrupted: true)
+        lifecycle.setForeground(active)
+        if active { sessions.saveNow(); persist() } // Flush protected history after unlock.
+        if !active, lifecycle.checkpoint?.phase == .waitingApproval {
+            // No lease remains during approval. Stop the real transport so it
+            // cannot accept/handshake in background. Foreground approval must
+            // then fail session revalidation and request a new observation.
+            bridge?.cancelTransport(); liveBridge?.cancelTransport()
+        }
+        // An approval suspends the Agent on a continuation and has no lease.
+        // It may be shown again in foreground but can never execute there
+        // without fresh bridge/image/parameter validation.
+        if !active, !running, !stopping, listenerTask != nil || liveBridge != nil {
+            stop(message: "空闲桥接已关闭；返回后需重新连接", interrupted: true)
         }
     }
     func listen() {
@@ -149,6 +168,12 @@ struct AgentRunServices {
         }
         let history = sessions.history(in: conversationID)
         guard let identity = sessions.begin(in: conversationID, query: query) else { provider?.cancel(); provider = nil; return false }
+        do { try lifecycle.begin(identity: identity, generation: token) }
+        catch {
+            provider?.cancel(); provider = nil
+            sessions.finish(identity, phase: .blocked, summary: "无法保存运行检查点；未开始执行")
+            errorMessage = "无法保存运行检查点；未开始执行"; return false
+        }
         runIdentity = identity; generation = token; mode = selectedMode
         var record = TaskRecord(goal: query, mode: selectedMode); record.phase = .running
         activeID = record.id; records.insert(record, at: 0); records = Array(records.prefix(20))
@@ -159,7 +184,7 @@ struct AgentRunServices {
             approve: { [weak self] request in await self?.askApproval(request, generation: token) ?? false },
             onImage: { [weak self] frame, callID in await self?.show(frame, callID: callID, generation: token) },
             onReceipt: { [weak self] text in await self?.record(text, generation: token) },
-            onExecuting: { [weak self] callID, name in await self?.markExecuting(callID: callID, name: name, generation: token) })
+            onExecuting: { [weak self] callID, name in await self?.markExecuting(callID: callID, name: name, generation: token) }, lifecycle: lifecycle, generation: token)
         coordinator = action
         let names = ["screenshot", "tap", "drag", "wait", "finish"]
         let config = AgentConfig(provider: selectedProvider, model: selectedMode == .demo ? "demo" : settings.model,
@@ -234,11 +259,14 @@ struct AgentRunServices {
         // owns draining; a second cleanup must not unlock Start prematurely.
         guard !stopping else { return }
         generation = UUID() // Fence late callbacks before cancelling anything.
+        // Cancel CPU/network work before potentially slower UI-history writes.
+        runTask?.cancel(); watchdog?.cancel(); agent?.requestCancel(); provider?.cancel()
+        bridge?.cancelTransport(); liveBridge?.cancelTransport()
         if let identity = runIdentity { sessions.finish(identity, phase: phase, summary: publishNotice ? message : "") }
         runIdentity = nil
         listenerGeneration = UUID(); listenerTask?.cancel()
         let oldListenerTask = listenerTask; listenerTask = nil
-        runTask?.cancel(); watchdog?.cancel(); agent?.requestCancel(); provider?.cancel()
+        lifecycle.stop(message: message)
         approvalContinuation?.resume(returning: false); approvalContinuation = nil; approval = nil
         let old = coordinator, oldBridge = bridge, oldLive = liveBridge, oldTask = runTask
         stopping = true
@@ -254,7 +282,7 @@ struct AgentRunServices {
 
     }
     func approve(_ approved: Bool) {
-        guard running, !stopping, let request = approval, let identity = runIdentity,
+        guard running, !stopping, foreground, let request = approval, let identity = runIdentity,
               let continuation = approvalContinuation else { return }
         if !approved {
             sessions.updateTool(callID: request.callID ?? request.id.uuidString, name: request.tool, state: .denied, result: "用户拒绝；该动作未发送。本轮结束，不会自动重试。", identity: identity)
@@ -270,6 +298,8 @@ struct AgentRunServices {
     }
     private func askApproval(_ request: Approval, generation token: UUID) async -> Bool {
         guard generation == token, running, approvalContinuation == nil else { return false }
+        do { try lifecycle.waitForApproval(callID: request.callID ?? request.id.uuidString, generation: token) }
+        catch { return false }
         if let identity = runIdentity {
             sessions.updateTool(callID: request.callID ?? request.id.uuidString, name: request.tool, state: .awaitingApproval, detail: request.detail, identity: identity)
         }
@@ -292,7 +322,10 @@ struct AgentRunServices {
         switch event {
         case .llmCallStarted(let turn):
             status = mode == .demo ? "演示脚本第 \(turn) 步" : "模型请求 \(turn)/\(limits.maxTurns)"
-        case .llmCallCompleted(_, let response):
+        case .streamChunk(let text):
+            if !text.isEmpty { lifecycle.activity(generation: token) }
+        case .llmCallCompleted(let turn, let response):
+            lifecycle.activity(generation: token, milestone: "model:\(turn)")
             mutate { r in
                 if let total = response.usage?.totalTokens { r.reportedTokens += max(0, total) }
                 else if r.mode == .live { r.usageComplete = false }
@@ -305,6 +338,7 @@ struct AgentRunServices {
         }
     }
     private func end(_ phase: RunPhase, result: String, publishNotice: Bool = true) {
+        lifecycle.finish(success: phase == .completed)
         if let identity = runIdentity { sessions.finish(identity, phase: phase, summary: phase == .completed || !publishNotice ? "" : result) }
         runIdentity = nil
         watchdog?.cancel(); provider?.cancel(); running = false
@@ -341,6 +375,6 @@ struct AgentRunServices {
     Use only screenshot, tap, drag, wait, finish. No typing, home, shell, filesystem, browser or delegation tools exist. Do not invent them.
     Do not explain private reasoning. Use concise public action purposes and final result summaries only.
     After inspecting a fresh screenshot that supports completion, call finish with a short outcome and any uncertainty. If blocked, say what the user must do; never claim completion merely because a command was delivered.
-    The app runs only in foreground. Switching away can stop it. Do not promise background execution.
+    The app may obtain a finite system background lease for model processing. Device tools may require foreground. Approval ends each background segment. Never promise indefinite background execution or replay interrupted actions.
     """
 }

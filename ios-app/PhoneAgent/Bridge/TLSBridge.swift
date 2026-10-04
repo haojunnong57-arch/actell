@@ -6,6 +6,8 @@ import Security
 // PSK authentication follows Apple's Network.framework TLS-PSK API. No
 // verification callback returning true, cleartext fallback, or automatic retry.
 actor TLSBridge: DeviceBridge {
+    nonisolated private let cancellation = BridgeTransportCancellation()
+    nonisolated func cancelTransport() { cancellation.cancel() }
     private var listener: NWListener?
     private var listenerID = UUID()
     private var peer: FramedConnection?
@@ -21,6 +23,7 @@ actor TLSBridge: DeviceBridge {
     func listen(pskHex: String) throws {
         try Task.checkCancellation()
         guard listener == nil else { return }
+        cancellation.reset()
         guard pskHex.count == 64, pskHex.allSatisfy({ $0.isHexDigit }) else {
             throw AppError.invalid("桥接 PSK 必须是可信来源生成的 32 字节随机密钥（64 位十六进制）")
         }
@@ -38,6 +41,7 @@ actor TLSBridge: DeviceBridge {
         let tcp = NWProtocolTCP.Options(); tcp.enableKeepalive = true
         let parameters = NWParameters(tls: tls, tcp: tcp)
         let server = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: Wire.port)!)
+        cancellation.register { server.cancel() }
         listener = server; listenerID = UUID()
         let generation = listenerID
         server.newConnectionHandler = { [weak self] connection in
@@ -54,12 +58,13 @@ actor TLSBridge: DeviceBridge {
         await stop(); state("监听失败，请检查端口或网络权限")
     }
     private func accept(_ connection: NWConnection, listenerGeneration: UUID) async {
-        guard listenerGeneration == listenerID, peer == nil, listener != nil else { connection.cancel(); return }
+        guard !cancellation.isCancelled, listenerGeneration == listenerID, peer == nil, listener != nil else { connection.cancel(); return }
         sessionID = UUID().uuidString
         let session = sessionID
         let transport = FramedConnection(connection, onDisconnect: { [weak self] in
             Task { await self?.peerClosed(session: session) }
         })
+        cancellation.register { transport.cancel() }
         peer = transport; isReady = false
         do {
             try await transport.start()
@@ -92,6 +97,15 @@ actor TLSBridge: DeviceBridge {
         guard session == sessionID else { return }
         isReady = false; peer = nil; capabilities.removeAll(); lastImageID = nil
         state("桥接连接已断开；需要新连接和新截图，旧动作不会重发")
+    }
+    // This channel carries remote ESP PNGs, not UIKit/ReplayKit screenshots.
+    // Firmware v0.3 does not implement this App channel. Keep background device
+    // tools disabled until remote capture/privacy and session behavior are verified.
+    func supportsBackgroundExecution(tool: String) async -> Bool { false }
+    func approvalContext(imageID: String) throws -> String {
+        guard !cancellation.isCancelled, isReady, peer != nil else { throw AppError.unavailable("设备已断开；需新连接与新截图") }
+        try requireCurrent(imageID)
+        return sessionID
     }
     func screenshot() async throws -> FrameImage {
         let result = try await request("screenshot", arguments: [:])
@@ -163,6 +177,7 @@ actor TLSBridge: DeviceBridge {
         }
     }
     func stop() async {
+        cancelTransport()
         isReady = false; lastImageID = nil; capabilities.removeAll(); sessionID = UUID().uuidString
         listenerID = UUID()
         peer?.cancel(); peer = nil; listener?.cancel(); listener = nil
@@ -242,5 +257,28 @@ private final class OnceContinuation<T>: @unchecked Sendable {
     @discardableResult func finish(_ result: Result<T, Error>) -> Bool {
         lock.lock(); let c = continuation; continuation = nil; lock.unlock()
         c?.resume(with: result); return c != nil
+    }
+}
+
+/// Allows expiration/user Stop to close sockets synchronously before the OS
+/// lease is completed, without waiting for an actor currently reading a frame.
+private final class BridgeTransportCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = true
+    private var closures: [@Sendable () -> Void] = []
+    var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+    func reset() { lock.lock(); cancelled = false; closures = []; lock.unlock() }
+    func register(_ close: @escaping @Sendable () -> Void) {
+        lock.lock()
+        let closeNow = cancelled
+        if !closeNow { closures.append(close) }
+        lock.unlock()
+        if closeNow { close() }
+    }
+    func cancel() {
+        lock.lock(); cancelled = true
+        let pending = closures; closures = []
+        lock.unlock()
+        for close in pending { close() }
     }
 }

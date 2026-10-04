@@ -91,7 +91,8 @@ def generate():
                         LD_RUNPATH_SEARCH_PATHS=["$(inherited)", "@executable_path/Frameworks"])
         dependencies = []
         if name == "PhoneAgent":
-            settings.update(INFOPLIST_KEY_CFBundleDisplayName="Phone Agent",
+            settings.update(INFOPLIST_FILE="PhoneAgent/Info.plist",
+                            INFOPLIST_KEY_CFBundleDisplayName="Phone Agent",
                             INFOPLIST_KEY_NSLocalNetworkUsageDescription="Connect to your explicitly paired development bridge while this app is open.",
                             INFOPLIST_KEY_UIApplicationSceneManifest_Generation="YES",
                             INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents="YES",

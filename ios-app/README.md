@@ -1,3 +1,5 @@
+> **后台片段分支（2026-10-04）**：本分支新增 iOS 26+ BGContinuedProcessingTask 协调器。前台点击后申请，只有系统 handler 授予租约才允许已验证能力的步骤后台继续；待审批即结束片段，无租约/到期/未知动作结果会暂停。真实 TLS 截图与输入仍默认仅前台，未声称同机后台控制闭环。实现、测试与真机缺口见 [BACKGROUND-RUNS.md](docs/BACKGROUND-RUNS.md)。
+
 > **本地工程更新（2026-10-04）**：已接入会话列表、会话页、真实流式回复、工具步骤/参数、单次批准/拒绝/停止及本地历史；执行层保留 SwiftAgentKit，工具展示选择性复用 ManifoldKit MIT 源码，Markdown 使用 MarkdownUI。会话 UI 与工具错误处理基于 `e183d6d` 扩展。实际编译、单元和 UI 验证见 [AGENT-UI-VALIDATION.md](docs/AGENT-UI-VALIDATION.md)，实现与开源复用清单见 [AGENT-UI.md](docs/AGENT-UI.md)。主 Bundle ID 固定 `com.ja1chen.PhoneAgent`，PiP 后台能力仍未启用。
 
 # Phone Agent iOS · 0.1 source candidate
@@ -20,7 +22,7 @@
 
 ## 必须明确的边界
 
-1. **同机跨 App 持续执行尚未解决。** 此版 App 离开前台就取消任务和连接。若 agent 和目标界面在同一台 iPhone，切到另一个 App 会中断 agent；没有宣称原生后台持续执行，没有音频 / VPN 保活
+1. **同机跨 App 持续执行尚未解决。** 本分支只有实际获得系统片段后才允许模型 CPU/网络工作后台继续。真实设备工具因后端与截图权限尚未验证仍要求前台；没有租约就暂停，没有音频 / VPN 保活
 2. **ESP32 固件 v0.3 尚无这个 App 通道。** 有认证握手、`backend_ready` 和真实截图之前不能当作已连通。已有 Mac 上的截图 / 触控成功不等于本 App + ESP32 成功
 3. **模型/API 兼容性未实测。** 仅支持 Chat Completions 形状和原生 function calls；不是 Responses API。模型须支持图片和工具调用；不兼容参数会明确报错，不能冒充成功
 4. **计费上限不是金额硬上限。** 20,000 tokens 是服务实际报告后的停机门槛，当前请求可能已产生费用，缺失 usage 时无法完整统计。还有请求次数、输出 tokens 和运行时间上限
@@ -34,7 +36,7 @@
 1. 用 Xcode 打开 `PhoneAgent.xcodeproj`，选择共享 scheme `PhoneAgent` 和 iOS Simulator。主 Bundle ID 固定为 `com.ja1chen.PhoneAgent`，不要改成随机 ID。
 2. 等待 Xcode 解析依赖，再按 `⌘R`。若 Xcode 仍显示旧的远程 SwiftAgentKit 报错路径，关闭并重新打开工程，确认 SwiftAgentKit 指向 `Vendor/SwiftAgentKit`。本次未绕过宏验证或修改全局信任配置。
 3. 模拟器不需要选择 Team。真机签名、Team、App ID 注册和设备安装属于单独步骤，本次没有执行。
-4. PiP 状态预览默认关闭，在设置 → 控制调试中主动开启。当前构建未增加后台模式，跨 App PiP 按钮禁用；不影响前台原型的展示。
+4. PiP 状态预览默认关闭，在设置 → 控制调试中主动开启。当前仅为有限后台片段增加 processing 模式，未增加音频模式，跨 App PiP 按钮仍禁用；不影响前台原型的展示。
 5. `project.yml` 保留为 XcodeGen 来源；也可以用 Python 标准库脚本重新生成同一工程，新增 Swift 源文件后运行：
 
 ```sh

@@ -1,5 +1,6 @@
 import Foundation
 import CoreFoundation
+import CryptoKit
 import SwiftAgentKit
 import LLMProviderKit
 
@@ -44,6 +45,7 @@ struct DeviceTool: AgentTool {
                 await coordinator.stop()
                 throw error
             }
+            await coordinator.toolFailed(callID: context.callId)
             let message = await coordinator.recordFailure(error)
             return .error(toolCallId: context.callId, toolName: name, message: message)
         }
@@ -63,18 +65,30 @@ actor ActionCoordinator {
     private var inputFailureMessage: String?
     private(set) var usedDeviceTools = false
     private let deadline: Date
+    private let lifecycle: RunLifecycleCoordinator?
+    private let generation: UUID
+    private var pendingCallID: String?
+
     init(bridge: any DeviceBridge, limits: AgentLimits, approve: @escaping @Sendable (Approval) async -> Bool,
          onImage: @escaping @Sendable (FrameImage, String) async -> Void, onReceipt: @escaping @Sendable (String) async -> Void,
-         onExecuting: @escaping @Sendable (String, String) async -> Void = { _, _ in }) {
+         onExecuting: @escaping @Sendable (String, String) async -> Void = { _, _ in },
+         lifecycle: RunLifecycleCoordinator? = nil, generation: UUID = UUID()) {
         self.bridge = bridge; self.limits = limits; self.approve = approve; self.onImage = onImage; self.onReceipt = onReceipt; self.onExecuting = onExecuting
+        self.lifecycle = lifecycle; self.generation = generation
         deadline = Date().addingTimeInterval(limits.maxRunSeconds)
     }
     func execute(name: String, parameters p: [String: Any], callID: String) async throws -> AgentToolResult {
         try checkActive()
+        let bridgeBackgroundCapable = await bridge.supportsBackgroundExecution(tool: name)
+        let backgroundCapable = ["wait", "finish"].contains(name) || bridgeBackgroundCapable
+        let descriptor = try Self.descriptor(name: name, parameters: p, callID: callID)
+        try await lifecycle?.prepare(descriptor, generation: generation, backgroundCapable: backgroundCapable)
         switch name {
         case "screenshot":
+            try await lifecycle?.dispatch(callID: callID, generation: generation, backgroundCapable: backgroundCapable)
             usedDeviceTools = true
             let frame = try await bridge.screenshot(); try checkActive(); image = frame
+            try await lifecycle?.acknowledge(callID: callID, generation: generation, observation: true)
             await onImage(frame, callID); await onReceipt(frame.isDemo ? "演示截图已更新" : "PNG 已校验并更新；图像将发送给已确认的模型服务")
             let receipt = try JSONSerialization.data(withJSONObject: ["image_id": frame.id, "width": frame.width, "height": frame.height, "is_demo": frame.isDemo])
             return .success(toolCallId: callID, toolName: name, result: String(data: receipt, encoding: .utf8)!, images: [LLMImage(data: frame.png)])
@@ -93,18 +107,29 @@ actor ActionCoordinator {
                 guard (100...2_000).contains(duration) else { throw AppError.invalid("拖动时长必须为 100–2000 毫秒") }
             }
             let detail = name == "tap" ? "\(purpose)\n点击像素 (\(x), \(y))" : "\(purpose)\n从像素 (\(x), \(y)) 拖动至 (\(try integer(p, "to_x")), \(try integer(p, "to_y")))，\(duration) ms"
+            let deviceContext = try await bridge.approvalContext(imageID: frame.id)
+            try checkActive()
+            pendingCallID = callID
             guard await approve(Approval(tool: name, detail: detail, imageID: frame.id, callID: callID)) else { throw AppError.stopped }
-            try checkActive(); _ = try currentImage(frame.id) // Revalidate after a potentially long approval wait.
+            try checkActive(); _ = try currentImage(frame.id)
+            let currentContext = try await bridge.approvalContext(imageID: frame.id)
+            guard currentContext == deviceContext else { throw AppError.invalid("设备会话已变化；旧审批失效，请重新获取截图") }
+            try checkActive(); _ = try currentImage(frame.id)
+            try await lifecycle?.resumeApproved(callID: callID, digest: descriptor.argumentDigest, generation: generation)
+            pendingCallID = nil
             actions += 1
             // Invalidate before the await: a second/reentrant call cannot reuse
             // an approved frame, even if the result is lost or cancellation wins.
             image = nil
             await onExecuting(callID, name)
             try checkActive() // Stop can win while the presentation callback is suspended.
+            try await lifecycle?.dispatch(callID: callID, generation: generation, backgroundCapable: backgroundCapable)
+            try checkActive()
             do {
                 if name == "tap" { try await bridge.tap(x: nx, y: ny, imageID: frame.id) }
                 else { try await bridge.drag(fromX: nx, fromY: ny, toX: tx, toY: ty, durationMS: duration, imageID: frame.id) }
             } catch {
+                await lifecycle?.toolFailed(callID: callID, generation: generation)
                 if Task.isCancelled || error is CancellationError || (error as? AppError) == .stopped { throw error }
                 // Transport may have sent the input already. Keep the Agent
                 // available, but prohibit further input in this run, even after
@@ -113,21 +138,42 @@ actor ActionCoordinator {
                 inputFailureMessage = message
                 throw AppError.unavailable(message)
             }
-            try checkActive(); await onReceipt("\(name) 已确认送达；界面效果尚需下一张截图核对")
+            try checkActive()
+            try await lifecycle?.acknowledge(callID: callID, generation: generation)
+            await onReceipt("\(name) 已确认送达；界面效果尚需下一张截图核对")
             return .success(toolCallId: callID, toolName: name, result: "Command delivery acknowledged, not visual success. Get a new screenshot now.")
         case "wait":
             let milliseconds = try integer(p, "duration_ms")
             guard (1...3_000).contains(milliseconds) else { throw AppError.invalid("等待必须为 1–3000 毫秒") }
+            try await lifecycle?.dispatch(callID: callID, generation: generation, backgroundCapable: true)
             image = nil; try await Task.sleep(nanoseconds: UInt64(milliseconds) * 1_000_000); try checkActive()
+            try await lifecycle?.acknowledge(callID: callID, generation: generation)
             return .success(toolCallId: callID, toolName: name, result: "Wait ended. Get a fresh screenshot before acting.")
         case "finish":
             _ = try currentImage(image?.id)
             let summary = try string(p, "summary", max: 1_000)
+            try await lifecycle?.dispatch(callID: callID, generation: generation, backgroundCapable: true)
+            try await lifecycle?.acknowledge(callID: callID, generation: generation)
             finishSummary = summary; stopped = true
             await onReceipt("模型 / 演示脚本报告完成；请结合最新截图核对")
             return .success(toolCallId: callID, toolName: name, result: summary)
         default: throw AppError.invalid("未注册的工具")
         }
+    }
+    func toolFailed(callID: String) async {
+        await lifecycle?.toolFailed(callID: callID, generation: generation)
+        if pendingCallID == callID {
+            pendingCallID = nil
+            await lifecycle?.pause(generation: generation, message: "审批后的设备或截图校验失败；已暂停，需重新获取截图")
+        }
+    }
+    private static func descriptor(name: String, parameters: [String: Any], callID: String) throws -> RunCheckpoint.Tool {
+        let allowed = ["x", "y", "from_x", "from_y", "to_x", "to_y", "duration_ms"]
+        let numeric = parameters.filter { allowed.contains($0.key) && $0.value is NSNumber }
+        let summary = String(data: try JSONSerialization.data(withJSONObject: numeric, options: [.sortedKeys]), encoding: .utf8) ?? "{}"
+        let canonical = try JSONSerialization.data(withJSONObject: parameters, options: [.sortedKeys])
+        let digest = SHA256.hash(data: canonical).map { String(format: "%02x", $0) }.joined()
+        return RunCheckpoint.Tool(callID: callID, name: name, parameterSummary: summary, argumentDigest: digest)
     }
     func recordFailure(_ error: Error) -> String {
         image = nil

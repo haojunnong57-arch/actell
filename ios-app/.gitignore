@@ -9,3 +9,6 @@ secrets*
 *.key
 __pycache__/
 .venv/
+
+# Keychain wrapper source, not credential material.
+!PhoneAgent/Security/SecretStore.swift

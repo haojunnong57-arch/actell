@@ -47,6 +47,9 @@
 		FA081CB2F51D3CC8C1F7768E /* PhoneAgent/Storage/ConversationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B002B8C03496728A5C8565B0 /* PhoneAgent/Storage/ConversationStore.swift */; };
 		FD371D0E34BEE2874EA7281F /* SwiftAgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = CDF64BC031F1B5C9F069ED47 /* SwiftAgentKit */; };
 		FD5C6539F68A51889A137CDE /* PhoneAgent/Status/AgentStatusSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C881FC710C45193DBE50ECD /* PhoneAgent/Status/AgentStatusSnapshot.swift */; };
+		516757BFF7A88E3ABF25E25B /* PhoneAgent/Background/RunLifecycleCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82F0FAE84FD8109E8E5583C4 /* PhoneAgent/Background/RunLifecycleCoordinator.swift */; };
+		1E7EC1A7F8AE941EF18852A4 /* PhoneAgent/Background/ContinuedProcessingScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 547E0829E7852E06F5C9483D /* PhoneAgent/Background/ContinuedProcessingScheduler.swift */; };
+		9F190995264AC1D926F8D8EE /* PhoneAgentTests/RunLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 516119005D4C3238AD9A2440 /* PhoneAgentTests/RunLifecycleTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -103,6 +106,9 @@
 		E508E5D56E68A7157853C5C9 /* PhoneAgent/PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PhoneAgent/PrivacyInfo.xcprivacy; sourceTree = SOURCE_ROOT; };
 		E661666073140993B89C6C0D /* PhoneAgentTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PhoneAgentTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F6B755ABE7391EEA7A6D428B /* PhoneAgent/Bridge/TLSBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneAgent/Bridge/TLSBridge.swift; sourceTree = SOURCE_ROOT; };
+		82F0FAE84FD8109E8E5583C4 /* PhoneAgent/Background/RunLifecycleCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneAgent/Background/RunLifecycleCoordinator.swift; sourceTree = SOURCE_ROOT; };
+		547E0829E7852E06F5C9483D /* PhoneAgent/Background/ContinuedProcessingScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneAgent/Background/ContinuedProcessingScheduler.swift; sourceTree = SOURCE_ROOT; };
+		516119005D4C3238AD9A2440 /* PhoneAgentTests/RunLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneAgentTests/RunLifecycleTests.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -140,6 +146,7 @@
 		01C9D5910E626DA35A0A8FDF /* PhoneAgentTests */ = {
 			isa = PBXGroup;
 			children = (
+				516119005D4C3238AD9A2440 /* PhoneAgentTests/RunLifecycleTests.swift */,
 				B1C6BD4ADEB0BB2BDF4A6D91 /* PhoneAgentTests/AgentPresentationTests.swift */,
 				17BD0F356D152AC2B11057B5 /* PhoneAgentTests/ConversationTests.swift */,
 				46693BDF9568EA4A77D61F09 /* PhoneAgentTests/DependencyStorageTests.swift */,
@@ -154,6 +161,8 @@
 		0BFD595BCD020595427B3001 /* PhoneAgent */ = {
 			isa = PBXGroup;
 			children = (
+				547E0829E7852E06F5C9483D /* PhoneAgent/Background/ContinuedProcessingScheduler.swift */,
+				82F0FAE84FD8109E8E5583C4 /* PhoneAgent/Background/RunLifecycleCoordinator.swift */,
 				8F8355D89D025B99C0374C30 /* PhoneAgent/Agent/AgentViewModel.swift */,
 				BBB418CC025ECF7C8F6F4777 /* PhoneAgent/Agent/DeviceTools.swift */,
 				624450FC263A4E2F7FCEE97D /* PhoneAgent/Agent/ModelStreamDecoder.swift */,
@@ -354,6 +363,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1E7EC1A7F8AE941EF18852A4 /* PhoneAgent/Background/ContinuedProcessingScheduler.swift in Sources */,
+				516757BFF7A88E3ABF25E25B /* PhoneAgent/Background/RunLifecycleCoordinator.swift in Sources */,
 				3A63C56C1146913C500545F7 /* PhoneAgent/Agent/AgentViewModel.swift in Sources */,
 				52280C3606C0FFD5808D35F4 /* PhoneAgent/Agent/DeviceTools.swift in Sources */,
 				DD6C862F22CD0C39F54617D0 /* PhoneAgent/Agent/ModelStreamDecoder.swift in Sources */,
@@ -384,6 +395,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9F190995264AC1D926F8D8EE /* PhoneAgentTests/RunLifecycleTests.swift in Sources */,
 				EED32CB403AAFD20E1DA950B /* PhoneAgentTests/AgentPresentationTests.swift in Sources */,
 				4F6C2C9E88CC0DF3A0804311 /* PhoneAgentTests/ConversationTests.swift in Sources */,
 				0A341B6FC0976B8722FE3C8D /* PhoneAgentTests/DependencyStorageTests.swift in Sources */,
@@ -417,6 +429,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PhoneAgent/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Phone Agent";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to your explicitly paired development bridge while this app is open.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -488,6 +501,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PhoneAgent/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Phone Agent";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to your explicitly paired development bridge while this app is open.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

@@ -26,6 +26,10 @@ struct ConversationView: View {
                         Spacer()
                         Text(session.phase.label).foregroundStyle(session.phase == .awaitingApproval ? .orange : .secondary)
                     }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20).padding(.vertical, 10)
+                    if running {
+                        Text(presentation.backgroundStatus).font(.caption2).foregroundStyle(.secondary)
+                            .padding(.horizontal, 20).padding(.bottom, 8).accessibilityIdentifier("backgroundRunStatus")
+                    }
                     Divider()
                     ScrollViewReader { proxy in
                         ScrollView {

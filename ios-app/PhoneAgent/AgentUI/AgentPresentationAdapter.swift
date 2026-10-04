@@ -34,6 +34,7 @@ struct ToolPresentation {
     var running: Bool { activeRun != nil && model.running }
     var stopping: Bool { model.stopping }
     var status: String { running ? model.status : session?.phase.label ?? "" }
+    var backgroundStatus: String { model.backgroundStatus }
     var warning: String? { model.sessions.warning }
     var modelName: String { model.settings.model.isEmpty ? "真实模型 · 尚未配置" : model.settings.model }
     var approvalID: UUID? { model.approval(in: sessionID)?.id }
