@@ -45,6 +45,7 @@ struct AgentRunServices {
     private var approvalTimeout: Task<Void, Never>?
     private var completedToolIDs: Set<String> = []
     private var activeActionCallID: String?
+    private var activityHandoffRun: RunIdentity?
     private var runIdentity: RunIdentity?
     var currentRun: RunIdentity? { runIdentity }
     private var store: TaskStore?
@@ -87,7 +88,7 @@ struct AgentRunServices {
             self.sessions.addNotice(saved.message, in: saved.conversationID)
         }
         capture.onLoss = { [weak self] in
-            guard let self, self.usbClient != nil || self.running else { return }
+            guard let self, self.usbClient != nil || self.usbExecutionContext != nil else { return }
             self.stop(message: "系统采集已停止，输入已禁用")
         }
         if loadPersistentState, let data = UserDefaults.standard.data(forKey: "providerSettings"), let saved = try? JSONDecoder().decode(ProviderSettings.self, from: data) { settings = saved }
@@ -260,7 +261,7 @@ struct AgentRunServices {
             errorMessage = "无法保存运行检查点；未开始执行"; return false
         }
         runIdentity = identity; generation = token; mode = selectedMode; finishingRun = false
-        completedToolIDs = []; activeActionCallID = nil; activityNavigation = nil
+        completedToolIDs = []; activeActionCallID = nil; activityNavigation = nil; activityHandoffRun = nil
         var record = TaskRecord(goal: query, mode: selectedMode); record.phase = .running
         activeID = record.id; records.insert(record, at: 0); records = Array(records.prefix(20))
         running = true; latestFrame = nil; errorMessage = nil
@@ -453,7 +454,7 @@ struct AgentRunServices {
             return
         }
         publishActivity(usbExecutionContext?.backgroundEnabled == true ? .approved : .executing)
-        status = usbExecutionContext?.backgroundEnabled == true ? "等待返回匹配的目标画面；批准不代表已发送" : "正在发送已批准的动作"
+        status = usbExecutionContext?.backgroundEnabled == true ? "请返回目标 App；等待画面校验和设备回执" : "正在发送已批准的动作"
         sessions.updateTool(callID: callID, name: name, state: .executing, identity: identity)
     }
     private func record(_ text: String, generation token: UUID) { guard generation == token, running else { return }; status = text; log(text) }
@@ -545,8 +546,17 @@ struct AgentRunServices {
                 notice = "已定位本次确认；请查看详情后选择批准或拒绝"
             } else { notice = "这次确认已失效或已处理；不会自动执行，请查看记录" }
         }
+        activityHandoffRun = runIdentity == identity ? identity : nil
         activityNavigation = ActivityNavigation(route: route, messageID: messageID, notice: notice)
         return true
+    }
+    func enterControlDebug() { activityHandoffRun = nil }
+    func leaveControlDebug() {
+        if let identity = runIdentity, activityHandoffRun == identity {
+            activityHandoffRun = nil // One deliberate handoff to this same run.
+            return
+        }
+        if running { stop(message: "已离开控制调试，本轮执行已中断", interrupted: true) }
     }
     func clearHistory() { guard !running, !stopping else { return }; records = []; activeID = nil; latestFrame = nil; sessions.clear(); persist() }
     private func log(_ text: String) { mutate { $0.log(text) } }

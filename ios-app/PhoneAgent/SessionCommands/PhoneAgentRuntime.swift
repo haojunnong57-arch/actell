@@ -1,6 +1,6 @@
 import Foundation
 
-/// There is one app process, one conversation store, and one foreground runner.
+/// There is one app process, one conversation store, and one lifecycle-managed runner.
 @MainActor final class PhoneAgentRuntime {
     static let shared = PhoneAgentRuntime()
     let model: AgentViewModel

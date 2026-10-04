@@ -54,14 +54,15 @@ struct ControlDebugView: View {
                     }
                     if let warning = model.storageWarning { Label(warning, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange) }
                     if let error = model.errorMessage { Text(error).font(.callout).foregroundStyle(.red) }
-                    Text("仅前台运行。如果 agent 与目标界面在同一台 iPhone，切换到其他 App 会中断本版运行。真实跨 App 闭环尚未验证。")
+                    Text("后台执行需要有效采集会话或系统授予的有限片段；旧 TLS 设备工具仍仅前台可用。所有输入均需批准，真实跨 App 闭环尚未验证。")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(20)
             }
             .navigationTitle("控制调试")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear { model.enterControlDebug() }
             .onDisappear {
-                if model.running { model.stop(message: "已离开控制调试，本轮执行已中断", interrupted: true) }
+                model.leaveControlDebug()
             }
             .alert("确认发送到模型服务", isPresented: $cloudConsent) {
                 Button("同意本次运行并开始") { model.start(resuming: resumeAfterConsent) }

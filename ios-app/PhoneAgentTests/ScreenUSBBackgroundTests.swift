@@ -33,6 +33,11 @@ private final class TestClock: @unchecked Sendable {
     func now() -> TimeInterval { lock.withLock { value } }
     func advance(_ seconds: Double) { lock.withLock { value += seconds } }
 }
+@MainActor private final class SystemSchedulerSpy: RunBackgroundScheduler {
+    var submissions = 0
+    func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void) throws { submissions += 1 }
+    func cancel(identifier: String) {}
+}
 @MainActor private final class TargetState { var changed = false }
 private actor GuardedUSBFixture: USBCommandTransport {
     private(set) var inputs: [String] = []
@@ -118,6 +123,20 @@ final class ScreenUSBPermitTests: XCTestCase {
         return AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
                               runServices: .init(provider: DemoProvider(), bridge: bridge))
     }
+    func testCaptureExecutionDoesNotSubmitSystemProcessingAndOptOutHasNoFallback() throws {
+        let source = try SyntheticCapture(), system = SystemSchedulerSpy()
+        let scheduler = RunExecutionScheduler(continued: system)
+        let context = try ScreenUSBExecutionContext(frames: source.frames, health: source.health, backgroundEnabled: true)
+        scheduler.configure(context: context, allowSystemProcessing: true)
+        var lease: (any RunBackgroundLease)?
+        try scheduler.submit(identifier: "capture", launched: { lease = $0 })
+        XCTAssertNotNil(lease); XCTAssertEqual(system.submissions, 0)
+        lease?.complete(success: true); scheduler.cancel(identifier: "capture")
+        let optOut = try ScreenUSBExecutionContext(frames: source.frames, health: source.health, backgroundEnabled: false)
+        scheduler.configure(context: optOut, allowSystemProcessing: true)
+        XCTAssertThrowsError(try scheduler.submit(identifier: "opt-out", launched: { _ in XCTFail() }))
+        XCTAssertEqual(system.submissions, 0)
+    }
     func testRealAgentRequiresForegroundApprovalThenReturnsToMatchingTarget() async throws {
         let source = try SyntheticCapture(), transport = GuardedUSBFixture(stopDelay: 350_000_000)
         let model = try model(source, transport: transport)
@@ -140,6 +159,73 @@ final class ScreenUSBPermitTests: XCTestCase {
         XCTAssertEqual(inputs.count, 1)
         XCTAssertEqual(model.activeRecord?.phase, .completed)
         XCTAssertEqual(model.lifecycle.checkpoint?.tools.first(where: { $0.name == "tap" })?.delivery, .observedResult)
+    }
+    func testSiriDraftLiveActivityApprovalHandoffAndBackgroundUSBCompletion() async throws {
+        let source = try SyntheticCapture(), transport = GuardedUSBFixture()
+        let model = try model(source, transport: transport)
+        let service = SessionCommandService(sessions: model.sessions, runner: model)
+        let ticker = Task { while !Task.isCancelled { source.push(); try? await Task.sleep(nanoseconds: 90_000_000) } }
+        defer { ticker.cancel(); model.stop() }
+        guard case .prepared(let id) = try service.perform(SessionCommand(.prepare("演示整合流程"))) else { return XCTFail() }
+        model.selectConversation(id)
+        XCTAssertFalse(model.running)
+        XCTAssertFalse(model.send("演示整合流程", in: id))
+        XCTAssertTrue(model.send("演示整合流程", in: id, cloudConsent: true))
+        model.setScene(.background)
+        try await waitUntil { model.approval != nil }
+        let run = try XCTUnwrap(model.currentRun), request = try XCTUnwrap(model.approval)
+        let stop = service.cancelCurrentCommand()
+        XCTAssertEqual(model.activitySnapshot?.state.phase, .awaitingApproval)
+        XCTAssertEqual(model.activitySnapshot?.state.approvalID, request.id)
+        XCTAssertEqual(try service.perform(SessionCommand(.status)), .status(.awaitingApproval))
+        guard case .prepared(let later) = try service.perform(SessionCommand(.prepare("下一条草稿"))) else { return XCTFail() }
+        XCTAssertEqual(try service.perform(SessionCommand(.open, sessionID: later)), .deferred)
+        XCTAssertEqual(model.currentRun, run)
+        let link = AgentActivityRoute(sessionID: run.conversationID, runID: run.runID, approvalID: request.id).url
+        XCTAssertTrue(model.openActivityURL(link))
+        model.leaveControlDebug() // Settings closes to reveal this same approval.
+        XCTAssertTrue(model.running); XCTAssertEqual(model.approval?.id, request.id)
+        let before = await transport.inputs; XCTAssertTrue(before.isEmpty)
+        model.setScene(.active); model.approve(true)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(model.activitySnapshot?.state.phase, .approved)
+        let inApp = await transport.inputs; XCTAssertTrue(inApp.isEmpty)
+        model.setScene(.background)
+        try await waitUntil { !model.running && !model.stopping }
+        let after = await transport.inputs; XCTAssertEqual(after.count, 1)
+        XCTAssertEqual(model.activitySnapshot?.state.phase, .completed)
+        XCTAssertNil(model.activitySnapshot?.state.approvalID)
+        XCTAssertEqual(try service.perform(stop), .noMatchingRun)
+        XCTAssertEqual(model.sessions.conversation(id)?.entry?.state, .submitted)
+        XCTAssertEqual(model.sessions.conversation(later)?.entry?.state, .pendingConfirmation)
+        XCTAssertTrue(model.openActivityURL(link)) // Historical link only shows records.
+        model.approve(true)
+        let repeated = await transport.inputs; XCTAssertEqual(repeated.count, 1)
+    }
+    func testSiriScopedStopRevokesBackgroundApprovalAndManualDebugExitStillStops() async throws {
+        let source = try SyntheticCapture(), transport = GuardedUSBFixture()
+        let model = try model(source, transport: transport)
+        let service = SessionCommandService(sessions: model.sessions, runner: model)
+        let ticker = Task { while !Task.isCancelled { source.push(); try? await Task.sleep(nanoseconds: 90_000_000) } }
+        defer { ticker.cancel(); model.stop() }
+        model.start(); model.setScene(.background)
+        try await waitUntil { model.approval != nil }
+        let run = try XCTUnwrap(model.currentRun), request = try XCTUnwrap(model.approval)
+        XCTAssertEqual(try service.perform(service.cancelCurrentCommand()), .cancelled)
+        try await waitUntil { !model.running && !model.stopping }
+        XCTAssertFalse(model.approvalRecords.isPending(request, run: run))
+        XCTAssertEqual(model.activitySnapshot?.state.phase, .stopped)
+        model.setScene(.active); model.approve(true)
+        let sent = await transport.inputs, released = await transport.stopped
+        XCTAssertTrue(sent.isEmpty); XCTAssertTrue(released)
+        let another = try self.model(source, transport: GuardedUSBFixture())
+        another.start()
+        let newRun = try XCTUnwrap(another.currentRun)
+        XCTAssertTrue(another.openActivityURL(AgentActivityRoute(sessionID: newRun.conversationID, runID: newRun.runID, approvalID: nil).url))
+        another.enterControlDebug() // A prior link cannot exempt a future manual exit.
+        another.leaveControlDebug()
+        try await waitUntil { !another.running && !another.stopping }
+        XCTAssertEqual(another.activeRecord?.phase, .interrupted)
     }
     func testDifferentTargetCannotSendAndCaptureLossCancelsPendingReturn() async throws {
         let source = try SyntheticCapture(), transport = GuardedUSBFixture()

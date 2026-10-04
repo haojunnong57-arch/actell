@@ -46,7 +46,7 @@ struct AgentActivityAttributes: ActivityAttributes {
         var detail: String {
             switch self {
             case .awaitingApproval: return "回到 App 查看详情并确认本次动作"
-            case .approved: return "批准已接收，尚未发送动作"
+            case .approved: return "批准不等于已执行；请核对后续状态"
             case .executing: return "发送不代表成功，请核对设备结果"
             case .interrupted: return "返回 App 查看记录；不会自动重试"
             case .stopped: return "如动作已发出，请核对设备"

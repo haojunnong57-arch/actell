@@ -12,7 +12,13 @@ import Combine
 }
 @MainActor protocol RunBackgroundScheduler {
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void) throws
+    func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void,
+                failed: @escaping @MainActor () -> Void) throws
     func cancel(identifier: String)
+}
+extension RunBackgroundScheduler {
+    func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void,
+                failed: @escaping @MainActor () -> Void) throws { try submit(identifier: identifier, launched: launched) }
 }
 @MainActor struct ForegroundOnlyScheduler: RunBackgroundScheduler {
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void) throws {
@@ -154,16 +160,23 @@ struct RunCheckpoint: Codable, Equatable {
         backgroundStatus = "检查本次后台执行资格"
         do {
             try persist()
-            try scheduler.submit(identifier: id) { [weak self] lease in
+            try scheduler.submit(identifier: id, launched: { [weak self] lease in
                 guard let self else { lease.complete(success: false); return }
                 self.accept(lease, identifier: id)
-            }
+            }, failed: { [weak self] in self?.submissionRejected(identifier: id) })
         } catch {
             scheduler.cancel(identifier: id)
             if checkpoint?.segmentID == id { checkpoint?.segmentID = nil }
             backgroundStatus = "后台执行资格未获准；本轮仅前台继续，离开即暂停"
             saveOrPause()
         }
+    }
+    private func submissionRejected(identifier: String) {
+        guard ownsRun, checkpoint?.phase == .running, checkpoint?.segmentID == identifier, !hasLease else { return }
+        scheduler.cancel(identifier: identifier); checkpoint?.segmentID = nil
+        backgroundStatus = "后台申请未获准；本轮仅前台继续，离开即暂停"
+        saveOrPause()
+        if !foreground { pause("系统未授予后台片段；已暂停，旧动作不会重放") }
     }
     private func accept(_ incoming: any RunBackgroundLease, identifier: String) {
         if let lease, lease === incoming { return }

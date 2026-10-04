@@ -1,9 +1,14 @@
 import Foundation
 import BackgroundTasks
 
-@available(iOS 26.0, *)
+@available(iOS 27.0, *)
 @MainActor final class ContinuedProcessingScheduler: RunBackgroundScheduler {
+    private var submissions: [String: Task<Void, Never>] = [:]
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void) throws {
+        try submit(identifier: identifier, launched: launched, failed: {})
+    }
+    func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void,
+                failed: @escaping @MainActor () -> Void) throws {
         // The permitted Info.plist prefix is a wildcard, but both registration
         // and submission use this same concrete, unique per-segment identifier.
         guard BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: .main, launchHandler: { task in
@@ -12,12 +17,30 @@ import BackgroundTasks
                 launched(ContinuedProcessingLease(task: continued))
             }
         }) else { throw AppError.unavailable("后台片段 ID 注册失败") }
-        let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: "Phone Agent 正在处理任务", subtitle: "等待实际响应；可随时取消")
+        submissions[identifier] = Task { [weak self] in
+            defer { self?.submissions.removeValue(forKey: identifier) }
+            do {
+                try Task.checkCancellation()
+                try await Self.submitRequest(identifier: identifier)
+                // Cancellation can race the asynchronous registration response.
+                // Re-cancel after acceptance so an ended run leaves no request.
+                if Task.isCancelled { BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier) }
+            }
+            catch { if !Task.isCancelled { failed() } }
+        }
+    }
+    private nonisolated static func submitRequest(identifier: String) async throws {
+        let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: "PhoneAgent 正在处理任务", subtitle: "等待实际响应；可随时取消")
         request.strategy = .fail
         request.requiredResources = [] // CPU/network only; no GPU entitlement.
-        try BGTaskScheduler.shared.submit(request)
+        // iOS 27's asynchronous API reports errors missed by deprecated submit.
+        // No UI/MainActor work runs while waiting for the scheduler's response.
+        try await BGTaskScheduler.shared.submitTaskRequest(request)
     }
-    func cancel(identifier: String) { BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier) }
+    func cancel(identifier: String) {
+        submissions.removeValue(forKey: identifier)?.cancel()
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
+    }
 }
 
 @available(iOS 26.0, *)
@@ -54,4 +77,3 @@ import BackgroundTasks
         task.setTaskCompleted(success: success)
     }
 }
-

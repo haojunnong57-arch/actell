@@ -30,7 +30,7 @@ struct ConversationView: View {
                         Text(navigation.notice).font(.caption).foregroundStyle(.secondary)
                             .padding(.horizontal, 20).padding(.bottom, 8).accessibilityIdentifier("activityNavigationNotice")
                     }
-                    if running { Text(presentation.backgroundStatus).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20).accessibilityIdentifier("backgroundStatus") }
+                    if running { Text(presentation.backgroundStatus).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20).accessibilityIdentifier("backgroundRunStatus") }
                     Divider()
                     ScrollViewReader { proxy in
                         ScrollView {

@@ -13,12 +13,18 @@ import LLMProviderKit
 }
 @MainActor private final class FakeScheduler: RunBackgroundScheduler {
     var reject = false
+    var failures: [String: @MainActor () -> Void] = [:]
     var launches: [String: @MainActor (any RunBackgroundLease) -> Void] = [:]
     var identifiers: [String] = []
     var cancellations: [String] = []
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void) throws {
         identifiers.append(identifier); launches[identifier] = launched
         if reject { throw AppError.unavailable("rejected") }
+    }
+    func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void,
+                failed: @escaping @MainActor () -> Void) throws {
+        failures[identifier] = failed
+        try submit(identifier: identifier, launched: launched)
     }
     func cancel(identifier: String) { cancellations.append(identifier) }
     func grant(_ lease: FakeLease = FakeLease()) -> FakeLease {
@@ -39,6 +45,67 @@ import LLMProviderKit
     private let token = UUID()
     private func tool(_ id: String = "tap") -> RunCheckpoint.Tool {
         .init(callID: id, name: "tap", parameterSummary: "{\"x\":1,\"y\":2}", argumentDigest: "digest")
+    }
+    func testAsynchronousSubmissionFailureAndOldCallbackCannotAffectNewRun() throws {
+        let scheduler = FakeScheduler()
+        let lifecycle = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
+        try lifecycle.begin(identity: identity, generation: token)
+        let old = scheduler.identifiers[0]
+        scheduler.failures[old]?()
+        XCTAssertFalse(lifecycle.hasLease)
+        XCTAssertTrue(lifecycle.backgroundStatus.contains("仅前台"))
+        XCTAssertTrue(scheduler.cancellations.contains(old))
+        lifecycle.stop(message: "stop")
+        let next = UUID()
+        try lifecycle.begin(identity: identity, generation: next)
+        let granted = scheduler.grant()
+        scheduler.failures[old]?()
+        lifecycle.setForeground(false)
+        XCTAssertTrue(lifecycle.hasLease)
+        XCTAssertEqual(lifecycle.checkpoint?.generation, next)
+        XCTAssertTrue(granted.completions.isEmpty)
+        lifecycle.stop(message: "cleanup")
+    }
+    func testExecutionSourceIsExclusiveAndCancellationUsesOriginalOwner() throws {
+        let continued = FakeScheduler(), scheduler = RunExecutionScheduler(continued: FakeScheduler())
+        let routed = RunExecutionScheduler(continued: continued)
+        routed.configure(context: nil, allowSystemProcessing: true)
+        try routed.submit(identifier: "system", launched: { _ in })
+        XCTAssertEqual(continued.identifiers, ["system"])
+        routed.configure(context: nil, allowSystemProcessing: false)
+        XCTAssertThrowsError(try routed.submit(identifier: "foreground", launched: { _ in }))
+        routed.cancel(identifier: "system")
+        XCTAssertEqual(continued.cancellations, ["system"])
+        XCTAssertThrowsError(try scheduler.submit(identifier: "default", launched: { _ in }))
+    }
+    func testColdRecoveryCancelsSystemRequestWithoutInMemoryOwner() throws {
+        let store = MemoryRunCheckpointStore(), system = FakeScheduler()
+        var saved = RunCheckpoint(runID: identity.runID, conversationID: identity.conversationID, generation: token)
+        saved.segmentID = "test.phoneagent.backgroundRun.old-process"
+        store.value = saved
+        let scheduler = RunExecutionScheduler(continued: system)
+        let restored = RunLifecycleCoordinator(scheduler: scheduler, storage: store, identifierPrefix: "test.phoneagent.backgroundRun")
+        XCTAssertEqual(system.cancellations, [saved.segmentID!])
+        XCTAssertTrue(system.identifiers.isEmpty)
+        XCTAssertFalse(restored.hasLease)
+        XCTAssertNil(restored.checkpoint?.segmentID)
+        XCTAssertEqual(restored.checkpoint?.phase, .paused)
+    }
+    func testLegacyUSBCheckpointMigratesToCommonJournalWithoutResuming() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var old = RunCheckpoint(runID: identity.runID, conversationID: identity.conversationID, generation: token)
+        var action = tool(); action.delivery = .dispatching; old.tools = [action]
+        let legacy = directory.appendingPathComponent("usb-run-checkpoint-v1.json")
+        let data = try JSONEncoder().encode(old); try data.write(to: legacy)
+        let scheduler = FakeScheduler()
+        let restored = RunLifecycleCoordinator(scheduler: scheduler, storage: try RunCheckpointStore(directory: directory))
+        XCTAssertEqual(restored.checkpoint?.phase, .paused)
+        XCTAssertEqual(restored.checkpoint?.tools[0].delivery, .outcomeUnknown)
+        XCTAssertTrue(scheduler.identifiers.isEmpty); XCTAssertFalse(restored.hasLease)
+        XCTAssertEqual(try Data(contentsOf: legacy), data)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("run-checkpoint-v1.json").path))
     }
     func testSuccessfulSubmissionIsNotLeaseAndLateHandlerCannotResumePausedRun() throws {
         let scheduler = FakeScheduler(), store = MemoryRunCheckpointStore()

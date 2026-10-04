@@ -17,12 +17,22 @@ import Foundation
         else { selected = allowSystemProcessing ? continued : foregroundOnly }
     }
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void) throws {
+        try submit(identifier: identifier, launched: launched, failed: {})
+    }
+    func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void,
+                failed: @escaping @MainActor () -> Void) throws {
         owners[identifier] = selected
-        try selected.submit(identifier: identifier, launched: launched)
+        try selected.submit(identifier: identifier, launched: launched, failed: failed)
     }
     func cancel(identifier: String) {
         // The run may already have selected a different backend by the time an
         // old callback arrives; cancel through the original owner only.
-        owners.removeValue(forKey: identifier)?.cancel(identifier: identifier)
+        if let owner = owners.removeValue(forKey: identifier) { owner.cancel(identifier: identifier) }
+        else {
+            // After process death the owner map is empty. The coordinator has
+            // validated this persisted ID's app prefix; cancel any old system
+            // request too. A SCK-only segment has no system request to cancel.
+            continued.cancel(identifier: identifier)
+        }
     }
 }
