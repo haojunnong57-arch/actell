@@ -97,28 +97,6 @@ import XCTest
         XCTFail("Timed out waiting for deterministic offline runtime")
         throw AppError.timeout
     }
-    func testBackgroundPreferenceSurvivesStopCompletionAndNewViewModel() async throws {
-        let suite = "capture-preference-tests-" + UUID().uuidString
-        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { preferences.removePersistentDomain(forName: suite) }
-        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
-            runServices: AgentRunServices(provider: ToolErrorFixtureProvider(), bridge: UnavailableBridge()),
-            capturePreferences: preferences)
-        XCTAssertFalse(model.allowUSBBackgroundRun)
-        model.allowUSBBackgroundRun = true
-        model.stop()
-        try await waitUntil { !model.stopping }
-        XCTAssertTrue(model.allowUSBBackgroundRun)
-        let id = model.createConversation(mode: .live)
-        XCTAssertTrue(model.send("查看屏幕", in: id, cloudConsent: true))
-        try await waitUntil { !model.running }
-        XCTAssertTrue(model.allowUSBBackgroundRun)
-        let reopened = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
-            capturePreferences: preferences)
-        XCTAssertTrue(reopened.allowUSBBackgroundRun)
-        reopened.allowUSBBackgroundRun = false
-        XCTAssertFalse(preferences.bool(forKey: "captureContinueInBackground"))
-    }
     func testDemoUsesRealAgentLoopAndStructuredToolEvents() async throws {
         let store = ConversationStore(inMemory: true)
         let model = AgentViewModel(sessions: store, loadPersistentState: false)

@@ -175,3 +175,10 @@ UART 115200 捕获 15 秒：TinyUSB 正常启动，日志包含 `NCM only; 192.1
 四项新增回归使用真实 CoreMedia `CMSampleBuffer` 与 `CMSetAttachment`，验证：buffer-only 方向在旧 sample 查找中确实不可见但可被新读取器编码，全部 8 种方向的输出尺寸；sample-only 与双层相同值；冲突/非法值不得回退；诊断脱敏及采集换代隔离。**完整 144 项单元测试一次通过，iPhoneOS 27 无签名编译通过。** 本轮未改 UI 操作流程，未重跑 UI 测试。日志与结果包见 [VALIDATION.md](VALIDATION.md)。
 
 真机需用户重新构建安装后授权、点本机预览，成功标准是 `accepted` 和 `sequence` 增长且预览方向正确。若仍 accepted=0，应复制带 metadataReader / orientation 字段的完整新报告；它能区分键缺失、值格式不符或来源冲突。当前已证明代码能处理 buffer-level 方向，尚无新版 iPhone 接收成功证据。无需烧录 ESP32。
+
+
+## 采集任务固定允许后台继续 · 2026-10-04
+
+按用户要求移除“切换 App 后继续采集任务”开关，生产入口固定为 `backgroundEnabled: true`。删除 `allowUSBBackgroundRun` 和 UserDefaults 偏好读写，旧版本保存的关闭值不再起作用。设置页改为行为说明；先前有关开关默认关闭和持久化的段落属于历史实现。
+
+该修改只固定后台资格的选择：系统采集授权、用户开始任务、每段 60 秒/总计 300 秒、新帧要求、停止/锁屏/失效撤销、HID 前台逐动作审批均保留。不会自动启动采集、启动任务或恢复中断执行。无需重烧固件；重新构建安装 App 后生效。验证结果见 [VALIDATION.md](VALIDATION.md)。

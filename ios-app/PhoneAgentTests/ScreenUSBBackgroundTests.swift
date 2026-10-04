@@ -156,7 +156,7 @@ final class ScreenUSBPermitTests: XCTestCase {
         model.setScene(.inactive); model.setScene(.background)
         try await waitUntil { !model.running }
         let inputs = await transport.inputs
-        XCTAssertEqual(inputs.count, 1)
+        XCTAssertEqual(inputs.count, 1, "status=\(model.status); checkpoint=\(model.lifecycle.checkpoint?.message ?? "none")")
         XCTAssertEqual(model.activeRecord?.phase, .completed)
         XCTAssertEqual(model.lifecycle.checkpoint?.tools.first(where: { $0.name == "tap" })?.delivery, .observedResult)
     }

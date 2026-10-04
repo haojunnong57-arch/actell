@@ -24,10 +24,6 @@ struct AgentRunServices {
     @Published private(set) var usbConnectionStatus: USBConnectionStatus = .idle
     let usbDiagnostics = USBDiagnosticsLog()
     let capture = ScreenCaptureController()
-    @Published var allowUSBBackgroundRun = false {
-        didSet { capturePreferences?.set(allowUSBBackgroundRun, forKey: "captureContinueInBackground") }
-    }
-    private let capturePreferences: UserDefaults?
     private var previewTask: Task<Void, Never>?
     @Published private(set) var previewingCapture = false
     private var usbClient: USBCommandClient?
@@ -76,10 +72,7 @@ struct AgentRunServices {
     var canResume: Bool { !running && !stopping && [.stopped, .interrupted, .blocked].contains(activeRecord?.phase ?? .idle) }
     init(sessions: ConversationStore? = nil, loadPersistentState: Bool = true, runServices: AgentRunServices? = nil,
          lifecycle: RunLifecycleCoordinator? = nil,
-         approvalRecords: ApprovalRecordStore? = nil, liveActivitiesEnabled: Bool? = nil,
-         capturePreferences: UserDefaults? = nil) {
-        self.capturePreferences = capturePreferences ?? (loadPersistentState ? .standard : nil)
-        self.allowUSBBackgroundRun = self.capturePreferences?.bool(forKey: "captureContinueInBackground") ?? false
+         approvalRecords: ApprovalRecordStore? = nil, liveActivitiesEnabled: Bool? = nil) {
         self.approvalRecords = approvalRecords ?? ApprovalRecordStore(inMemory: !loadPersistentState)
         self.liveActivities = AgentLiveActivityController(enabled: liveActivitiesEnabled ?? loadPersistentState)
         self.runServices = runServices
@@ -306,7 +299,7 @@ struct AgentRunServices {
                                                    supportsHID: usbConnectionStatus == .ready(hid: true))
                 }
                 selectedBridge = try LiveDeviceBridgeRouter.make(frames: capture.frames, captureActive: capture.active,
-                    usb: usbInput, backgroundEnabled: allowUSBBackgroundRun,
+                    usb: usbInput, backgroundEnabled: true,
                     legacy: liveBridge) { [weak self] in
                         Task { @MainActor in
                             guard self?.generation == token, self?.finishingRun == false else { return }
@@ -664,6 +657,6 @@ struct AgentRunServices {
     Use only screenshot, tap, drag, wait, finish. No typing, home, shell, filesystem, browser or delegation tools exist. Do not invent them.
     Do not explain private reasoning. Use concise public action purposes and final result summaries only.
     After inspecting a fresh screenshot that supports completion, call finish with a short outcome and any uncertainty. If blocked, say what the user must do; never claim completion merely because a command was delivered.
-    Only an explicitly enabled ScreenCaptureKit route can attempt bounded background execution with a valid capture. Input additionally needs a healthy USB connection. Other routes may obtain finite system CPU/network time, but legacy device tools still require foreground. Every input requires foreground human approval, then a matching fresh target screen. Never promise indefinite background execution or replay interrupted actions.
+    ScreenCaptureKit tasks can attempt bounded background execution with a valid user-authorized capture. Input additionally needs a healthy USB connection. Other routes may obtain finite system CPU/network time, but legacy device tools still require foreground. Every input requires foreground human approval, then a matching fresh target screen. Never promise indefinite background execution or replay interrupted actions.
     """
 }

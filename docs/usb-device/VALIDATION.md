@@ -1,5 +1,12 @@
 # 本地验证与真机验收边界 · 2026-10-04
 
+2026-10-04 22:41（Asia/Shanghai）最新设置简化：按用户要求将采集任务后台继续能力固定开启，移除设置开关及 UserDefaults 偏好读写。旧的关闭值不再参与路由选择；生产 SCK 路由固定 `backgroundEnabled: true`。系统授权、用户开始任务、时限、采集失效停止和 HID 逐动作审批保留。详见 [固定后台行为](NO-PSK.md#采集任务固定允许后台继续--2026-10-04)。
+
+**最终 143 项单元测试、1 项采集设置 UI 测试和 iPhoneOS 27 无签名构建通过。** 删除了一项已失去适用对象的偏好持久化单元测试；更新现有 UI 测试，核实开关不存在、固定后台说明显示、系统采集仍需明确授权。首轮有一项既有后台 HID 审批往返用例提前中断（3 个断言失败）；补充断言的停止原因后完整单元回归通过，未复现原因，也未放宽输入检查。首次失败和重跑结果均保留在本地。
+
+本轮日志：`.build/validation/capture-background-default/ios-tests.log`、`ios-unit-retest.log`、`ios-device-build.log`；单元最终结果包时间为 `2026.10.04_22-40-40-+0800`，UI 包为 `2026.10.04_22-38-32-+0800`，均在 Git 忽略的 `.build/` 下。Xcode 工程与 Info.plist 与本轮开始快照按字节一致；本机签名设置、固件及系统权限未改变。本轮按用户要求提交至 `with-esp/main`，基线 `d177ca2`，未推送；实际 iPhone 跨 App 采集与 Agent 闭环仍待验证。
+
+
 2026-10-04 22:29（Asia/Shanghai）最新方向元数据修正：用户日志显示 781 个样本全部因方向检查被丢弃。已补上同一公开 SCK 方向键的 CMSampleBuffer 级附件读取，保留 per-sample 兼容；不猜方向，冲突和非法值仍拒绝。实现及下一次日志判读见 [附件读取修正](NO-PSK.md#videoorientation-附件读取修正--2026-10-04-2229)。
 
 **本轮完整 144 项单元测试、iPhoneOS 27 无签名构建通过。** 新增四项真实 CoreMedia 缓冲/附件回归，覆盖 buffer-only、sample-only、双层冲突、全部 EXIF 方向编码及诊断脱敏。未调用真实模型或手机采集；本轮没有 UI 流程修改，UI 测试仍为下面上一轮结果。日志在 `.build/validation/capture-orientation/{ios-unit.log,ios-device-build.log}`，结果包为 `.build/ios/Logs/Test/Test-PhoneAgent-2026.10.04_22-27-59-+0800.xcresult`，均已忽略。公开 Apple 文档本地副本也仅存忽略目录。

@@ -126,17 +126,11 @@ import XCTest
         XCTAssertTrue(app.staticTexts["此 Simulator SDK 不含 ScreenCaptureKit；需 iOS 27 真机授权"].exists)
         XCTAssertTrue(app.staticTexts["screenCaptureRouteHelp"].label.contains("无需连接 ESP32"))
         XCTAssertFalse(app.switches["screenUploadConsent"].exists)
-        XCTAssertEqual(app.switches["usbBackgroundConsent"].value as? String, "0")
+        XCTAssertFalse(app.switches["usbBackgroundConsent"].exists)
+        XCTAssertTrue(app.staticTexts["screenCaptureBackgroundHelp"].label.contains("固定允许"))
         XCTAssertFalse(app.buttons["仅在本机预览截图"].isEnabled)
         XCTAssertFalse(app.buttons["startScreenCapture"].isEnabled)
         capture("usb-capture-simulator-unavailable")
-        let preference = app.switches["usbBackgroundConsent"]
-        if !preference.isHittable { app.scrollViews.firstMatch.swipeUp() }
-        preference.tap()
-        XCTAssertEqual(preference.value as? String, "1")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.buttons["controlDebug"].tap()
-        XCTAssertEqual(app.switches["usbBackgroundConsent"].value as? String, "1")
         let copy = app.buttons["copyUSBDiagnostics"]
         if !copy.isHittable { app.scrollViews.firstMatch.swipeUp() }
         XCTAssertTrue(copy.isHittable)
