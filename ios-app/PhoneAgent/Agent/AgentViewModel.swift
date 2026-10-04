@@ -24,6 +24,14 @@ struct AgentRunServices {
     @Published var storageWarning: String?
     @Published private(set) var selectedConversationID: UUID?
     let sessions: ConversationStore
+    let liveActivities: AgentLiveActivityController
+    let approvalRecords: ApprovalRecordStore
+    @Published private(set) var activitySnapshot: AgentActivitySnapshot?
+    @Published private(set) var activityNavigation: ActivityNavigation?
+    @Published var activityLinkError: String?
+    private var approvalTimeout: Task<Void, Never>?
+    private var completedToolIDs: Set<String> = []
+    private var activeActionCallID: String?
     private var runIdentity: RunIdentity?
     var currentRun: RunIdentity? { runIdentity }
     private var store: TaskStore?
@@ -45,7 +53,10 @@ struct AgentRunServices {
 
     var activeRecord: TaskRecord? { records.first(where: { $0.id == activeID }) ?? records.first }
     var canResume: Bool { !running && !stopping && [.stopped, .interrupted, .blocked].contains(activeRecord?.phase ?? .idle) }
-    init(sessions: ConversationStore? = nil, loadPersistentState: Bool = true, runServices: AgentRunServices? = nil) {
+    init(sessions: ConversationStore? = nil, loadPersistentState: Bool = true, runServices: AgentRunServices? = nil,
+         approvalRecords: ApprovalRecordStore? = nil, liveActivitiesEnabled: Bool? = nil) {
+        self.approvalRecords = approvalRecords ?? ApprovalRecordStore(inMemory: !loadPersistentState)
+        self.liveActivities = AgentLiveActivityController(enabled: liveActivitiesEnabled ?? loadPersistentState)
         self.runServices = runServices
         var legacy: [TaskRecord] = []
         if loadPersistentState {
@@ -93,6 +104,7 @@ struct AgentRunServices {
     func deleteBridgeKey() { stop(); do { try SecretStore.delete("bridge-psk-v1"); status = "桥接密钥已删除" } catch { errorMessage = error.localizedDescription } }
     func setForeground(_ active: Bool) {
         foreground = active
+        liveActivities.setForeground(active)
         // SwiftUI reports an initial inactive phase before the first foreground.
         // Do not turn an idle welcome state into a fictitious interrupted run.
         if !active, running || listenerTask != nil || liveBridge != nil {
@@ -150,11 +162,13 @@ struct AgentRunServices {
         let history = sessions.history(in: conversationID)
         guard let identity = sessions.begin(in: conversationID, query: query) else { provider?.cancel(); provider = nil; return false }
         runIdentity = identity; generation = token; mode = selectedMode
+        completedToolIDs = []; activeActionCallID = nil; activityNavigation = nil
         var record = TaskRecord(goal: query, mode: selectedMode); record.phase = .running
         activeID = record.id; records.insert(record, at: 0); records = Array(records.prefix(20))
         running = true; latestFrame = nil; errorMessage = nil
         bridge = selectedBridge; status = selectedMode == .demo ? "离线脚本演示" : "正在联系模型"
         log("开始新的对话轮次；历史工具不会重放")
+        publishActivity(.thinking)
         let action = ActionCoordinator(bridge: selectedBridge, limits: limits,
             approve: { [weak self] request in await self?.askApproval(request, generation: token) ?? false },
             onImage: { [weak self] frame, callID in await self?.show(frame, callID: callID, generation: token) },
@@ -234,6 +248,9 @@ struct AgentRunServices {
         // owns draining; a second cleanup must not unlock Start prematurely.
         guard !stopping else { return }
         generation = UUID() // Fence late callbacks before cancelling anything.
+        publishActivity(phase == .interrupted ? .interrupted : (phase == .blocked ? .blocked : .stopped))
+        if let identity = runIdentity { invalidateApprovals(identity) }
+        approvalTimeout?.cancel(); approvalTimeout = nil
         if let identity = runIdentity { sessions.finish(identity, phase: phase, summary: publishNotice ? message : "") }
         runIdentity = nil
         listenerGeneration = UUID(); listenerTask?.cancel()
@@ -254,8 +271,14 @@ struct AgentRunServices {
 
     }
     func approve(_ approved: Bool) {
-        guard running, !stopping, let request = approval, let identity = runIdentity,
+        guard running, !stopping, foreground, let request = approval, let identity = runIdentity,
               let continuation = approvalContinuation else { return }
+        do { try approvalRecords.resolve(request, run: identity, approved: approved) }
+        catch {
+            stop(message: "审批已过期或记录不可用；本次动作未授权，请重新开始", interrupted: true)
+            return
+        }
+        approvalTimeout?.cancel(); approvalTimeout = nil
         if !approved {
             sessions.updateTool(callID: request.callID ?? request.id.uuidString, name: request.tool, state: .denied, result: "用户拒绝；该动作未发送。本轮结束，不会自动重试。", identity: identity)
             // Denial is a distinct terminal outcome. Shared cancellation only
@@ -266,15 +289,29 @@ struct AgentRunServices {
         sessions.updateTool(callID: request.callID ?? request.id.uuidString, name: request.tool, state: .approved, identity: identity)
         approvalContinuation = nil; approval = nil
         status = "已批准一次动作"; mutate { $0.phase = .running }
+        publishActivity(.approved)
         continuation.resume(returning: true)
     }
     private func askApproval(_ request: Approval, generation token: UUID) async -> Bool {
-        guard generation == token, running, approvalContinuation == nil else { return false }
-        if let identity = runIdentity {
-            sessions.updateTool(callID: request.callID ?? request.id.uuidString, name: request.tool, state: .awaitingApproval, detail: request.detail, identity: identity)
+        guard generation == token, running, foreground, approvalContinuation == nil,
+              let identity = runIdentity else { return false }
+        do { try approvalRecords.register(request, run: identity) }
+        catch {
+            stop(message: "审批记录无法安全保存；本次动作未授权", interrupted: true)
+            return false
         }
+        sessions.updateTool(callID: request.callID ?? request.id.uuidString, name: request.tool, state: .awaitingApproval, detail: request.detail, identity: identity)
         status = "等待确认一次动作"; mutate { $0.phase = .awaitingApproval; $0.log("等待用户确认 \(request.tool)") }
-        return await withCheckedContinuation { continuation in approvalContinuation = continuation; approval = request }
+        return await withCheckedContinuation { continuation in
+            approvalContinuation = continuation; approval = request; activeActionCallID = request.callID
+            publishActivity(.awaitingApproval)
+            approvalTimeout = Task { [weak self] in
+                do { try await Task.sleep(nanoseconds: UInt64(max(0, request.expiresAt.timeIntervalSinceNow) * 1_000_000_000)) }
+                catch { return }
+                guard let self, self.generation == token, self.approval?.id == request.id else { return }
+                self.stop(message: "本次确认已过期，未发送动作；请重新开始以获取新截图", interrupted: true)
+            }
+        }
     }
     private func show(_ frame: FrameImage, callID: String, generation token: UUID) {
         guard generation == token, running, let identity = runIdentity else { return }
@@ -282,6 +319,12 @@ struct AgentRunServices {
     }
     private func markExecuting(callID: String, name: String, generation token: UUID) {
         guard generation == token, running, let identity = runIdentity else { return }
+        do { try approvalRecords.claimExecution(callID: callID, run: identity) }
+        catch {
+            stop(message: "审批不可再次使用或已过期；未授权发送动作", interrupted: true)
+            return
+        }
+        publishActivity(.executing)
         status = "正在发送已批准的动作"
         sessions.updateTool(callID: callID, name: name, state: .executing, identity: identity)
     }
@@ -291,6 +334,7 @@ struct AgentRunServices {
         AgentEventProjection.record(event, run: identity, frame: latestFrame, in: sessions)
         switch event {
         case .llmCallStarted(let turn):
+            if activeActionCallID == nil { publishActivity(.thinking) }
             status = mode == .demo ? "演示脚本第 \(turn) 步" : "模型请求 \(turn)/\(limits.maxTurns)"
         case .llmCallCompleted(_, let response):
             mutate { r in
@@ -298,13 +342,24 @@ struct AgentRunServices {
                 else if r.mode == .live { r.usageComplete = false }
             }
         case .toolExecutionStarted(let call):
+            // The FIFO event consumer can lag the approval/transport callbacks.
+            // Do not let a late tool-start downgrade an authoritative state.
+            if activeActionCallID == nil { publishActivity(.working) }
             status = approval == nil ? "处理 \(call.name)" : "等待确认一次动作"
         case .toolExecutionFinished(let call, let result):
+            completedToolIDs.insert(call.id)
+            do { try approvalRecords.finish(callID: call.id, run: identity) }
+            catch { stop(message: "审批结果无法保存；请核对设备，本轮已中断", interrupted: true); return }
+            if activeActionCallID == call.id { activeActionCallID = nil }
+            if activeActionCallID == nil { publishActivity(.working) }
             if result.isError { log("\(call.name) 失败；错误结果已返回模型") }
         default: break // Never display/store reasoning or raw model arguments.
         }
     }
     private func end(_ phase: RunPhase, result: String, publishNotice: Bool = true) {
+        publishActivity(phase == .completed ? .completed : .blocked)
+        if let identity = runIdentity { invalidateApprovals(identity) }
+        approvalTimeout?.cancel(); approvalTimeout = nil
         if let identity = runIdentity { sessions.finish(identity, phase: phase, summary: phase == .completed || !publishNotice ? "" : result) }
         runIdentity = nil
         watchdog?.cancel(); provider?.cancel(); running = false
@@ -312,6 +367,51 @@ struct AgentRunServices {
         mutate { $0.phase = phase; $0.result = String(result.prefix(1_000)); $0.log(phase == .completed ? "本轮对话已结束" : "运行停止：需要检查或补充配置") }
         status = phase == .completed ? "运行结束，请核对结果与截图" : "已阻塞；查看结果说明"
         agent = nil; provider = nil; coordinator = nil; bridge = nil
+    }
+    private func invalidateApprovals(_ identity: RunIdentity) {
+        do { try approvalRecords.invalidate(run: identity) }
+        catch { storageWarning = "审批记录不可写；本轮已停止，旧审批不能恢复执行" }
+    }
+    private func publishActivity(_ phase: AgentActivityAttributes.Phase) {
+        guard let identity = runIdentity else { return }
+        let now = Date()
+        let snapshot = AgentActivitySnapshot(
+            attributes: AgentActivityAttributes(sessionID: identity.conversationID, runID: identity.runID, isDemo: mode == .demo),
+            state: .init(phase: phase, completedTools: completedToolIDs.count,
+                         approvalID: phase == .awaitingApproval ? approval?.id : nil, updatedAt: now),
+            staleDate: phase == .awaitingApproval ? (approval?.expiresAt ?? now) : now.addingTimeInterval(30))
+        activitySnapshot = snapshot; liveActivities.submit(snapshot)
+    }
+
+    /// URL contents only select a page. No URL parameter approves, denies or
+    /// starts anything. A link to an old run cannot expose a new run's gate.
+    @discardableResult func openActivityURL(_ url: URL) -> Bool {
+        guard let route = AgentActivityRoute(url: url), let session = sessions.conversation(route.sessionID),
+              session.messages.contains(where: { $0.runID == route.runID }) else {
+            activityLinkError = "找不到这条实时活动的会话或轮次"; return false
+        }
+        let identity = RunIdentity(conversationID: route.sessionID, runID: route.runID)
+        guard runIdentity == nil || runIdentity == identity else {
+            activityLinkError = "另一轮任务正在运行；旧实时活动不能切换或操作当前任务"; return false
+        }
+        var messageID = session.messages.first(where: { $0.runID == route.runID })?.id
+        var notice = "正在查看此轮记录；不会自动重新执行"
+        if let actionID = route.approvalID {
+            if runIdentity == identity, approval?.id != actionID {
+                activityLinkError = "这次确认已失效或已处理；旧链接不能定位当前动作"; return false
+            }
+            guard let record = approvalRecords.record(id: actionID), record.sessionID == route.sessionID, record.runID == route.runID,
+                  let message = session.messages.first(where: { $0.runID == route.runID && $0.tool?.callID == record.callID }) else {
+                activityLinkError = "找不到这次确认记录；链接不能授权动作"; return false
+            }
+            messageID = message.id
+            if runIdentity == identity, let request = approval, request.id == actionID,
+               approvalContinuation != nil, approvalRecords.isPending(request, run: identity) {
+                notice = "已定位本次确认；请查看详情后选择批准或拒绝"
+            } else { notice = "这次确认已失效或已处理；不会自动执行，请查看记录" }
+        }
+        activityNavigation = ActivityNavigation(route: route, messageID: messageID, notice: notice)
+        return true
     }
     func clearHistory() { guard !running, !stopping else { return }; records = []; activeID = nil; latestFrame = nil; sessions.clear(); persist() }
     private func log(_ text: String) { mutate { $0.log(text) } }

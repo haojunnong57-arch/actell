@@ -93,7 +93,9 @@ actor ActionCoordinator {
                 guard (100...2_000).contains(duration) else { throw AppError.invalid("拖动时长必须为 100–2000 毫秒") }
             }
             let detail = name == "tap" ? "\(purpose)\n点击像素 (\(x), \(y))" : "\(purpose)\n从像素 (\(x), \(y)) 拖动至 (\(try integer(p, "to_x")), \(try integer(p, "to_y")))，\(duration) ms"
-            guard await approve(Approval(tool: name, detail: detail, imageID: frame.id, callID: callID)) else { throw AppError.stopped }
+            guard await approve(Approval(tool: name, detail: detail, imageID: frame.id, callID: callID,
+                                         parametersDigest: try ApprovalRecordStore.digest(tool: name, parameters: p),
+                                         expiresAt: min(deadline, frame.capturedAt.addingTimeInterval(limits.maxScreenshotAge)))) else { throw AppError.stopped }
             try checkActive(); _ = try currentImage(frame.id) // Revalidate after a potentially long approval wait.
             actions += 1
             // Invalidate before the await: a second/reentrant call cannot reuse

@@ -4,11 +4,12 @@ struct ContentView: View {
     @ObservedObject var model: AgentViewModel
     @ObservedObject var statusPiP: StatusPiPController
     @ObservedObject private var sessions: ConversationStore
+    @ObservedObject private var liveActivities: AgentLiveActivityController
     @State private var path: [UUID] = []
     @State private var search = ""
     @State private var settingsOpen = false
     init(model: AgentViewModel, statusPiP: StatusPiPController) {
-        self.model = model; self.statusPiP = statusPiP; self.sessions = model.sessions
+        self.model = model; self.statusPiP = statusPiP; self.sessions = model.sessions; self.liveActivities = model.liveActivities
     }
     private var visible: [AgentConversation] {
         sessions.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.preview.localizedCaseInsensitiveContains(search) }
@@ -71,6 +72,18 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $settingsOpen) { SettingsView(model: model, statusPiP: statusPiP) }
+        }
+        .onOpenURL { url in model.openActivityURL(url) }
+        .onChange(of: model.activityNavigation) { _, destination in
+            guard let destination else { return }
+            settingsOpen = false
+            path = [destination.route.sessionID]
+        }
+        .alert("实时活动链接", isPresented: Binding(get: { model.activityLinkError != nil }, set: { if !$0 { model.activityLinkError = nil } })) {
+            Button("知道了") { model.activityLinkError = nil }
+        } message: { Text(model.activityLinkError ?? "") }
+        .safeAreaInset(edge: .bottom) {
+            if let notice = liveActivities.notice { Text(notice).font(.caption).foregroundStyle(.secondary).padding(8) }
         }
     }
     private func createConversation() {

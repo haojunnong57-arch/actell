@@ -17,6 +17,46 @@ import XCTest
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
     }
+    func testLiveActivityInterruptionAndExactHistoryLink() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-demo-history", "--ui-test-live-activity"]
+        app.launch()
+        pendingDemo(app)
+        capture("live-activity-01-pending-in-app")
+        XCUIDevice.shared.press(.home)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let top = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.01))
+        // A fresh simulator may show the first-use display permission only on
+        // the Notification Center card. This changes no signing/account access.
+        if !springboard.staticTexts["中断"].waitForExistence(timeout: 3) {
+            top.press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)))
+            XCTAssertTrue(springboard.buttons["允许"].waitForExistence(timeout: 5))
+            springboard.buttons["允许"].tap()
+            springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)).press(forDuration: 0.1,
+                thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)))
+        }
+        XCTAssertTrue(springboard.staticTexts["中断"].waitForExistence(timeout: 8))
+        capture("live-activity-01b-interrupted-compact")
+        springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.038)).press(forDuration: 1)
+        XCTAssertTrue(springboard.staticTexts["已中断"].waitForExistence(timeout: 5))
+        capture("live-activity-01c-interrupted-expanded")
+        springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)).tap()
+        top.press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)))
+        XCTAssertTrue(springboard.staticTexts["已中断"].waitForExistence(timeout: 10))
+        XCTAssertFalse(springboard.staticTexts["等待确认"].exists)
+        XCTAssertFalse(springboard.buttons["批准本次"].exists)
+        if springboard.buttons["允许"].exists { springboard.buttons["允许"].tap() }
+        capture("live-activity-02-interrupted-notification-center")
+        let link = springboard.buttons["查看记录"]
+        if link.exists { link.tap() }
+        else { springboard.staticTexts["查看记录"].tap() }
+        XCTAssertTrue(app.staticTexts["activityNavigationNotice"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["正在查看此轮记录；不会自动重新执行"].exists)
+        XCTAssertFalse(app.buttons["approveTool"].exists)
+        XCTAssertFalse(app.buttons["stopRun"].exists)
+        capture("live-activity-03-linked-history")
+    }
     func testConversationListChatApprovalAndResult() {
         let app = launch(demoHistory: true)
         XCTAssertTrue(app.staticTexts["新会话"].waitForExistence(timeout: 10))

@@ -29,6 +29,7 @@ struct ToolPresentation {
         model.sessions.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
     }
 
+    var activityNavigation: ActivityNavigation? { model.activityNavigation.flatMap { $0.route.sessionID == sessionID ? $0 : nil } }
     var session: AgentConversation? { model.sessions.conversation(sessionID) }
     var activeRun: RunIdentity? { model.currentRun.flatMap { $0.conversationID == sessionID ? $0 : nil } }
     var running: Bool { activeRun != nil && model.running }

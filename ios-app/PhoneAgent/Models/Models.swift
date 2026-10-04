@@ -42,6 +42,9 @@ struct Approval: Identifiable, Sendable {
     let detail: String
     let imageID: String
     var callID: String? = nil
+    var parametersDigest = ""
+    var version = 1
+    var expiresAt = Date().addingTimeInterval(45)
 }
 struct AgentLimits: Sendable {
     let maxTurns = 12
