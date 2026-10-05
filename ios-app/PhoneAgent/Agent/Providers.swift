@@ -168,6 +168,37 @@ struct DemoProvider: LLMProvider {
 }
 
 #if DEBUG
+struct SkillFixtureProvider: LLMProvider {
+    static let name = "offline-skill-fixture"
+    let configuration = LLMProviderConfiguration(name: name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
+    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
+        AsyncThrowingStream { continuation in
+            do {
+                let response = try response(request)
+                for call in response.toolCalls { continuation.yield(.toolCall(call)) }
+                if !response.text.isEmpty { continuation.yield(.text(response.text)) }
+                continuation.yield(.finish(reason: response.finishReason, usage: nil)); continuation.finish()
+            } catch { continuation.finish(throwing: error) }
+        }
+    }
+    func complete(_ request: LLMRequest) async throws -> LLMResponse { try response(request) }
+    private func response(_ request: LLMRequest) throws -> LLMResponse {
+        let results = request.messages.filter { $0.role == .tool }
+        let call: LLMToolCall
+        if results.isEmpty { call = .init(id: "fixture-skill-list", name: "list_skills", arguments: "{}") }
+        else if results.count == 1 {
+            guard let start = results[0].content.firstIndex(of: "{"),
+                  let object = try JSONSerialization.jsonObject(with: Data(results[0].content[start...].utf8)) as? [String: Any],
+                  let skill = (object["skills"] as? [[String: String]])?.first,
+                  let id = skill["id"], let revision = skill["revision"] else { throw AppError.invalid("合成夹具未找到已启用技能") }
+            call = .init(id: "fixture-skill-load", name: "load_skill", arguments: String(decoding: try JSONEncoder().encode(["id": id, "revision": revision]), as: UTF8.self))
+        } else {
+            guard results.last?.content.contains("SYNTHETIC_SKILL_BODY") == true else { throw AppError.invalid("合成夹具没有收到技能正文") }
+            return LLMResponse(text: "合成技能已读取。", finishReason: .stop, request: request, providerName: Self.name)
+        }
+        return LLMResponse(text: "", finishReason: .toolCalls, toolCalls: [call], request: request, providerName: Self.name)
+    }
+}
 // Deterministic fixture for the real Agent loop, with no network or credentials.
 // Its second turn only answers if the failed tool result actually reaches it.
 struct ToolErrorFixtureProvider: LLMProvider {

@@ -9,6 +9,11 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("扩展能力") {
+                    NavigationLink { SkillsView(model: model, store: model.skills) } label: {
+                        Label("技能", systemImage: "books.vertical")
+                    }.accessibilityIdentifier("manageSkills")
+                }
                 Section("本地记录") {
                     Text("一般消息保留最近 200 条；带附件的历史不自动裁剪。新截图与已选入附件的原文件保存在本机，打开历史不会重放动作。旧版本未保存的截图无法恢复。会话与附件开启完整文件保护并排除备份。")
                         .font(.caption)

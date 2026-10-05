@@ -45,6 +45,11 @@ import Foundation
                     runServices: AgentRunServices(provider: DemoProvider(), bridge: DemoBridge()))
             }
             let sessions = ConversationStore(inMemory: true)
+            if arguments.contains("--ui-test-skill-tools") {
+                sessions.create(mode: .live)
+                return AgentViewModel(sessions: sessions, loadPersistentState: false,
+                    runServices: AgentRunServices(provider: SkillFixtureProvider(), bridge: UnavailableBridge()))
+            }
             if arguments.contains("--ui-test-attachments") {
                 let id = sessions.create(mode: .demo)
                 let model = AgentViewModel(sessions: sessions, loadPersistentState: false)

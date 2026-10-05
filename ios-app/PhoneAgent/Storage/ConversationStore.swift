@@ -171,7 +171,7 @@ import Combine
         }
         touch(index); saveNow()
     }
-    func updateTool(callID: String, name: String, state: ToolStepState, detail: String = "", result: String = "", arguments: String? = nil, identity: RunIdentity) {
+    func updateTool(callID: String, name: String, state: ToolStepState, detail: String = "", result: String = "", arguments: String? = nil, skillName: String? = nil, identity: RunIdentity) {
         guard accepts(identity), let index = index(identity.conversationID) else { return }
         if let message = conversations[index].messages.firstIndex(where: { $0.runID == identity.runID && $0.tool?.callID == callID }) {
             let previous = conversations[index].messages[message].tool?.state
@@ -185,8 +185,9 @@ import Combine
             if !detail.isEmpty { conversations[index].messages[message].tool?.detail = String(detail.prefix(500)) }
             if !result.isEmpty { conversations[index].messages[message].tool?.result = String(result.prefix(1_000)) }
             if let arguments { conversations[index].messages[message].tool?.arguments = String(arguments.prefix(4_000)) }
+            if let skillName { conversations[index].messages[message].tool?.skillName = String(skillName.prefix(80)) }
         } else {
-            let tool = ToolStep(callID: callID, name: name, state: state, detail: String(detail.prefix(500)), result: String(result.prefix(1_000)), arguments: arguments.map { String($0.prefix(4_000)) })
+            let tool = ToolStep(callID: callID, name: name, state: state, detail: String(detail.prefix(500)), result: String(result.prefix(1_000)), arguments: arguments.map { String($0.prefix(4_000)) }, skillName: skillName.map { String($0.prefix(80)) })
             conversations[index].messages.append(ChatMessage(runID: identity.runID, role: .tool, text: "", tool: tool))
         }
         if state == .awaitingApproval { conversations[index].phase = .awaitingApproval }

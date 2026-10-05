@@ -18,6 +18,7 @@ groups = dict(line.split("\t", 1) for line in simctl("get_app_container", device
 folder = Path(groups["group.com.apple.FileProvider.LocalStorage"]) / "File Provider Storage" / "ProjectTodosFixtures"
 folder.mkdir(parents=True, exist_ok=True)
 (folder / "synthetic-note.txt").write_text("SYNTHETIC_NATIVE_FILE_CONTENT\nNo user data.", encoding="utf-8")
+(folder / "SKILL.md").write_text("---\nname: Synthetic Guide\ndescription: Read synthetic fixtures\nversion: 1\n---\nSYNTHETIC_SKILL_BODY\nThis is test data only.", encoding="utf-8")
 chunk = lambda kind, data: struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 128, 80, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress((b"\0" + bytes([25, 150, 190]) * 128) * 80)) + chunk(b"IEND", b"")
 with tempfile.TemporaryDirectory(prefix="phoneagent-synthetic-picker-") as temporary:
