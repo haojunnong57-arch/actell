@@ -25,6 +25,15 @@ import Foundation
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--ui-testing") || ProcessInfo.processInfo.environment["PHONEAGENT_ISOLATED_TESTS"] == "1" {
             let arguments = ProcessInfo.processInfo.arguments
+            if arguments.contains("--ui-test-images-seed") || arguments.contains("--ui-test-images-restore") {
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneAgentImageUITest", isDirectory: true)
+                if arguments.contains("--ui-test-images-seed") { try? FileManager.default.removeItem(at: directory) }
+                let sessions = ConversationStore(directory: directory)
+                if sessions.conversations.isEmpty { sessions.create(mode: .demo) }
+                return AgentViewModel(sessions: sessions, loadPersistentState: false,
+                    runServices: AgentRunServices(provider: DemoProvider(), bridge: DemoBridge()),
+                    attachments: AttachmentStore(directory: directory.appendingPathComponent("assets")))
+            }
             if arguments.contains("--ui-test-siri-seed") || arguments.contains("--ui-test-siri-restore") {
                 let directory = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneAgentSiriUITest", isDirectory: true)
                 if arguments.contains("--ui-test-siri-seed") { try? FileManager.default.removeItem(at: directory) }

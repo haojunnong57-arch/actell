@@ -61,6 +61,7 @@ struct ChatMessage: Identifiable, Codable, Sendable, Equatable {
     var date = Date()
     var state: MessageState = .complete
     var tool: ToolStep?
+    var attachments: [StoredAttachment]?
 }
 struct AgentConversation: Identifiable, Codable, Sendable {
     var id = UUID()
@@ -70,6 +71,7 @@ struct AgentConversation: Identifiable, Codable, Sendable {
     var updatedAt = Date()
     var entry: SessionEntry?
     var draft = ""
+    var draftAttachments: [StoredAttachment]?
     var providerID: UUID?
     var modelID: String?
     var recoveryNotices: [String: String]?

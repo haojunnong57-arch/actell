@@ -146,7 +146,10 @@ struct ConversationView: View {
     @ViewBuilder private func messageView(_ message: ChatMessage) -> some View {
         switch message.role {
         case .user:
-            HStack { Spacer(minLength: 36); Text(message.text).textSelection(.enabled).padding(12).background(.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 18)).foregroundStyle(.primary) }
+            VStack(alignment: .trailing, spacing: 8) {
+                HStack { Spacer(minLength: 36); Text(message.text).textSelection(.enabled).padding(12).background(.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 18)).foregroundStyle(.primary) }
+                MessageAttachmentsView(message: message, presentation: presentation)
+            }
         case .assistant:
             VStack(alignment: .leading, spacing: 6) {
                 if !message.text.isEmpty {
@@ -155,6 +158,7 @@ struct ConversationView: View {
                         .textSelection(.enabled)
                 } else if message.state == .streaming { Text("正在准备回复…").foregroundStyle(.secondary) }
                 if message.state == .interrupted { Text("回复已中断").font(.caption).foregroundStyle(.secondary) }
+                MessageAttachmentsView(message: message, presentation: presentation)
             }.frame(maxWidth: .infinity, alignment: .leading)
         case .tool:
             if let item = presentation.presentation(for: message) {
@@ -204,7 +208,14 @@ struct ConversationView: View {
         }.padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 8)
     }
     @ViewBuilder private func toolPreview(_ item: ToolPresentation) -> some View {
-        if let image = item.image, let uiImage = UIImage(data: image.png) {
+        if !item.attachments.isEmpty, item.approval == nil {
+            DisclosureGroup {
+                ForEach(item.attachments) { attachment in
+                    AttachmentThumbnail(attachment: attachment, store: presentation.attachments, conversationID: presentation.sessionID)
+                }
+            } label: { Text("查看本地截图").accessibilityIdentifier("toolScreenshot-result") }
+                .font(.footnote).tint(.secondary)
+        } else if let image = item.image, let uiImage = UIImage(data: image.png) {
             DisclosureGroup {
                 Image(uiImage: uiImage).resizable().scaledToFit().frame(maxHeight: 280)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -214,7 +225,7 @@ struct ConversationView: View {
                     .accessibilityIdentifier(item.approval == nil ? "toolScreenshot-result" : "toolScreenshot-approval")
             }.font(.footnote).tint(.secondary)
         } else if item.tool.name == "screenshot", item.tool.state == .succeeded {
-            Text("截图预览已释放；保留工具记录。").font(.caption).foregroundStyle(.secondary)
+            Text("此历史截图未保存本地原图，无法从工具记录恢复。").font(.caption).foregroundStyle(.secondary)
         }
     }
     private func send() {
@@ -299,7 +310,7 @@ private struct MessageInput: UIViewRepresentable {
 }
 
 private struct NoRemoteMarkdownImages: MarkdownUI.ImageProvider {
-    func makeImage(url: URL?) -> some View { Label("外部图片未自动加载", systemImage: "photo").font(.caption).foregroundStyle(.secondary) }
+    func makeImage(url: URL?) -> some View { Text("图片见下方").font(.caption).foregroundStyle(.secondary) }
 }
 private struct NoRemoteInlineImages: MarkdownUI.InlineImageProvider {
     func image(with url: URL, label: String) async throws -> Image { Image(systemName: "photo") }

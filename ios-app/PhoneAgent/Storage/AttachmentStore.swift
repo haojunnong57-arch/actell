@@ -178,6 +178,7 @@ final class MessageImageDownloader: @unchecked Sendable {
     private let redirectGuard = NoRedirectDelegate()
     init(configuration: URLSessionConfiguration = .ephemeral) {
         configuration.httpCookieStorage = nil; configuration.urlCache = nil
+        configuration.urlCredentialStorage = nil
         configuration.timeoutIntervalForRequest = 30; configuration.timeoutIntervalForResource = 60
         session = URLSession(configuration: configuration, delegate: redirectGuard, delegateQueue: nil)
     }
@@ -199,5 +200,17 @@ final class MessageImageDownloader: @unchecked Sendable {
             data.append(byte)
         }
         return data
+    }
+}
+
+enum MessageImageSources {
+    // The initial migration supports standard Markdown image links, never arbitrary
+    // URLs found in surrounding text or model-generated filesystem paths.
+    static func urls(in text: String) -> [URL] {
+        guard let pattern = try? NSRegularExpression(pattern: #"!\[[^\]]*\]\(\s*(https://[^\s\)]+)(?:\s+"[^"]*")?\s*\)"#) else { return [] }
+        let source = text as NSString
+        return pattern.matches(in: text, range: NSRange(location: 0, length: source.length)).compactMap {
+            URL(string: source.substring(with: $0.range(at: 1)))
+        }
     }
 }

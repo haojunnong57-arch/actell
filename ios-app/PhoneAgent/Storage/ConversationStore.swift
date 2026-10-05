@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-/// UI history contains public text and bounded tool receipts, never screenshots,
+/// UI history contains public text, resource references and bounded tool receipts, never image bytes,
 /// raw tool arguments, model reasoning, credentials, or resumable tool queues.
 @MainActor final class ConversationStore: ObservableObject {
     @Published private(set) var conversations: [AgentConversation] = []
@@ -55,6 +55,21 @@ import Combine
     }
 
     func conversation(_ id: UUID) -> AgentConversation? { conversations.first { $0.id == id } }
+    var referencedAttachments: [StoredAttachment] {
+        conversations.flatMap { ($0.draftAttachments ?? []) + $0.messages.flatMap { $0.attachments ?? [] } }
+    }
+    func attach(_ attachment: StoredAttachment, to messageID: UUID, in conversationID: UUID) {
+        guard attachment.conversationID == conversationID, let index = index(conversationID),
+              let message = conversations[index].messages.firstIndex(where: { $0.id == messageID }) else { return }
+        var references = conversations[index].messages[message].attachments ?? []
+        guard !references.contains(where: { $0.id == attachment.id && $0.sourceURL == attachment.sourceURL }) else { return }
+        references.append(attachment); conversations[index].messages[message].attachments = references
+        saveNow()
+    }
+    @discardableResult func attach(_ attachment: StoredAttachment, toTool callID: String, identity: RunIdentity) -> Bool {
+        guard accepts(identity), let message = conversation(identity.conversationID)?.messages.last(where: { $0.runID == identity.runID && $0.tool?.callID == callID }) else { return false }
+        attach(attachment, to: message.id, in: identity.conversationID); return true
+    }
     @discardableResult func create(mode: RunMode) -> UUID {
         let conversation = AgentConversation(mode: mode)
         conversations.insert(conversation, at: 0); saveNow()
@@ -202,7 +217,15 @@ import Combine
     private func index(_ id: UUID) -> Int? { conversations.firstIndex { $0.id == id } }
     private func touch(_ index: Int) {
         conversations[index].updatedAt = Date()
-        if conversations[index].messages.count > 200 { conversations[index].messages.removeFirst(conversations[index].messages.count - 200) }
+        // Keep durable image/file references until the user deletes their history.
+        // The normal 200-message trim must not orphan historical originals.
+        var excess = conversations[index].messages.count - 200
+        if excess > 0 {
+            conversations[index].messages.removeAll { message in
+                guard excess > 0, message.attachments?.isEmpty != false else { return false }
+                excess -= 1; return true
+            }
+        }
     }
     private func closePendingMessages(at index: Int) {
         for message in conversations[index].messages.indices {

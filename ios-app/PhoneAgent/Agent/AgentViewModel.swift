@@ -32,6 +32,10 @@ struct AgentRunServices {
     @Published var storageWarning: String?
     @Published private(set) var selectedConversationID: UUID?
     let providers: ProviderStore
+    let attachments: AttachmentStore
+    private var pendingScreenshotAssets: [StepIdentity: StoredAttachment] = [:]
+    private var assetMutations = 0
+    private var clearingAssets = false
     let sessions: ConversationStore
     let lifecycle: RunLifecycleCoordinator
     private let executionScheduler = RunExecutionScheduler()
@@ -77,8 +81,10 @@ struct AgentRunServices {
     init(sessions: ConversationStore? = nil, loadPersistentState: Bool = true, runServices: AgentRunServices? = nil,
          lifecycle: RunLifecycleCoordinator? = nil,
          approvalRecords: ApprovalRecordStore? = nil, liveActivitiesEnabled: Bool? = nil,
+         attachments: AttachmentStore? = nil,
          makeUSBClient: @escaping @MainActor (USBDiagnosticsLog, @escaping @Sendable (USBConnectionStatus) -> Void) -> any USBConnectionSession = { USBCommandClient(diagnostics: $0, onProgress: $1) }) {
         self.providers = ProviderStore(defaults: loadPersistentState ? .standard : nil)
+        self.attachments = attachments ?? AttachmentStore(directory: loadPersistentState ? nil : FileManager.default.temporaryDirectory.appendingPathComponent("test-assets-\(UUID())"))
         self.makeUSBClient = makeUSBClient
         self.approvalRecords = approvalRecords ?? ApprovalRecordStore(inMemory: !loadPersistentState)
         self.liveActivities = AgentLiveActivityController(enabled: liveActivitiesEnabled ?? loadPersistentState)
@@ -337,7 +343,7 @@ struct AgentRunServices {
         _ = send(goal, in: id, cloudConsent: true)
     }
     @discardableResult func send(_ text: String, in conversationID: UUID, cloudConsent: Bool = false) -> Bool {
-        guard !running, !stopping, foreground, protectedDataAvailable, listenerTask == nil,
+        guard !running, !stopping, !clearingAssets, foreground, protectedDataAvailable, listenerTask == nil,
               selectedConversationID == conversationID, let session = sessions.conversation(conversationID) else { return false }
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, query.count <= 2_000 else { return false }
@@ -394,7 +400,7 @@ struct AgentRunServices {
         runIdentity = identity; generation = token; mode = selectedMode; finishingRun = false
         inputAuthorizationMode = selectedMode == .live && selectedBridge is USBDeviceBridge ? .task : .perAction
         usbDiagnostics.record("run.authorization mode=\(inputAuthorizationMode.rawValue) fixedDurationLimit=false")
-        completedToolIDs = []; activeActionCallID = nil; activityNavigation = nil; activityHandoffRun = nil
+        completedToolIDs = []; pendingScreenshotAssets = [:]; activeActionCallID = nil; activityNavigation = nil; activityHandoffRun = nil
         var record = TaskRecord(goal: query, mode: selectedMode); record.phase = .running
         activeID = record.id; records.insert(record, at: 0); records = Array(records.prefix(20))
         running = true; latestFrame = nil; errorMessage = nil
@@ -617,9 +623,17 @@ struct AgentRunServices {
             }
         }
     }
-    private func show(_ frame: FrameImage, callID: String, generation token: UUID) {
+    private func show(_ frame: FrameImage, callID: String, generation token: UUID) async {
         guard generation == token, running, let identity = runIdentity else { return }
-        latestFrame = PresentedFrame(step: StepIdentity(run: identity, stepID: callID), image: frame)
+        let step = StepIdentity(run: identity, stepID: callID)
+        latestFrame = PresentedFrame(step: step, image: frame)
+        do {
+            let asset = try await attachments.store(frame.png, name: frame.isDemo ? "合成截图.png" : "设备截图.png", conversationID: identity.conversationID)
+            guard generation == token, sessions.accepts(identity) else { return }
+            if !sessions.attach(asset, toTool: callID, identity: identity) { pendingScreenshotAssets[step] = asset }
+        } catch {
+            storageWarning = "本次截图未能持久保存；当前预览仍可用，请检查附件空间"
+        }
     }
     private func markExecuting(callID: String, name: String, generation token: UUID) {
         guard generation == token, running, let identity = runIdentity else { return }
@@ -636,6 +650,10 @@ struct AgentRunServices {
     private func observe(_ event: AgentEvent, generation token: UUID) {
         guard generation == token, running, let identity = runIdentity, sessions.accepts(identity) else { return }
         AgentEventProjection.record(event, run: identity, frame: latestFrame, in: sessions)
+        if case .toolExecutionFinished(let call, _) = event,
+           let asset = pendingScreenshotAssets.removeValue(forKey: StepIdentity(run: identity, stepID: call.id)) {
+            sessions.attach(asset, toTool: call.id, identity: identity)
+        }
         switch event {
         case .llmCallStarted(let turn):
             if activeActionCallID == nil { publishActivity(.thinking) }
@@ -733,6 +751,33 @@ struct AgentRunServices {
         if running { stop(message: "已离开控制调试，本轮执行已中断", interrupted: true) }
     }
     func clearHistory() { guard !running, !stopping else { return }; records = []; activeID = nil; latestFrame = nil; sessions.clear(); persist() }
+    func cacheMessageImage(_ url: URL, messageID: UUID, conversationID: UUID, downloader: MessageImageDownloader = MessageImageDownloader()) async throws -> StoredAttachment {
+        guard !clearingAssets else { throw AppError.unavailable("正在清理附件，请稍后重试") }
+        assetMutations += 1
+        defer { assetMutations -= 1 }
+        func authorizedMessage() -> ChatMessage? {
+            sessions.conversation(conversationID)?.messages.first { $0.id == messageID && MessageImageSources.urls(in: $0.text).contains(url) }
+        }
+        guard let message = authorizedMessage() else { throw AppError.invalid("图片链接不属于此消息") }
+        if let cached = message.attachments?.first(where: { $0.sourceURL == url }),
+           (try? await attachments.read(cached, conversationID: conversationID)) != nil { return cached }
+        let data: Data
+        do { data = try await downloader.download(url) }
+        catch is CancellationError { throw CancellationError() }
+        catch { throw AppError.unavailable("图片未缓存：链接可能已过期或网络不可用。可重试；未缓存的失效图片无法恢复") }
+        try Task.checkCancellation()
+        guard authorizedMessage() != nil else { throw AppError.stopped }
+        let asset = try await attachments.store(data, name: "消息图片", conversationID: conversationID, sourceURL: url)
+        guard asset.kind == .image, authorizedMessage() != nil else { throw AppError.invalid("此图源未返回有效图片") }
+        sessions.attach(asset, to: messageID, in: conversationID)
+        return asset
+    }
+    func clearUnreferencedAttachments() async throws -> Int {
+        guard !running, !stopping, assetMutations == 0, !clearingAssets else { throw AppError.stopped }
+        clearingAssets = true
+        defer { clearingAssets = false }
+        return try await attachments.removeUnreferenced(keeping: sessions.referencedAttachments)
+    }
     private func log(_ text: String) { mutate { $0.log(text) } }
     private func mutate(_ update: (inout TaskRecord) -> Void) {
         guard let id = activeID, let index = records.firstIndex(where: { $0.id == id }) else { return }

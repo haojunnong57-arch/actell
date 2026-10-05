@@ -16,6 +16,7 @@ struct ToolPresentation {
     let tool: ToolStep
     let approval: Approval?
     let image: FrameImage?
+    let attachments: [StoredAttachment]
 }
 
 @MainActor final class AgentPresentationAdapter: ObservableObject {
@@ -42,6 +43,10 @@ struct ToolPresentation {
     var selectedModel: String { model.selectedModel(in: sessionID) }
     var availableModels: [String] { model.selectedProvider(in: sessionID)?.availableModels ?? [] }
     var selectedProvider: ProviderProfile? { model.selectedProvider(in: sessionID) }
+    var attachments: AttachmentStore { model.attachments }
+    func cacheImage(_ url: URL, messageID: UUID) async throws -> StoredAttachment {
+        try await model.cacheMessageImage(url, messageID: messageID, conversationID: sessionID)
+    }
     var modelName: String { selectedModel.isEmpty ? "选择服务商和模型" : selectedModel }
     func selectProvider(_ id: UUID) { model.selectProvider(id, in: sessionID) }
     func selectModel(_ name: String) { model.selectModel(name, in: sessionID) }
@@ -70,7 +75,7 @@ struct ToolPresentation {
         if let frame, frame.step == step { image = frame.image }
         else if let frame, frame.step.run == step.run, approval?.imageID == frame.image.id { image = frame.image }
         else { image = nil }
-        return ToolPresentation(identity: step, tool: tool, approval: approval, image: image)
+        return ToolPresentation(identity: step, tool: tool, approval: approval, image: image, attachments: message.attachments ?? [])
     }
 
     @discardableResult func dispatch(_ intent: AgentUIIntent) -> Bool {
@@ -115,7 +120,7 @@ struct ToolPresentation {
                 switch call.name {
                 case "screenshot":
                     let image = frame.flatMap { $0.step == StepIdentity(run: run, stepID: call.id) ? $0.image : nil }
-                    receipt = image.map { "已取得 \($0.width) × \($0.height) 截图；图像仅在内存中保留" } ?? "截图已返回"
+                    receipt = image.map { "已取得 \($0.width) × \($0.height) 截图" } ?? "截图已返回"
                 case "tap", "drag": receipt = "已确认送达；可见效果需要下一张截图核对"
                 case "wait": receipt = "等待结束，需要重新查看屏幕"
                 case "finish": receipt = String(result.result.prefix(1_000))
