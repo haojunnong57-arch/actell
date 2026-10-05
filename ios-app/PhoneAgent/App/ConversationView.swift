@@ -201,7 +201,7 @@ struct ConversationView: View {
                         .accessibilityLabel("发送").accessibilityIdentifier("sendMessage")
                 }
             }.padding(.horizontal, 15).padding(.vertical, 6).background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24))
-        }.padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 8).background(.bar)
+        }.padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 8)
     }
     @ViewBuilder private func toolPreview(_ item: ToolPresentation) -> some View {
         if let image = item.image, let uiImage = UIImage(data: image.png) {
