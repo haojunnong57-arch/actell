@@ -41,6 +41,7 @@ struct ToolPresentation {
     var providerID: UUID? { model.selectedProvider(in: sessionID)?.id }
     var selectedModel: String { model.selectedModel(in: sessionID) }
     var availableModels: [String] { model.selectedProvider(in: sessionID)?.availableModels ?? [] }
+    var selectedProvider: ProviderProfile? { model.selectedProvider(in: sessionID) }
     var modelName: String { selectedModel.isEmpty ? "选择服务商和模型" : selectedModel }
     func selectProvider(_ id: UUID) { model.selectProvider(id, in: sessionID) }
     func selectModel(_ name: String) { model.selectModel(name, in: sessionID) }

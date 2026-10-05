@@ -36,6 +36,11 @@ import Foundation
                     runServices: AgentRunServices(provider: DemoProvider(), bridge: DemoBridge()))
             }
             let sessions = ConversationStore(inMemory: true)
+            if arguments.contains("--ui-test-model-catalog") {
+                let model = AgentViewModel(sessions: sessions, loadPersistentState: false)
+                try? model.providers.save(ProviderProfile(name: "Catalog Fixture", settings: .init(baseURL: "https://catalog-fixture.invalid/v1", model: "")))
+                return model
+            }
             if ProcessInfo.processInfo.arguments.contains("--ui-testing"),
                ProcessInfo.processInfo.arguments.contains("--ui-test-tool-error") {
                 sessions.create(mode: .live)

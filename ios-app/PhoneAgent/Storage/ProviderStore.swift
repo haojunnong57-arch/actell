@@ -6,6 +6,9 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
     var name: String
     var settings: ProviderSettings
     var models: [String]
+    var protocolKind: ProviderProtocol?
+    var catalog: ModelCatalog?
+    var modelParameters: [String: ModelParameters]?
     // Reference only. Credentials are never encoded into UserDefaults/history.
     var keyAccount: String
 
@@ -13,7 +16,21 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
         self.id = id; self.name = name; self.settings = settings; self.models = models
         self.keyAccount = keyAccount ?? "provider-profile:\(id):\(settings.baseURL)"
     }
-    var availableModels: [String] { Array(NSOrderedSet(array: [settings.model] + models)) as? [String] ?? [] }
+    var protocolType: ProviderProtocol { protocolKind ?? .openAI }
+    func catalogEndpoint() throws -> String { protocolType.rawValue + ":" + (try protocolType.baseURL(settings.baseURL)).absoluteString }
+    var currentCatalog: ModelCatalog? { catalog?.endpoint == (try? catalogEndpoint()) ? catalog : nil }
+    var availableModels: [String] {
+        Array(NSOrderedSet(array: ([settings.model] + models + (currentCatalog?.models.map(\.id) ?? [])).filter { !$0.isEmpty })) as? [String] ?? []
+    }
+    func metadata(for model: String) -> DiscoveredModel? { currentCatalog?.models.first { $0.id == model } }
+    func parameters(for model: String) -> ModelParameters { modelParameters?[model] ?? ModelParameters() }
+    func requireInference(model: String) throws {
+        guard protocolType.supportsInference else { throw AppError.unavailable(protocolType.inferenceNotice) }
+        guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.invalid("请先选择或手动填写模型 ID") }
+        if let metadata = metadata(for: model), metadata.vision == .unsupported || metadata.tools == .unsupported || metadata.generation == .unsupported {
+            throw AppError.unavailable("服务商明确报告此模型不支持图片、工具或文本生成，不能执行屏幕任务；请选择兼容模型")
+        }
+    }
 }
 
 @MainActor final class ProviderStore: ObservableObject {
@@ -53,15 +70,20 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
         value.name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         value.settings.baseURL = draft.settings.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         value.settings.model = draft.settings.model.trimmingCharacters(in: .whitespacesAndNewlines)
-        let url = try value.settings.validatedURL()
+        let url = try value.protocolType.baseURL(value.settings.baseURL)
         if value.name.isEmpty { value.name = url.host ?? "服务商" }
         value.models = draft.models.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         if let previous = profiles.first(where: { $0.id == draft.id }) {
             // Editing a label/model keeps the old Keychain reference. Changing
             // destination never forwards that destination's credential.
-            value.keyAccount = previous.settings.keyAccount == value.settings.keyAccount
-                ? previous.keyAccount : "provider-profile:\(value.id):\(value.settings.baseURL)"
-        } else { value.keyAccount = "provider-profile:\(value.id):\(value.settings.baseURL)" }
+            let sameEndpoint = try previous.catalogEndpoint() == value.catalogEndpoint()
+            value.keyAccount = sameEndpoint ? previous.keyAccount : value.newKeyAccount
+            if !sameEndpoint { value.modelParameters = nil }
+        } else { value.keyAccount = value.newKeyAccount }
+        if value.currentCatalog == nil { value.catalog = nil }
+        for (model, parameters) in value.modelParameters ?? [:] {
+            _ = try parameters.requestFields(protocolType: value.protocolType, model: value.metadata(for: model))
+        }
         return value
     }
     func save(_ draft: ProviderProfile) throws {
@@ -84,5 +106,12 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
         let data = try JSONEncoder().encode(Archive(profiles: profiles, removed: removed))
         defaults?.set(data, forKey: Self.storageKey)
         self.profiles = profiles; self.removed = removed
+    }
+}
+
+private extension ProviderProfile {
+    var newKeyAccount: String {
+        let discriminator = protocolType == .openAI ? "" : protocolType.rawValue + ":"
+        return "provider-profile:\(id):\(discriminator)\(settings.baseURL)"
     }
 }

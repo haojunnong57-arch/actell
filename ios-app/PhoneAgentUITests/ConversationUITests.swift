@@ -94,4 +94,22 @@ import XCTest
         XCTAssertFalse(app.buttons["stopRun"].exists)
         XCTAssertFalse(app.buttons["approveTool"].exists)
     }
+    func testDiscoverModelsConfigureParameterAndSelectCachedModelInConversation() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing", "--ui-test-model-catalog"]; app.launch()
+        app.buttons["openProviders"].tap(); app.staticTexts["Catalog Fixture"].tap()
+        XCTAssertTrue(app.buttons["fetchModels"].waitForExistence(timeout: 5)); app.buttons["fetchModels"].tap()
+        XCTAssertTrue(app.buttons["chooseDiscoveredModel"].waitForExistence(timeout: 5))
+        app.buttons["chooseDiscoveredModel"].tap()
+        XCTAssertTrue(app.staticTexts["fixture-vision"].waitForExistence(timeout: 3)); app.staticTexts["fixture-vision"].tap()
+        app.swipeUp()
+        let parameter = app.textFields["parameter-temperature"]
+        XCTAssertTrue(parameter.waitForExistence(timeout: 3)); parameter.tap(); parameter.typeText("0.4")
+        capture("model-parameters")
+        app.buttons["saveProvider"].tap(); app.buttons["关闭"].tap(); app.buttons["newConversation"].tap()
+        let picker = app.buttons["conversationModelPicker"]
+        XCTAssertTrue(picker.label.contains("fixture-vision")); picker.tap(); app.buttons["fixture-other"].tap()
+        XCTAssertTrue(picker.label.contains("fixture-other"))
+        capture("discovered-model-selection")
+    }
 }

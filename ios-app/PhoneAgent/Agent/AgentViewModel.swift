@@ -150,7 +150,9 @@ struct AgentRunServices {
         guard !running, !stopping else { return false }
         do {
             let value = try providers.prepared(draft)
-            if !key.isEmpty { try SecretStore.save(key, account: value.keyAccount) }
+            if !key.isEmpty {
+                try SecretStore.save(key, account: value.keyAccount)
+            }
             try providers.save(value)
             errorMessage = nil
             return true
@@ -163,6 +165,15 @@ struct AgentRunServices {
     func restoreProvider(_ id: UUID) {
         guard !running, !stopping else { return }
         do { try providers.restore(id) } catch { errorMessage = Self.safeError(error) }
+    }
+    func discoveryKey(for draft: ProviderProfile, typedKey: String) throws -> String {
+        guard !running, !stopping else { throw AppError.stopped }
+        if !typedKey.isEmpty { return typedKey }
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing") { return "" }
+        #endif
+        let value = try providers.prepared(draft)
+        return try SecretStore.load(value.keyAccount) ?? ""
     }
     func saveBridgePSK(_ psk: String) {
         guard !running, !stopping else { return }
@@ -346,8 +357,10 @@ struct AgentRunServices {
                 }
                 runSettings = profile.settings
                 runSettings.model = selectedModel(in: conversationID)
-                guard let key = try SecretStore.load(profile.keyAccount) else { throw AppError.invalid("请在服务商页面保存此地址的 API 密钥") }
-                let cloud = try PrivateVisionProvider(settings: runSettings, apiKey: key, limits: limits)
+                try profile.requireInference(model: runSettings.model)
+                let key = try SecretStore.load(profile.keyAccount) ?? ""
+                let cloud = try PrivateVisionProvider(settings: runSettings, apiKey: key, limits: limits,
+                    protocolType: profile.protocolType, parameters: profile.parameters(for: runSettings.model), metadata: profile.metadata(for: runSettings.model))
                 let usbInput = usbClient.map { client in
                     LiveDeviceBridgeRouter.USBInput(transport: client, health: client.health,
                                                    supportsHID: usbConnectionStatus == .ready(hid: true))

@@ -2,6 +2,7 @@ import SwiftUI
 import MarkdownUI
 
 struct ConversationView: View {
+    @State private var browsingModels = false
     @StateObject private var presentation: AgentPresentationAdapter
     let openSettings: () -> Void
     let openDevice: () -> Void
@@ -93,6 +94,11 @@ struct ConversationView: View {
                     Button("使用") { presentation.selectModel(customModel.trimmingCharacters(in: .whitespacesAndNewlines)) }
                     Button("取消", role: .cancel) {}
                 } message: { Text("使用当前服务商的模型 ID。") }
+                .sheet(isPresented: $browsingModels) {
+                    if let profile = presentation.selectedProvider {
+                        ProviderModelPicker(profile: profile) { presentation.selectModel($0) }
+                    }
+                }
                 .onAppear { presentation.open(); draft = session.draft }
                 .onDisappear { presentation.close() }
                 .onChange(of: draft) { _, text in presentation.saveDraft(text) }
@@ -110,12 +116,13 @@ struct ConversationView: View {
                 }
             }
             Section("模型") {
-                ForEach(presentation.availableModels, id: \.self) { name in
+                ForEach(Array(presentation.availableModels.prefix(12)), id: \.self) { name in
                     Button { presentation.selectModel(name) } label: {
                         if name == presentation.selectedModel { Label(name, systemImage: "checkmark") }
                         else { Text(name) }
                     }
                 }
+                Button("浏览全部模型") { browsingModels = true }.disabled(presentation.providerID == nil)
                 Button("其他模型…") { customModel = presentation.selectedModel; choosingModel = true }
                     .disabled(presentation.providerID == nil)
             }

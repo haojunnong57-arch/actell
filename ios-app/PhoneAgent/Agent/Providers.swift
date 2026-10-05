@@ -10,9 +10,15 @@ final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
     let urlSession: URLSession
     private let encoder: OpenAIProvider
     private let redirectGuard: NoRedirectDelegate
-    init(settings: ProviderSettings, apiKey: String, limits: AgentLimits) throws {
-        let endpoint = try settings.validatedURL()
-        guard !apiKey.isEmpty else { throw AppError.invalid("请先设置模型 API 密钥") }
+    private let protocolType: ProviderProtocol
+    private let parameterFields: [String: Any]
+    init(settings: ProviderSettings, apiKey: String, limits: AgentLimits,
+         protocolType: ProviderProtocol = .openAI, parameters: ModelParameters = ModelParameters(), metadata: DiscoveredModel? = nil) throws {
+        let endpoint = try protocolType.inferenceBase(settings.baseURL)
+        guard !settings.model.isEmpty else { throw AppError.invalid("请先选择模型") }
+        guard !apiKey.isEmpty || protocolType == .ollama else { throw AppError.invalid("请先设置模型 API 密钥") }
+        self.protocolType = protocolType
+        self.parameterFields = try parameters.requestFields(protocolType: protocolType, model: metadata)
         let config = LLMProviderConfiguration(name: Self.name, baseURL: endpoint, apiKey: apiKey, defaultModel: settings.model)
         configuration = config
         encoder = OpenAIProvider(configuration: config)
@@ -24,6 +30,7 @@ final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
     func cancel() { urlSession.invalidateAndCancel() }
     func prepareRequest(_ request: LLMRequest, stream: Bool) throws -> URLRequest {
         var trimmed = request
+        trimmed.temperature = nil; trimmed.topP = nil; trimmed.maxTokens = nil
         // Keep tool result receipts, but send only the latest image. Old PNG
         // data never accumulates in each outbound vision request.
         let last = request.messages.lastIndex(where: { !$0.images.isEmpty })
@@ -35,9 +42,12 @@ final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
         var result = try encoder.prepareRequest(trimmed, stream: stream)
         // One model decision per turn; reject accidental batches locally too.
         if let body = result.httpBody, var object = try JSONSerialization.jsonObject(with: body) as? [String: Any] {
-            object["parallel_tool_calls"] = false
+            // Ollama does not advertise this field; local single-call decoding remains enforced.
+            if protocolType != .ollama { object["parallel_tool_calls"] = false }
+            for (key, value) in parameterFields { object[key] = value }
             result.httpBody = try JSONSerialization.data(withJSONObject: object)
         }
+        if configuration.apiKey?.isEmpty == true { result.setValue(nil, forHTTPHeaderField: "Authorization") }
         return result
     }
     func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
@@ -111,7 +121,7 @@ final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
         return LLMResponse(text: parsed.text, finishReason: parsed.finishReason, usage: parsed.usage, toolCalls: parsed.toolCalls, request: request, providerName: Self.name)
     }
 }
-private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         completionHandler(nil)
     }
