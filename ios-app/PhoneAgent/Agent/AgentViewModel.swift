@@ -469,8 +469,9 @@ struct AgentRunServices {
         if !skillSnapshot.isEmpty {
             tools += ["list_skills", "search_skills", "load_skill"].map { name in
                 SkillTool(name: name, catalog: SkillCatalog(packages: skillSnapshot), canRead: { [weak self] in
-                    await MainActor.run {
-                        guard let self, self.running, self.generation == token, self.sessions.accepts(identity) else { return false }
+                    guard let self else { return false }
+                    return await MainActor.run {
+                        guard self.running, self.generation == token, self.sessions.accepts(identity) else { return false }
                         do { try self.lifecycle.requireExecution(generation: token, backgroundCapable: true); return true }
                         catch { return false }
                     }
