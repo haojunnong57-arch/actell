@@ -16,10 +16,16 @@ struct ConversationView: View {
     @State private var customModel = ""
     @State private var followLatest = true
     @State private var focused = false
+    @State private var importingAttachments = false
+    @State private var sendingAttachments = false
+    @State private var attachmentFailure: String?
+    @State private var sendingTask: Task<Void, Never>?
+    @State private var importCancellation = 0
     private var session: AgentConversation? { presentation.session }
     private var running: Bool { presentation.running }
     private var canSend: Bool {
-        !running && !presentation.stopping && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.count <= 2_000
+        !running && !presentation.stopping && !importingAttachments && !sendingAttachments &&
+        (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || session?.draftAttachments?.isEmpty == false) && draft.count <= 2_000
     }
     var body: some View {
         Group {
@@ -100,7 +106,7 @@ struct ConversationView: View {
                     }
                 }
                 .onAppear { presentation.open(); draft = session.draft }
-                .onDisappear { presentation.close() }
+                .onDisappear { sendingTask?.cancel(); presentation.close() }
                 .onChange(of: draft) { _, text in presentation.saveDraft(text) }
             } else { ContentUnavailableView("会话已删除", systemImage: "bubble.left") }
         }
@@ -180,17 +186,43 @@ struct ConversationView: View {
                 }.id(request.id)
             }
             if let warning = presentation.warning { Text(warning).font(.caption).foregroundStyle(.orange) }
+            if let attachmentFailure { Text(attachmentFailure).font(.caption).foregroundStyle(.orange).accessibilityIdentifier("attachmentFailure") }
+            if importingAttachments || sendingAttachments {
+                HStack {
+                    ProgressView(importingAttachments ? "正在复制附件到本机…" : "正在准备附件…")
+                    Button("取消") { importCancellation += 1; sendingTask?.cancel() }
+                }.font(.caption)
+            }
+            if let assets = session?.draftAttachments, !assets.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(alignment: .top, spacing: 12) {
+                        ForEach(assets) { asset in
+                            VStack(alignment: .leading, spacing: 5) {
+                                AttachmentThumbnail(attachment: asset, store: presentation.attachments, conversationID: presentation.sessionID)
+                                    .frame(width: 100, height: 90).clipped()
+                                Button("移除", systemImage: "xmark.circle") { presentation.removeAttachment(asset.id) }
+                                    .font(.caption).disabled(running || sendingAttachments)
+                                    .accessibilityIdentifier("removeAttachment-" + asset.id.uuidString)
+                            }
+                        }
+                    }
+                }.accessibilityIdentifier("draftAttachments")
+                Text("发送后将图片及文本内容交给当前模型。支持单帧图片 ≤20 MiB、UTF-8 TXT/MD/JSON/CSV ≤256 KiB；暂不支持 PDF/Office。图片按最长边 2048 像素发送，原图保留本机。")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
             if session?.mode == .live && !running {
                 Text("发送即开始任务，并授权 USB 自动执行任务内的普通点击和拖动；你可随时停止。")
                     .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("taskInputAuthorizationHelp")
             }
             HStack(alignment: .bottom, spacing: 12) {
+                AttachmentPicker(presentation: presentation, busy: $importingAttachments, failure: $attachmentFailure, cancellation: $importCancellation)
+                    .disabled(sendingAttachments)
                 ZStack(alignment: .topLeading) {
                     if draft.isEmpty {
                         Text("随心输入").foregroundStyle(.tertiary).padding(.vertical, 10)
                             .allowsHitTesting(false).accessibilityHidden(true)
                     }
-                    MessageInput(text: $draft, focused: $focused, disabled: running || presentation.stopping, onSubmit: send)
+                    MessageInput(text: $draft, focused: $focused, disabled: running || presentation.stopping || sendingAttachments, onSubmit: send)
                 }
                 if running {
                     Button { if let run = presentation.activeRun { presentation.dispatch(.stop(run: run)) } } label: { Image(systemName: "stop.fill").font(.body.bold()).frame(width: 38, height: 38).background(Color(uiColor: .label), in: Circle()).foregroundStyle(Color(uiColor: .systemBackground)) }
@@ -235,8 +267,19 @@ struct ConversationView: View {
     private func sendConfirmedTask() {
         guard canSend else { return }
         // The Send button and keyboard submission both authorize this request.
-        if presentation.dispatch(.send(sessionID: presentation.sessionID, text: draft, cloudConsent: true)) {
-            draft = ""; focused = false; followLatest = true
+        if session?.draftAttachments?.isEmpty != false {
+            if presentation.dispatch(.send(sessionID: presentation.sessionID, text: draft, cloudConsent: true)) {
+                draft = ""; focused = false; followLatest = true
+            }
+            return
+        }
+        sendingAttachments = true; attachmentFailure = nil
+        let text = draft
+        sendingTask = Task { @MainActor in
+            defer { sendingAttachments = false }
+            do {
+                if try await presentation.sendDraft(text) { draft = ""; focused = false; followLatest = true }
+            } catch { if !Task.isCancelled { attachmentFailure = error.localizedDescription } }
         }
     }
 }

@@ -45,6 +45,17 @@ import Foundation
                     runServices: AgentRunServices(provider: DemoProvider(), bridge: DemoBridge()))
             }
             let sessions = ConversationStore(inMemory: true)
+            if arguments.contains("--ui-test-attachments") {
+                let id = sessions.create(mode: .demo)
+                let model = AgentViewModel(sessions: sessions, loadPersistentState: false)
+                model.selectConversation(id)
+                Task { @MainActor in
+                    let frame = try? await DemoBridge().screenshot()
+                    if let frame { try? await model.importDraftAttachment(data: frame.png, name: "synthetic.png", in: id) }
+                    try? await model.importDraftAttachment(data: Data("Synthetic file contents".utf8), name: "synthetic.md", in: id)
+                }
+                return model
+            }
             if arguments.contains("--ui-test-model-catalog") {
                 let model = AgentViewModel(sessions: sessions, loadPersistentState: false)
                 try? model.providers.save(ProviderProfile(name: "Catalog Fixture", settings: .init(baseURL: "https://catalog-fixture.invalid/v1", model: "")))

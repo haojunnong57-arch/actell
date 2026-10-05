@@ -31,12 +31,12 @@ final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
     func prepareRequest(_ request: LLMRequest, stream: Bool) throws -> URLRequest {
         var trimmed = request
         trimmed.temperature = nil; trimmed.topP = nil; trimmed.maxTokens = nil
-        // Keep tool result receipts, but send only the latest image. Old PNG
-        // data never accumulates in each outbound vision request.
-        let last = request.messages.lastIndex(where: { !$0.images.isEmpty })
+        // Explicit user attachments remain throughout this run. Device images
+        // keep only the latest observation; old screenshots do not accumulate.
+        let last = request.messages.lastIndex(where: { $0.role != .user && !$0.images.isEmpty })
         trimmed.messages = request.messages.enumerated().map { index, original in
             var message = original
-            if index != last { message.images = [] }
+            if message.role != .user && index != last { message.images = [] }
             return message
         }
         var result = try encoder.prepareRequest(trimmed, stream: stream)

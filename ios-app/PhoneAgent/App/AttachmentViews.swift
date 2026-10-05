@@ -13,7 +13,7 @@ struct AttachmentThumbnail: View {
                 if let preview, attachment.kind == .image, let image = UIImage(data: preview) {
                     Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 220)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
-                } else { Label(attachment.name, systemImage: attachment.kind == .image ? "photo" : "doc.text") }
+                } else { Image(systemName: attachment.kind == .image ? "photo" : "doc.text").font(.title2).frame(minHeight: 35) }
                 Text(attachment.name).font(.caption).lineLimit(1)
                 if let failure { Text(failure).font(.caption).foregroundStyle(.orange) }
             }

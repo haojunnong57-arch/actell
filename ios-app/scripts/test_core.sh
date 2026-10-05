@@ -6,7 +6,10 @@ export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Develope
 mkdir -p "$repo_root/.build/validation"
 result_dir="$(mktemp -d "$repo_root/.build/validation/core.XXXXXX")"
 selection=(-only-testing:PhoneAgentTests)
-if [ "${RUN_UI_TESTS:-0}" = 1 ]; then selection+=(-only-testing:PhoneAgentUITests); fi
+if [ "${RUN_UI_TESTS:-0}" = 1 ]; then
+  python3 "$repo_root/ios-app/scripts/prepare_ui_fixtures.py" "$1"
+  selection+=(-only-testing:PhoneAgentUITests)
+fi
 xcodebuild -project "$repo_root/ios-app/PhoneAgent.xcodeproj" -scheme PhoneAgent \
   -destination "platform=iOS Simulator,id=$1" -derivedDataPath "$repo_root/.build/DerivedData" \
   -clonedSourcePackagesDirPath "$repo_root/.build/SourcePackages" \

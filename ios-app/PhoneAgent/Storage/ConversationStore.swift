@@ -114,6 +114,16 @@ import Combine
         guard let index = index(id) else { return }
         conversations[index].draft = String(text.prefix(2_000)); scheduleSave()
     }
+    func addDraftAttachment(_ attachment: StoredAttachment, in id: UUID) {
+        guard attachment.conversationID == id, activeRun?.conversationID != id, let index = index(id) else { return }
+        var references = conversations[index].draftAttachments ?? []
+        guard !references.contains(where: { $0.id == attachment.id }) else { return }
+        references.append(attachment); conversations[index].draftAttachments = references; saveNow()
+    }
+    func removeDraftAttachment(_ attachmentID: UUID, in id: UUID) {
+        guard activeRun?.conversationID != id, let index = index(id) else { return }
+        conversations[index].draftAttachments?.removeAll { $0.id == attachmentID }; saveNow()
+    }
     func delete(_ id: UUID) {
         guard activeRun?.conversationID != id else { return }
         conversations.removeAll { $0.id == id }; saveNow()
@@ -122,7 +132,7 @@ import Combine
         guard activeRun == nil else { return }
         conversations = []; saveNow()
     }
-    func begin(in id: UUID, query: String) -> RunIdentity? {
+    func begin(in id: UUID, query: String, attachments: [StoredAttachment] = []) -> RunIdentity? {
         guard activeRun == nil, let index = index(id) else { return nil }
         let identity = RunIdentity(conversationID: id, runID: UUID())
         activeRun = identity
@@ -134,7 +144,8 @@ import Combine
             conversations[index].entry?.runID = identity.runID
             conversations[index].entry?.updatedAt = Date()
         }
-        conversations[index].messages.append(ChatMessage(runID: identity.runID, role: .user, text: query))
+        conversations[index].messages.append(ChatMessage(runID: identity.runID, role: .user, text: query, attachments: attachments.isEmpty ? nil : attachments))
+        conversations[index].draftAttachments = nil
         touch(index); saveNow()
         return identity
     }

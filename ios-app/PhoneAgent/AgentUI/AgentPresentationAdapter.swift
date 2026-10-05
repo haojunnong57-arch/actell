@@ -44,6 +44,10 @@ struct ToolPresentation {
     var availableModels: [String] { model.selectedProvider(in: sessionID)?.availableModels ?? [] }
     var selectedProvider: ProviderProfile? { model.selectedProvider(in: sessionID) }
     var attachments: AttachmentStore { model.attachments }
+    func importAttachment(data: Data, name: String) async throws { try await model.importDraftAttachment(data: data, name: name, in: sessionID) }
+    func importAttachment(file: URL) async throws { try await model.importDraftAttachment(file: file, in: sessionID) }
+    func removeAttachment(_ id: UUID) { model.sessions.removeDraftAttachment(id, in: sessionID) }
+    func sendDraft(_ text: String) async throws -> Bool { try await model.sendDraft(text, in: sessionID, cloudConsent: true) }
     func cacheImage(_ url: URL, messageID: UUID) async throws -> StoredAttachment {
         try await model.cacheMessageImage(url, messageID: messageID, conversationID: sessionID)
     }
