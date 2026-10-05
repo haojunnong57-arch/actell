@@ -129,3 +129,10 @@ UI 提供协议/基础地址/密钥、获取/取消/刷新、缓存搜索选择�
 同一响应固定使用首个有内容的可读通道；同时出现时优先 details，再 reasoning_content、reasoning，避免别名重复展示。字段依据本地固定版本 SDK 和 [OpenRouter 官方 reasoning_details 说明](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)。未新增 reasoning effort／预算参数，不要求服务商披露未提供的内容。OpenAI-compatible、OpenRouter、Ollama 的现有 `/v1/chat/completions` 路径按以上字段识别；没有字段就不显示区块。原生 Anthropic/Gemini、OpenAI Responses、Ollama 原生 `/api/chat` 以及需要签名／加密 reasoning 跨工具轮次回传的模式尚未接入，不能据此宣称这些模式兼容。
 
 新增 9 项解析／历史／真实 Agent 合成回归，覆盖字段与别名去重、忽略加密内容、普通正文不抽取、取消／错误、旧存档／重启、跨会话迟到事件、思考→多工具→下一轮答复。初次 22 项定向单元测试通过（`.build/ReasoningInitial.xcresult`）；该次 UI 失败经层级证实是父 DisclosureGroup 标识覆盖正文标识，已把标识限定到标题，3 项 UI 随后全通过（`.build/ReasoningUIVerified.xcresult`）。已检查 `.build/reasoning-ui/` 中完成、失败、流式和暗色恢复的 4 张截图。包含追加的完整链路用例在内，231 项核心回归已全部通过；最终 UI／构建结果见后续验收。
+
+## B1／B6 最终验收
+
+- 本轮基于 `636f4b2`；B1 独立提交 `67a61ae`，B6 独立提交 `3411739`，沿用 `feature/project-todos` 独立 worktree。
+- **231 项核心 + 16 项 UI 全部通过，0 失败**：`.build/validation/core.PdT8cE/Tests.xcresult` 及同目录 `test.log`。包括既有停止／授权／隔离／迁移、模型、附件和技能回归。
+- 最终 iPhoneOS 无签名构建成功：`.build/b1-b6-device-build.log`，没有编译警告。UI 日志仍有基线已有的“Modifying state during view update”警告（旧 `.build/validation/core.dGj1mk/test.log` 同样存在）；Xcode 附加 simctl 诊断失败也仍存在，未把这两项误报为本次新增或已修的 Conversion error。
+- 本轮没有固件或 USB wire 变更，未重跑已通过的 C/TCP/wire 夹具；可选归档／旧 Host 全量、真实服务商字段与签名兼容、真实多动作 HID／断线释放及跨 App 闭环未验收。未请求真实密钥、安装真机、刷写、合并或推送；主线原有签名改动与其他 worktree 保持原状。
