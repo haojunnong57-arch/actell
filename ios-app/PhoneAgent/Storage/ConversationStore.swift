@@ -62,7 +62,11 @@ import Combine
         guard attachment.conversationID == conversationID, let index = index(conversationID),
               let message = conversations[index].messages.firstIndex(where: { $0.id == messageID }) else { return }
         var references = conversations[index].messages[message].attachments ?? []
-        guard !references.contains(where: { $0.id == attachment.id && $0.sourceURL == attachment.sourceURL }) else { return }
+        if let sourceURL = attachment.sourceURL {
+            // A retry may return new bytes after the previous original was lost.
+            // Keep one current binding per source so readers cannot pick a stale ID.
+            references.removeAll { $0.sourceURL == sourceURL }
+        } else if references.contains(where: { $0.id == attachment.id && $0.sourceURL == nil }) { return }
         references.append(attachment); conversations[index].messages[message].attachments = references
         saveNow()
     }

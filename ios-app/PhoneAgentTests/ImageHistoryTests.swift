@@ -79,6 +79,23 @@ private final class HistoryImageHTTPStub: URLProtocol, @unchecked Sendable {
         }
         XCTAssertEqual(HistoryImageHTTPStub.calls, 0)
     }
+    func testRetryWithChangedSourceReplacesMissingReferenceAndPersistsNewOriginal() async throws {
+        let (root, sessions, model, id, messageID, downloader) = try setup()
+        let old = try await model.cacheMessageImage(source, messageID: messageID, conversationID: id, downloader: downloader)
+        try FileManager.default.removeItem(at: root.appendingPathComponent("assets/\(id)/\(old.id)/original"))
+        HistoryImageHTTPStub.bytes = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 16)).pngData { context in
+            UIColor.systemRed.setFill(); context.fill(CGRect(x: 0, y: 0, width: 24, height: 16))
+        }
+        let replacement = try await model.cacheMessageImage(source, messageID: messageID, conversationID: id, downloader: downloader)
+        XCTAssertNotEqual(old.id, replacement.id)
+        XCTAssertEqual(sessions.conversation(id)?.messages.first?.attachments, [replacement])
+        let restored = ConversationStore(directory: root)
+        XCTAssertEqual(restored.conversation(id)?.messages.first?.attachments, [replacement])
+        let removed = try await model.clearUnreferencedAttachments(); XCTAssertEqual(removed, 1)
+        HistoryImageHTTPStub.status = 403
+        let cached = try await model.cacheMessageImage(source, messageID: messageID, conversationID: id, downloader: downloader)
+        XCTAssertEqual(cached, replacement); XCTAssertEqual(HistoryImageHTTPStub.calls, 2)
+    }
     func testInFlightDownloadCannotRecreateDeletedMessageAndBlocksCleanup() async throws {
         let (_, sessions, model, id, messageID, downloader) = try setup()
         HistoryImageHTTPStub.delay = true
