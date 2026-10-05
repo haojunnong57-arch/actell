@@ -112,7 +112,7 @@ final class SafetyTests: XCTestCase {
         _ = try await c.execute(name: "screenshot", parameters: [:], callID: "s")
         let p: [String: Any] = ["x": 100, "y": 100, "purpose": "test"]
         _ = try await c.execute(name: "tap", parameters: p, callID: "t1")
-        do { _ = try await c.execute(name: "tap", parameters: p, callID: "t2"); XCTFail("Old image must fail") } catch {}
+        do { _ = try await c.execute(name: "tap", parameters: ["x": 100, "y": 100, "purpose": "test"], callID: "t2"); XCTFail("Old image must fail") } catch {}
         let count = await bridge.taps; XCTAssertEqual(count, 1)
     }
     func testStopFencesLaterTools() async throws {
@@ -149,6 +149,6 @@ final class SafetyTests: XCTestCase {
         XCTAssertEqual(messages.map { $0["role"] as? String }, ["assistant", "tool", "user"])
         XCTAssertTrue(messages[1]["content"] is String)
         XCTAssertTrue(messages[2]["content"] is [[String: Any]])
-        XCTAssertEqual(object["parallel_tool_calls"] as? Bool, false)
+        XCTAssertEqual(object["parallel_tool_calls"] as? Bool, true)
     }
 }

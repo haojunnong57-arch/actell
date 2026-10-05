@@ -947,6 +947,7 @@ public actor Agent {
         }
 
         var totalTurns = 0
+        var seenToolCallIDs = Set<String>()
         var toolsExecuted = 0
         var toolErrors = 0
         var plan: AgentPlan?
@@ -1234,6 +1235,16 @@ public actor Agent {
                 }
 
                 // Has tool calls — execute them
+                // Validate the entire batch before dispatch. A repeated ID cannot
+                // safely correlate a new result or authorize a replay, even across turns.
+                var nextIDs = seenToolCallIDs
+                for call in toolCalls {
+                    guard !call.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                          nextIDs.insert(call.id).inserted else {
+                        throw LLMError.invalidRequest("模型工具调用 ID 缺失或重复；本批未执行，不会重放旧动作")
+                    }
+                }
+                seenToolCallIDs = nextIDs
                 emit(.toolCallsReceived(toolCalls))
                 conversation.append(.assistant(content: agentResponse.text, toolCalls: toolCalls))
 

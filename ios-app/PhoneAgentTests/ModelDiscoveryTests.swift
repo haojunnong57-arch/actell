@@ -161,7 +161,7 @@ final class ModelDiscoveryTests: XCTestCase {
         XCTAssertEqual(request.url?.path, "/proxy/api/v1/chat/completions")
         XCTAssertEqual(body["temperature"] as? Double, 0.4); XCTAssertEqual(body["max_tokens"] as? Int, 150)
         XCTAssertNil(body["seed"]); XCTAssertNil(body["top_p"]); XCTAssertNil(body["unknown"])
-        XCTAssertEqual(body["parallel_tool_calls"] as? Bool, false)
+        XCTAssertEqual(body["parallel_tool_calls"] as? Bool, true)
         let ollama = try PrivateVisionProvider(settings: .init(baseURL: "https://fixture.invalid/proxy/api", model: "a"), apiKey: "", limits: .init(), protocolType: .ollama)
         let o = try ollama.prepareRequest(.init(model: "a", messages: [.user("test")]), stream: false)
         XCTAssertEqual(o.url?.path, "/proxy/v1/chat/completions"); XCTAssertNil(o.value(forHTTPHeaderField: "Authorization"))

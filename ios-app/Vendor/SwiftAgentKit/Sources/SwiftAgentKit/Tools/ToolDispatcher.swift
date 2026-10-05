@@ -16,7 +16,7 @@ import Foundation
 /// This is the execution engine that sits between the LLM response (which contains
 /// tool calls) and the tool execution. It handles:
 ///
-/// - **Deduplication**: identical tool calls in the same turn are skipped
+/// - **Deduplication**: repeated call IDs in the same turn are skipped
 /// - **Confirmation**: tools marked `requiresConfirmation` prompt the user
 /// - **Parameter normalization**: injects context fields, normalizes aliases
 /// - **Error handling**: catches tool errors and returns error results
@@ -107,6 +107,13 @@ public actor ToolDispatcher {
         var seenKeys = Set<String>()
 
         for call in calls {
+            if Task.isCancelled || actions?.shouldStop == true {
+                let result = AgentToolResult.error(toolCallId: call.id, toolName: call.name,
+                    message: "本轮已停止，此工具未执行。")
+                observer?.onEvent(.toolExecutionFinished(call: call, result: result))
+                results.append(result)
+                continue
+            }
             let result = await executeSingleCall(
                 call: call,
                 state: state,
@@ -139,14 +146,14 @@ public actor ToolDispatcher {
         var dedupResults: [Int: AgentToolResult] = [:]
 
         for (index, call) in calls.enumerated() {
-            if seenKeys.contains(call.deduplicationKey) {
+            if seenKeys.contains(call.id) {
                 dedupResults[index] = AgentToolResult.error(
                     toolCallId: call.id, toolName: call.name,
                     message: "Duplicate tool call skipped in this turn."
                 )
                 observer?.onEvent(.toolCallSkippedDuplicate(call: call))
             } else {
-                seenKeys.insert(call.deduplicationKey)
+                seenKeys.insert(call.id)
                 uniqueCalls.append(call)
             }
         }
@@ -224,7 +231,7 @@ public actor ToolDispatcher {
     ) async -> AgentToolResult {
 
         // Dedup within the same turn
-        if seenKeys.contains(call.deduplicationKey) {
+        if seenKeys.contains(call.id) {
             let result = AgentToolResult.error(
                 toolCallId: call.id, toolName: call.name,
                 message: "Duplicate tool call skipped in this turn."
@@ -232,7 +239,7 @@ public actor ToolDispatcher {
             observer?.onEvent(.toolCallSkippedDuplicate(call: call))
             return result
         }
-        seenKeys.insert(call.deduplicationKey)
+        seenKeys.insert(call.id)
 
         // Look up the tool
         guard let tool = await registry.tool(named: call.name) else {

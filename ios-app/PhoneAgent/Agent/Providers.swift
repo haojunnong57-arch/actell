@@ -40,10 +40,10 @@ final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
             return message
         }
         var result = try encoder.prepareRequest(trimmed, stream: stream)
-        // One model decision per turn; reject accidental batches locally too.
+        // Permit multiple returned calls. Agent dispatch stays strictly sequential.
         if let body = result.httpBody, var object = try JSONSerialization.jsonObject(with: body) as? [String: Any] {
-            // Ollama does not advertise this field; local single-call decoding remains enforced.
-            if protocolType != .ollama { object["parallel_tool_calls"] = false }
+            // This wire option enables a batch; it does not schedule device concurrency.
+            if protocolType != .ollama { object["parallel_tool_calls"] = true }
             for (key, value) in parameterFields { object[key] = value }
             result.httpBody = try JSONSerialization.data(withJSONObject: object)
         }
@@ -76,7 +76,7 @@ final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
                         guard let value = String(data: line, encoding: .utf8) else { throw AppError.invalid("模型流被截断") }
                         for chunk in try decoder.consume(line: value, request: request, encoder: encoder) { continuation.yield(chunk) }
                     }
-                    let final = try decoder.finish()
+                    let final = try decoder.finish(previousCallIDs: Set(request.messages.flatMap { $0.toolCalls ?? [] }.map(\.id)))
                     for chunk in final { continuation.yield(chunk) }
                     continuation.finish()
                 } catch {
@@ -114,10 +114,19 @@ final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
             guard data.count < 4 * 1_024 * 1_024 else { throw AppError.invalid("模型响应超过 4 MiB 限制") }
             data.append(byte)
         }
+        return try parseResponse(data, request: request)
+    }
+    func parseResponse(_ data: Data, request: LLMRequest) throws -> LLMResponse {
         let parsed: LLMResponse
         do { parsed = try encoder.parseResponse(data, request: request) }
         catch { throw AppError.invalid("模型响应格式与 Chat Completions 协议不兼容") }
-        guard parsed.toolCalls.count <= 1 else { throw AppError.invalid("模型一次请求多个动作，已阻止；请选择遵循单工具调用的模型") }
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let message = ((object?["choices"] as? [[String: Any]])?.first)?["message"] as? [String: Any]
+        let wireCalls = message?["tool_calls"] as? [[String: Any]] ?? []
+        guard wireCalls.compactMap({ $0["id"] as? String }) == parsed.toolCalls.map(\.id) else {
+            throw AppError.invalid("模型工具调用缺少原始 ID；本批未执行")
+        }
+        try ModelStreamDecoder.validate(parsed.toolCalls, previousCallIDs: Set(request.messages.flatMap { $0.toolCalls ?? [] }.map(\.id)))
         return LLMResponse(text: parsed.text, finishReason: parsed.finishReason, usage: parsed.usage, toolCalls: parsed.toolCalls, request: request, providerName: Self.name)
     }
 }
