@@ -113,3 +113,19 @@ UI 提供协议/基础地址/密钥、获取/取消/刷新、缓存搜索选择�
 完整响应校验后才释放工具：保留原始 tool_call_id，缺失／批内重复／跨轮复用均整批拒绝，无重试或重放。同步更新本地 SwiftAgentKit：按 ID 去重，允许 screenshot→tap→screenshot 这类参数相同但 ID 不同的显式步骤；每个结果保留对应 ID；停止或取消后剩余工具逐一返回未执行结果。普通校验错误可回传模型后继续，未知输入结果仍封锁本轮后续点击／拖动；原有逐动作或任务授权、单次审批、截图资格和断线释放不变。
 
 新增合成 Agent 回归覆盖混合技能／设备工具、多次观察、授权顺序、中途未知结果、可恢复错误、取消、拒绝、重复 ID 和下一模型轮次收到全部结果。流式／非流式解析覆盖整批缓冲、原始 ID 和请求字段。首轮发现旧测试仍要求 parallel_tool_calls=false，按本次授权更新，未移除安全断言。31 项定向回归通过（`.build/MultiToolVerified.xcresult`）；模型发现／安全测试另 24 项通过（`.build/MultiToolProtocolVerified.xcresult`，包含重复复核的 12 项安全测试）。最终综合结果追加在后续验收。
+
+## B6：服务商思考内容／摘要展示
+
+授权依据：用户同次明确“B6 要支持思考消息展示”。在现有 Agent 事件→会话存档→SwiftUI 消息组件中贯通，使用与工具卡一致的原生 DisclosureGroup，默认折叠，显示接收中／已完成／已中断／生成失败。正文和思考分别保存；只有思考的工具轮次也保留，不用答复覆盖。停止、网络错误或重启后保留已收到部分，迟到事件不能写入其他运行／会话。旧存档可读；新任务上下文只使用公开正文，不自动回传历史思考。
+
+| 当前推理路径字段 | 支持范围 |
+| --- | --- |
+| Chat Completions `choices[0].delta/message.reasoning_content`、`reasoning` | 仅字符串，流式增量及非流式完整响应 |
+| `reasoning_details[].type == reasoning.summary` 的 `summary` | 可读摘要；流式／非流式均支持 |
+| `reasoning_details[].type == reasoning.text` 的 `text` | 可读文本；同块拼接、不同块分段 |
+| encrypted／opaque／signature／未知对象或类型 | 不展示、不存入思考正文；不解码为文本 |
+| 普通 `content` 中的 `<think>` 等标签 | 仍是普通答复，不猜测或抽取为思考 |
+
+同一响应固定使用首个有内容的可读通道；同时出现时优先 details，再 reasoning_content、reasoning，避免别名重复展示。字段依据本地固定版本 SDK 和 [OpenRouter 官方 reasoning_details 说明](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)。未新增 reasoning effort／预算参数，不要求服务商披露未提供的内容。OpenAI-compatible、OpenRouter、Ollama 的现有 `/v1/chat/completions` 路径按以上字段识别；没有字段就不显示区块。原生 Anthropic/Gemini、OpenAI Responses、Ollama 原生 `/api/chat` 以及需要签名／加密 reasoning 跨工具轮次回传的模式尚未接入，不能据此宣称这些模式兼容。
+
+新增 9 项解析／历史／真实 Agent 合成回归，覆盖字段与别名去重、忽略加密内容、普通正文不抽取、取消／错误、旧存档／重启、跨会话迟到事件、思考→多工具→下一轮答复。初次 22 项定向单元测试通过（`.build/ReasoningInitial.xcresult`）；该次 UI 失败经层级证实是父 DisclosureGroup 标识覆盖正文标识，已把标识限定到标题，3 项 UI 随后全通过（`.build/ReasoningUIVerified.xcresult`）。已检查 `.build/reasoning-ui/` 中完成、失败、流式和暗色恢复的 4 张截图。包含追加的完整链路用例在内，231 项核心回归已全部通过；最终 UI／构建结果见后续验收。

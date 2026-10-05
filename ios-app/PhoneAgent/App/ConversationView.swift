@@ -158,12 +158,16 @@ struct ConversationView: View {
             }
         case .assistant:
             VStack(alignment: .leading, spacing: 6) {
+                if let reasoning = message.reasoning, !reasoning.text.isEmpty {
+                    ReasoningMessageView(reasoning: reasoning, messageID: message.id)
+                }
                 if !message.text.isEmpty {
                     Markdown(message.text).markdownTheme(.basic)
                         .markdownImageProvider(NoRemoteMarkdownImages()).markdownInlineImageProvider(NoRemoteInlineImages())
                         .textSelection(.enabled)
-                } else if message.state == .streaming { Text("正在准备回复…").foregroundStyle(.secondary) }
+                } else if message.state == .streaming && message.reasoning == nil { Text("正在准备回复…").foregroundStyle(.secondary) }
                 if message.state == .interrupted { Text("回复已中断").font(.caption).foregroundStyle(.secondary) }
+                if message.state == .failed { Text("回复未完成").font(.caption).foregroundStyle(.secondary) }
                 MessageAttachmentsView(message: message, presentation: presentation)
             }.frame(maxWidth: .infinity, alignment: .leading)
         case .tool:

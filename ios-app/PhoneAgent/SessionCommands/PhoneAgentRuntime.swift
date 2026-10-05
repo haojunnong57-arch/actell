@@ -25,6 +25,15 @@ import Foundation
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--ui-testing") || ProcessInfo.processInfo.environment["PHONEAGENT_ISOLATED_TESTS"] == "1" {
             let arguments = ProcessInfo.processInfo.arguments
+            if arguments.contains("--ui-test-reasoning-seed") || arguments.contains("--ui-test-reasoning-restore") {
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneAgentReasoningUITest", isDirectory: true)
+                if arguments.contains("--ui-test-reasoning-seed") { try? FileManager.default.removeItem(at: directory) }
+                let sessions = ConversationStore(directory: directory)
+                if sessions.conversations.isEmpty { sessions.create(mode: .live) }
+                let outcome = arguments.contains("--ui-test-reasoning-paused") ? "paused" : (arguments.contains("--ui-test-reasoning-failed") ? "failed" : "completed")
+                return AgentViewModel(sessions: sessions, loadPersistentState: false,
+                    runServices: AgentRunServices(provider: ReasoningFixtureProvider(outcome: outcome), bridge: UnavailableBridge()))
+            }
             if arguments.contains("--ui-test-images-seed") || arguments.contains("--ui-test-images-restore") {
                 let directory = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneAgentImageUITest", isDirectory: true)
                 if arguments.contains("--ui-test-images-seed") { try? FileManager.default.removeItem(at: directory) }

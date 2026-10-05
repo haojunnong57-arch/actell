@@ -8,6 +8,7 @@ struct ModelStreamDecoder {
     private var assembler = StreamToolCallAssembler()
     private var calls: [LLMToolCall] = []
     private var wireIDs = Set<String>()
+    private var reasoning = ReadableReasoningDecoder()
     private var reason: LLMFinishReason?
     private var sawTerminal = false
     private(set) var sawDone = false
@@ -18,20 +19,30 @@ struct ModelStreamDecoder {
         guard clean.hasPrefix("data:") else { return [] }
         let payload = clean.dropFirst(5).trimmingCharacters(in: .whitespaces)
         if payload == "[DONE]" { sawDone = true }
-        if let object = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
-           let choice = (object["choices"] as? [[String: Any]])?.first,
-           let delta = choice["delta"] as? [String: Any], let fragments = delta["tool_calls"] as? [[String: Any]] {
-            for fragment in fragments { if let id = fragment["id"] as? String { wireIDs.insert(id) } }
-        }
         var output: [LLMStreamChunk] = []
+        var sdkPayload = payload
+        if var object = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
+           var choices = object["choices"] as? [[String: Any]], !choices.isEmpty,
+           let delta = choices[0]["delta"] as? [String: Any] {
+            for fragment in delta["tool_calls"] as? [[String: Any]] ?? [] {
+                if let id = fragment["id"] as? String { wireIDs.insert(id) }
+            }
+            let readable = reasoning.consume(delta)
+            if !readable.isEmpty { output.append(.reasoning(readable)) }
+            // Our allowlist handles reasoning. The SDK need not decode opaque or
+            // differently typed reasoning fields to decode the public answer.
+            choices[0]["delta"] = ReadableReasoningDecoder.removingFields(from: delta)
+            object["choices"] = choices
+            sdkPayload = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+        }
         let parsed: [LLMStreamChunk]
-        do { parsed = try encoder.parseStreamLine("data: " + payload, request: request) }
+        do { parsed = try encoder.parseStreamLine("data: " + sdkPayload, request: request) }
         catch { throw AppError.invalid("模型流格式与 Chat Completions 不兼容") }
         for chunk in parsed {
             for complete in assembler.consume(chunk) {
                 switch complete {
                 case .text: output.append(complete)
-                case .reasoning: break // Never store or display private reasoning.
+                case .reasoning: break // Already extracted once by the explicit-field allowlist.
                 case .toolCall(let call): calls.append(call)
                 case .finish(let finish, let tokens):
                     if let finish, !sawDone { reason = finish; sawTerminal = true }

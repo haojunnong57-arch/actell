@@ -3,7 +3,7 @@ import LLMProviderKit
 import LLMProviderKitOpenAI
 
 // No cookies, disk cache, raw response logging, HTTP redirects, or retries.
-// Only public output/tool calls pass through. Separated reasoning is dropped.
+// Only public output, validated tools and explicit readable reasoning pass through.
 final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
     static let name = "private-openai-compatible"
     let configuration: LLMProviderConfiguration
@@ -117,17 +117,22 @@ final class PrivateVisionProvider: LLMProvider, @unchecked Sendable {
         return try parseResponse(data, request: request)
     }
     func parseResponse(_ data: Data, request: LLMRequest) throws -> LLMResponse {
+        guard var object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var choices = object["choices"] as? [[String: Any]], !choices.isEmpty,
+              let message = choices[0]["message"] as? [String: Any] else {
+            throw AppError.invalid("模型响应格式与 Chat Completions 协议不兼容")
+        }
+        choices[0]["message"] = ReadableReasoningDecoder.removingFields(from: message)
+        object["choices"] = choices
         let parsed: LLMResponse
-        do { parsed = try encoder.parseResponse(data, request: request) }
+        do { parsed = try encoder.parseResponse(JSONSerialization.data(withJSONObject: object), request: request) }
         catch { throw AppError.invalid("模型响应格式与 Chat Completions 协议不兼容") }
-        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        let message = ((object?["choices"] as? [[String: Any]])?.first)?["message"] as? [String: Any]
-        let wireCalls = message?["tool_calls"] as? [[String: Any]] ?? []
+        let wireCalls = message["tool_calls"] as? [[String: Any]] ?? []
         guard wireCalls.compactMap({ $0["id"] as? String }) == parsed.toolCalls.map(\.id) else {
             throw AppError.invalid("模型工具调用缺少原始 ID；本批未执行")
         }
         try ModelStreamDecoder.validate(parsed.toolCalls, previousCallIDs: Set(request.messages.flatMap { $0.toolCalls ?? [] }.map(\.id)))
-        return LLMResponse(text: parsed.text, finishReason: parsed.finishReason, usage: parsed.usage, toolCalls: parsed.toolCalls, request: request, providerName: Self.name)
+        return LLMResponse(text: parsed.text, reasoning: ReadableReasoningDecoder.text(in: message), finishReason: parsed.finishReason, usage: parsed.usage, toolCalls: parsed.toolCalls, request: request, providerName: Self.name)
     }
 }
 final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
@@ -177,6 +182,33 @@ struct DemoProvider: LLMProvider {
 }
 
 #if DEBUG
+/// Public synthetic fixture only; never imitates a remote model's private state.
+struct ReasoningFixtureProvider: LLMProvider {
+    static let name = "synthetic-readable-reasoning"
+    static let first = "合成思考第一段。"
+    static let second = "合成思考第二段。"
+    let configuration = LLMProviderConfiguration(name: name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
+    var outcome = "completed"
+    func complete(_ request: LLMRequest) async throws -> LLMResponse {
+        LLMResponse(text: "合成答复。", reasoning: Self.first + Self.second, finishReason: .stop, request: request, providerName: Self.name)
+    }
+    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    continuation.yield(.reasoning(Self.first))
+                    try await Task.sleep(for: .milliseconds(150))
+                    continuation.yield(.reasoning(Self.second))
+                    if outcome == "paused" { try await Task.sleep(for: .seconds(60)) }
+                    if outcome == "failed" { throw LLMError.invalidRequest("合成服务中断") }
+                    continuation.yield(.text("合成答复。"))
+                    continuation.yield(.finish(reason: .stop, usage: nil)); continuation.finish()
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
 struct SkillFixtureProvider: LLMProvider {
     static let name = "offline-skill-fixture"
     let configuration = LLMProviderConfiguration(name: name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")

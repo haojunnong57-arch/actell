@@ -114,7 +114,8 @@ struct ToolPresentation {
         switch event {
         case .llmCallStarted: store.beginAssistantTurn(run)
         case .streamChunk(let text): store.appendText(text, identity: run)
-        case .llmCallCompleted(_, let response): store.completeAssistantTurn(response.text, identity: run)
+        case .reasoningChunk(let text): store.appendReasoning(text, identity: run)
+        case .llmCallCompleted(_, let response): store.completeAssistantTurn(response.text, reasoning: response.reasoning, identity: run)
         case .toolCallsReceived(let calls):
             for call in calls {
                 store.updateTool(callID: call.id, name: call.name, state: .requested, arguments: arguments(for: call), skillName: skillName(call), identity: run)
@@ -138,7 +139,7 @@ struct ToolPresentation {
                 }
             }
             store.updateTool(callID: call.id, name: call.name, state: result.isError ? .failed : .succeeded, result: receipt, arguments: arguments(for: call), skillName: skillName(call), identity: run)
-        default: break // Internal reasoning and unrelated framework events stay out of UI/history.
+        default: break // Unrelated framework events stay out of UI/history.
         }
     }
 

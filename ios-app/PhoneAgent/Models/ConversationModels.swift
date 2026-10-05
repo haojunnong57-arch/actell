@@ -65,6 +65,10 @@ struct ToolStep: Codable, Sendable, Equatable {
         }
     }
 }
+struct ReasoningMessage: Codable, Sendable, Equatable {
+    var text: String
+    var state: MessageState = .streaming
+}
 struct ChatMessage: Identifiable, Codable, Sendable, Equatable {
     var id = UUID()
     var runID: UUID?
@@ -74,6 +78,7 @@ struct ChatMessage: Identifiable, Codable, Sendable, Equatable {
     var state: MessageState = .complete
     var tool: ToolStep?
     var attachments: [StoredAttachment]?
+    var reasoning: ReasoningMessage?
 }
 struct AgentConversation: Identifiable, Codable, Sendable {
     var id = UUID()

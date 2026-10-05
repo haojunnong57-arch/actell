@@ -83,14 +83,15 @@ import SwiftAgentKit
         XCTAssertFalse(ui.dispatch(.send(sessionID: ui.sessionID, text: "过期窗口", cloudConsent: false)))
         try await waitUntil { !model.stopping }
     }
-    func testRealEventsProjectStreamingParametersAndDoNotLeakReasoning() throws {
+    func testRealEventsKeepProviderReasoningSeparateFromAnswerAndToolParameters() throws {
         let store = ConversationStore(inMemory: true), id = store.create(mode: .demo)
         let run = try XCTUnwrap(store.begin(in: id, query: "test"))
         AgentEventProjection.record(.llmCallStarted(turn: 1), run: run, frame: nil, in: store)
         AgentEventProjection.record(.streamChunk("公开"), run: run, frame: nil, in: store)
-        AgentEventProjection.record(.reasoningChunk("私有推理"), run: run, frame: nil, in: store)
+        AgentEventProjection.record(.reasoningChunk("服务商提供的可读摘要"), run: run, frame: nil, in: store)
         AgentEventProjection.record(.streamChunk("回复"), run: run, frame: nil, in: store)
         XCTAssertEqual(store.conversation(id)?.messages.last?.text, "公开回复")
+        XCTAssertEqual(store.conversation(id)?.messages.last?.reasoning?.text, "服务商提供的可读摘要")
         let call = AgentToolCall(id: "t", name: "tap", parameters: ["x": AnyCodable(100), "y": AnyCodable(200), "purpose": AnyCodable("点击演示"), "api_key": AnyCodable("never-display")])
         AgentEventProjection.record(.toolCallsReceived([call]), run: run, frame: nil, in: store)
         let tool = try XCTUnwrap(store.conversation(id)?.messages.last?.tool)

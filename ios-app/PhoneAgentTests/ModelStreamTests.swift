@@ -22,9 +22,10 @@ final class ModelStreamTests: XCTestCase {
     }
     func testRealTextDeltasAndFragmentedToolAssembly() throws {
         var decoder = ModelStreamDecoder()
-        let chunks = try decoder.consume(line: line(["content": "你好", "reasoning_content": "private reasoning"]), request: request, encoder: encoder)
-        XCTAssertEqual(chunks.count, 1)
-        if case .text(let text) = chunks.first { XCTAssertEqual(text, "你好") } else { XCTFail("Expected public text") }
+        let chunks = try decoder.consume(line: line(["content": "你好", "reasoning_content": "provider supplied reasoning"]), request: request, encoder: encoder)
+        XCTAssertEqual(chunks.count, 2)
+        if case .reasoning(let text) = chunks.first { XCTAssertEqual(text, "provider supplied reasoning") } else { XCTFail("Expected separate provider reasoning") }
+        if case .text(let text) = chunks.last { XCTAssertEqual(text, "你好") } else { XCTFail("Expected public text") }
         let first: [String: Any] = ["tool_calls": [["index": 0, "id": "call-1", "type": "function", "function": ["name": "tap", "arguments": "{\"x\":"]]]]
         let next: [String: Any] = ["tool_calls": [["index": 0, "function": ["arguments": "12}"]]]]
         XCTAssertTrue(try decoder.consume(line: line(first), request: request, encoder: encoder).isEmpty)

@@ -1,8 +1,9 @@
 import Foundation
 import Combine
 
-/// UI history contains public text, resource references and bounded tool receipts, never image bytes,
-/// raw tool arguments, model reasoning, credentials, or resumable tool queues.
+/// UI history contains public text, resource references, bounded tool receipts
+/// and explicit readable provider reasoning; no image bytes, opaque reasoning,
+/// credentials or resumable tool queues.
 @MainActor final class ConversationStore: ObservableObject {
     @Published private(set) var conversations: [AgentConversation] = []
     @Published private(set) var activeRun: RunIdentity?
@@ -165,13 +166,26 @@ import Combine
         conversations[index].messages[message].text = String((conversations[index].messages[message].text + text).prefix(16_000))
         touch(index); scheduleSave()
     }
-    func completeAssistantTurn(_ text: String, identity: RunIdentity) {
+    func appendReasoning(_ text: String, identity: RunIdentity) {
+        guard !text.isEmpty, accepts(identity), let index = index(identity.conversationID),
+              let message = conversations[index].messages.lastIndex(where: { $0.runID == identity.runID && $0.role == .assistant && $0.state == .streaming }) else { return }
+        if conversations[index].messages[message].reasoning == nil {
+            conversations[index].messages[message].reasoning = ReasoningMessage(text: "")
+        }
+        conversations[index].messages[message].reasoning?.text += text
+        touch(index); scheduleSave()
+    }
+    func completeAssistantTurn(_ text: String, reasoning: String? = nil, identity: RunIdentity) {
         guard accepts(identity), let index = index(identity.conversationID),
               let message = conversations[index].messages.lastIndex(where: { $0.runID == identity.runID && $0.role == .assistant && $0.state == .streaming }) else { return }
-        if text.isEmpty { conversations[index].messages.remove(at: message) }
+        if let reasoning, !reasoning.isEmpty {
+            conversations[index].messages[message].reasoning = ReasoningMessage(text: reasoning, state: .complete)
+        }
+        if text.isEmpty && conversations[index].messages[message].reasoning == nil { conversations[index].messages.remove(at: message) }
         else {
             conversations[index].messages[message].text = String(text.prefix(16_000))
             conversations[index].messages[message].state = .complete
+            conversations[index].messages[message].reasoning?.state = .complete
         }
         touch(index); saveNow()
     }
@@ -219,7 +233,7 @@ import Combine
     func finish(_ identity: RunIdentity, phase: RunPhase, summary: String) {
         guard accepts(identity), let index = index(identity.conversationID) else { return }
         conversations[index].phase = phase
-        closePendingMessages(at: index)
+        closePendingMessages(at: index, state: phase == .blocked ? .failed : .interrupted)
         if !summary.isEmpty {
             conversations[index].messages.append(ChatMessage(runID: identity.runID, role: .notice, text: String(summary.prefix(1_000)), state: phase == .blocked ? .failed : .complete))
         }
@@ -228,7 +242,9 @@ import Combine
     /// Only public text from this conversation is used as context. Historical
     /// tools/images are never re-enqueued or used to authorize new input.
     func history(in id: UUID) -> [ChatMessage] {
-        Array((conversation(id)?.messages ?? []).filter { ($0.role == .user || $0.role == .assistant) && $0.state == .complete }.suffix(16))
+        Array((conversation(id)?.messages ?? []).filter { ($0.role == .user || $0.role == .assistant) && $0.state == .complete && !$0.text.isEmpty }.suffix(16)).map {
+            var message = $0; message.reasoning = nil; return message
+        }
     }
     private func index(_ id: UUID) -> Int? { conversations.firstIndex { $0.id == id } }
     private func touch(_ index: Int) {
@@ -243,9 +259,10 @@ import Combine
             }
         }
     }
-    private func closePendingMessages(at index: Int) {
+    private func closePendingMessages(at index: Int, state terminalState: MessageState = .interrupted) {
         for message in conversations[index].messages.indices {
-            if conversations[index].messages[message].state == .streaming { conversations[index].messages[message].state = .interrupted }
+            if conversations[index].messages[message].state == .streaming { conversations[index].messages[message].state = terminalState }
+            if conversations[index].messages[message].reasoning?.state == .streaming { conversations[index].messages[message].reasoning?.state = terminalState }
             if let state = conversations[index].messages[message].tool?.state, !state.isTerminal {
                 conversations[index].messages[message].tool?.state = .cancelled
             }
