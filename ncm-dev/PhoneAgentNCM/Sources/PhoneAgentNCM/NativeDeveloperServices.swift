@@ -43,8 +43,9 @@ public enum NativeBackendError: Error, Equatable {
 }
 public enum InputDelivery: Sendable { case reportsWrittenVisualEffectUnverified }
 
-/// Owns one native worker, its two relay streams and media. Close on app
-/// background/disconnect. Initializer is idle and never imports credentials.
+/// Owns one native worker, its two relay streams and media. The caller closes
+/// on explicit stop, execution expiry or disconnect, rather than app visibility.
+/// Initializer is idle and never imports credentials.
 @MainActor public final class NativeDeveloperServices: DeveloperServices {
     public static var linkedABIVersion: UInt32 { ncm_backend_abi() }
     private var handle: UInt64 = 0

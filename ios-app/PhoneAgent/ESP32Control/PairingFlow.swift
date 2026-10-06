@@ -19,7 +19,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     private var connectionUsers: Set<UUID> = []
     private var agentRuns: Set<UUID> = []
     private var agentQueue: [UUID] = []
-    private var isBackground = false
+    private(set) var isBackground = false
     var agentReserved: Bool { !agentRuns.isEmpty || agentOwner != nil }
     private var registeredBackgroundTask = false
     private var mediaStarted = false
@@ -28,6 +28,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     private var heartbeatEpoch = UUID()
     private var maintenanceBusy = false
     private var backgroundTask: BGTask?
+    private var operationLease: ExecutionTransitionLease?
     private(set) var capturing = false
     var running = false
     var pairingActive = false
@@ -121,6 +122,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         running = false; pairingActive = false; job = nil; hasRecord = store.exists
     }
     func cancel() {
+        operationLease?.complete(success: false); operationLease = nil
         stopHeartbeat()
         generation = UUID(); controlSessionID = UUID(); agentOwner = nil; agentRuns.removeAll(); agentQueue.removeAll()
         job?.cancel(); pairing.close(); service?.stop(); service = nil
@@ -131,11 +133,10 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     }
     func background() {
         isBackground = true
-        // The continued task intentionally keeps pairing alive while Settings is open.
-        if !pairingActive && !agentReserved && connectionUsers.isEmpty {
-            cancel()
-            message = "App 已进入后台，控制会话已关闭；配对身份保留。回到前台可重新验证 ESP32 连接"
-        }
+        // App visibility does not revoke an authenticated device session.
+        // Active runs own their system execution leases; settings operations
+        // own a finite transition lease. Explicit stop/expiry/transport loss
+        // still closes the session, without replaying input after reconnect.
     }
     func resume() {
         isBackground = false
@@ -148,8 +149,9 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         stopHeartbeat()
         generation = UUID(); controlSessionID = UUID(); let epoch = generation
         running = true; ready = false; mediaStarted = false; image = nil; lastFailure = nil; backend.close()
+        beginOperationLease(epoch: epoch)
         job = Task { @MainActor in
-            defer { if generation == epoch { running = false; job = nil } }
+            defer { if generation == epoch { finishOperationLease(); running = false; job = nil } }
             do {
                 await previousMaintenance?.value
                 try Task.checkCancellation()
@@ -193,8 +195,9 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         guard ready, !running, !agentReserved else { return }
         generation = UUID(); let epoch = generation
         running = true; self.capturing = capturing
+        beginOperationLease(epoch: epoch)
         job = Task { @MainActor in
-            defer { if generation == epoch { running = false; self.capturing = false; job = nil } }
+            defer { if generation == epoch { finishOperationLease(); running = false; self.capturing = false; job = nil } }
             do {
                 // User requests queue behind an in-flight keepalive; the UI only
                 // becomes busy after a user operation, never for maintenance.
@@ -278,7 +281,6 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     func retainConnection(owner: UUID) { connectionUsers.insert(owner) }
     func releaseConnection(owner: UUID) {
         connectionUsers.remove(owner)
-        if isBackground && !pairingActive && !agentReserved && connectionUsers.isEmpty { cancel() }
     }
     func registerAgent(owner: UUID, session: UUID) {
         guard ready, controlSessionID == session else { return }
@@ -288,15 +290,27 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         guard controlSessionID == session else { return }
         agentRuns.remove(owner); agentQueue.removeAll { $0 == owner }
         guard agentOwner == owner else {
-            if isBackground && !pairingActive && !agentReserved && connectionUsers.isEmpty { cancel() }
             return
         }
         // Cancellation during an operation revokes transport; normal completion
-        // only releases ownership, retaining the foreground control connection.
+        // only releases ownership, retaining the control connection in either scene.
         if running { cancel() } else {
             agentOwner = nil
-            if isBackground && !pairingActive && !agentReserved && connectionUsers.isEmpty { cancel() }
         }
+    }
+    private func beginOperationLease(epoch: UUID) {
+        finishOperationLease()
+        let lease = ExecutionTransitionLease()
+        lease.expirationHandler = { [weak self] in
+            guard let self, self.generation == epoch else { return }
+            self.cancel()
+            self.message = "系统后台执行时间已到期，当前操作已停止；配对身份保留"
+            self.lastFailure = self.message
+        }
+        lease.begin(); operationLease = lease
+    }
+    private func finishOperationLease() {
+        operationLease?.complete(success: true); operationLease = nil
     }
     private func stopHeartbeat() {
         heartbeatEpoch = UUID(); heartbeatTask?.cancel(); heartbeatTask = nil; maintenanceBusy = false
@@ -319,7 +333,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
                     guard self.heartbeatEpoch == epoch else { return }
                     self.maintenanceBusy = false; self.ready = false; self.mediaStarted = false
                     self.backend.close(); self.invalidateAgentSession()
-                    self.message = "前台连接保活失败：" + self.failure(error) + "；请重新连接 ESP32"
+                    self.message = "连接保活失败：" + self.failure(error) + "；请重新连接 ESP32"
                     self.lastFailure = self.message
                     return
                 }
@@ -333,12 +347,98 @@ enum NCMControlError: Error { case unavailable(String), stopped }
             return "触控准备失败：\(labels[stage] ?? "视频准备")，\(reasons[cause] ?? "原因 \(cause)")"
         }
         if case NativeBackendError.protocolFailure(let stage, let cause) = error {
+            if stage == 19 || stage == 20 {
+                return "截图\(stage == 19 ? "服务连接" : "请求与接收")失败（\(cause == 2 ? "超时" : "协议错误")）；身份已保留"
+            }
             let labels: [UInt32: String] = [1:"配对身份", 2:"ESP32 转发连接", 3:"手机身份认证", 4:"动态隧道入口", 5:"隧道 TLS", 6:"远程服务列表", 7:"开发者模式", 8:"开发者镜像", 9:"截图", 10:"屏幕视频会话", 11:"点击发送", 12:"会话关闭"]
-            return "\(labels[stage] ?? "协议")失败（原因 \(cause)）；身份已保留"
+            let reasons: [UInt32: String] = [1:"协议错误", 2:"超时", 3:"参数无效", 4:"服务缺失", 5:"尚未就绪", 6:"屏幕会话失效", 7:"发送结果未知"]
+            return "\(labels[stage] ?? "协议")失败（\(reasons[cause] ?? "原因 \(cause)")）；身份已保留"
         }
         if error is CancellationError { return "已停止，身份已保留" }
         return "连接失败，请检查 ESP32 固件、NCM 接口和本地网络权限；身份已保留"
     }
+    #if DEBUG
+    private var backgroundProbeStarted = false
+    /// Opt-in real-device acceptance probe. Uses the production bridge and
+    /// scheduler; logs state/dimensions. The additional input-probe flag saves
+    /// three local verification images for the reversible Home-screen swipe.
+    func runBackgroundProbeIfRequested(pip: StatusPiPController? = nil) async {
+        guard (ProcessInfo.processInfo.arguments.contains("--ncm-background-probe") || pip != nil), !backgroundProbeStarted else { return }
+        backgroundProbeStarted = true
+        let url = URL.documentsDirectory.appending(path: "ncm-background-probe.txt")
+        var lines: [String] = []
+        func record(_ value: String) {
+            lines.append("\(Date().ISO8601Format()) \(value)")
+            try? lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+        }
+        record("start paired=\(hasRecord)")
+        if !ready && !running { verify() }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(120))
+        while !ready && running && ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard ready else { record("connect failed: \(message)"); return }
+        let systemScheduler = ContinuedProcessingScheduler()
+        systemScheduler.diagnostic = { record($0) }
+        let scheduler: any RunBackgroundScheduler = pip == nil
+            ? systemScheduler : PiPBackedRunScheduler(primary: ForegroundOnlyScheduler())
+        let identifier = (Bundle.main.bundleIdentifier ?? "com.ja1chen.PhoneAgent") + ".backgroundRun." + UUID().uuidString
+        var lease: (any RunBackgroundLease)?
+        var expired = false
+        var activeBridge: NCMDeviceBridge?
+        do {
+            try scheduler.submit(identifier: identifier, launched: { grant in
+                lease = grant
+                grant.expirationHandler = { expired = true; activeBridge?.cancelTransport(); record("execution expired") }
+            })
+            if pip != nil { record("PiP-only acceptance active=\(pip?.active == true); combined lease=\(lease != nil); no system execution lease requested") }
+            let bridge = try NCMDeviceBridge(flow: self)
+            activeBridge = bridge
+            defer { lease?.complete(success: !expired); scheduler.cancel(identifier: identifier) }
+            do {
+                let frame = try await bridge.screenshot()
+                record("foreground capture \(frame.width)x\(frame.height) bytes=\(frame.png.count); background switch window=15s")
+                UIApplication.shared.perform(NSSelectorFromString("suspend"))
+                for step in 1...3 {
+                    try await Task.sleep(for: .seconds(15))
+                    guard !expired else { throw AppError.stopped }
+                    record("readiness \(step) start background=\(isBackground) pip=\(pip?.active == true)")
+                    while maintenanceBusy { try await Task.sleep(for: .milliseconds(10)) }
+                    running = true
+                    do { try await backend.checkDeveloperReadiness(); running = false }
+                    catch { running = false; throw error }
+                    record("readiness \(step) ok")
+                    let start = ContinuousClock.now
+                    let frame = try await bridge.screenshot()
+                    record("capture \(step) background=\(isBackground) ready=\(ready) \(frame.width)x\(frame.height) bytes=\(frame.png.count) elapsed=\(start.duration(to: .now))")
+                    lease?.report(completed: step, subtitle: "后台截图验证 \(step)/3")
+                    if step == 1 && ProcessInfo.processInfo.arguments.contains("--ncm-background-input-probe") {
+                        try frame.png.write(to: URL.documentsDirectory.appending(path: "ncm-input-before.png"))
+                        try await bridge.authorizeTaskInput(imageID: frame.id)
+                        try await bridge.drag(fromX: 52428, fromY: 32768, toX: 13107, toY: 32768, durationMS: 300, imageID: frame.id)
+                        record("background swipe-left reports written")
+                        lease?.report(completed: step + 1, subtitle: "后台滑动已发送，正在验证实际画面")
+                        try await Task.sleep(for: .seconds(1))
+                        let changed = try await bridge.screenshot()
+                        try changed.png.write(to: URL.documentsDirectory.appending(path: "ncm-input-after.png"))
+                        lease?.report(completed: step + 2, subtitle: "已收到滑动后的截图，正在恢复桌面")
+                        try await bridge.authorizeTaskInput(imageID: changed.id)
+                        try await bridge.drag(fromX: 13107, fromY: 32768, toX: 52428, toY: 32768, durationMS: 300, imageID: changed.id)
+                        record("background swipe-right reports written")
+                        lease?.report(completed: step + 3, subtitle: "已发送恢复滑动，正在验证桌面")
+                        try await Task.sleep(for: .seconds(1))
+                        let restored = try await bridge.screenshot()
+                        try restored.png.write(to: URL.documentsDirectory.appending(path: "ncm-input-restored.png"))
+                        record("background swipe verification images saved")
+                        record("complete"); break
+                    }
+                }
+                record("complete")
+            } catch { record("capture failed background=\(isBackground): \(message); \(error)") }
+            await bridge.stop()
+        } catch { record("probe failed: \(error)") }
+    }
+    #endif
 }
 
 struct PairingSection: View {

@@ -35,6 +35,47 @@ import LLMProviderKit
 }
 
 @MainActor final class NCMDeviceBridgeTests: XCTestCase {
+    func testBackgroundKeepsIdleAuthenticatedSession() {
+        let flow = PairingFlow()
+        flow.ready = true
+        let session = flow.controlSessionID
+        flow.background()
+        XCTAssertTrue(flow.isBackground)
+        XCTAssertTrue(flow.ready)
+        XCTAssertEqual(flow.controlSessionID, session)
+        flow.resume()
+        XCTAssertFalse(flow.isBackground)
+        XCTAssertTrue(flow.ready)
+        XCTAssertEqual(flow.controlSessionID, session)
+        flow.cancel()
+    }
+    func testFinishingLastBackgroundRunKeepsConnectionForNextRun() {
+        let flow = PairingFlow(), owner = UUID()
+        flow.ready = true
+        let session = flow.controlSessionID
+        flow.retainConnection(owner: owner)
+        flow.registerAgent(owner: owner, session: session)
+        flow.background()
+        flow.releaseAgent(owner: owner, session: session)
+        flow.releaseConnection(owner: owner)
+        XCTAssertFalse(flow.agentReserved)
+        XCTAssertTrue(flow.ready)
+        XCTAssertEqual(flow.controlSessionID, session)
+        flow.cancel()
+        XCTAssertFalse(flow.ready)
+        XCTAssertNotEqual(flow.controlSessionID, session)
+    }
+    func testOrdinaryChatFinishingInBackgroundDoesNotRevokeControl() {
+        let flow = PairingFlow(), owner = UUID()
+        flow.ready = true
+        let session = flow.controlSessionID
+        flow.retainConnection(owner: owner)
+        flow.background()
+        flow.releaseConnection(owner: owner)
+        XCTAssertTrue(flow.ready)
+        XCTAssertEqual(flow.controlSessionID, session)
+        flow.cancel()
+    }
     func testUsesRemotePixelsAndRequiresApprovalBeforeInput() async throws {
         let connection = NCMConnectionSpy(), bridge = try NCMDeviceBridge(flow: connection)
         let frame = try await bridge.screenshot()
@@ -131,7 +172,8 @@ import LLMProviderKit
         flow.background()
         XCTAssertTrue(flow.ready)
         await bridge.stop()
-        XCTAssertFalse(flow.ready)
+        XCTAssertTrue(flow.ready)
+        flow.cancel()
     }
     func testDeviceRunsQueueAndWaitingCancellationPreservesOwner() async throws {
         let flow = PairingFlow(); flow.ready = true
@@ -156,7 +198,9 @@ import LLMProviderKit
         XCTAssertTrue(thirdEntered); XCTAssertFalse(secondEntered)
         XCTAssertTrue(flow.ready)
         flow.releaseAgent(owner: c, session: session)
-        XCTAssertFalse(flow.ready)
+        XCTAssertTrue(flow.ready)
+        XCTAssertEqual(flow.controlSessionID, session)
+        flow.cancel()
     }
 
     func testNCMRunCanCaptureAndTapInBackgroundWithoutScreenCapture() async throws {

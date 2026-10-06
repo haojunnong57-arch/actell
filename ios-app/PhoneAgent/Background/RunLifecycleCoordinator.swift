@@ -4,7 +4,7 @@ import Foundation
 import Combine
 
 /// A delivered execution capability, never a successful scheduler submission.
-/// The source is either SCK/USB health or a handler-delivered system task.
+/// Sources include SCK/USB health, a delivered system task, and active AVKit PiP.
 @MainActor protocol RunBackgroundLease: AnyObject {
     var expirationHandler: (() -> Void)? { get set }
     func report(completed: Int, subtitle: String)
@@ -108,7 +108,7 @@ extension RunCheckpointStorage {
 @MainActor final class RunLifecycleCoordinator: ObservableObject {
     @Published private(set) var checkpoint: RunCheckpoint?
     private(set) var recoveries: [RunCheckpoint] = []
-    @Published private(set) var backgroundStatus = "后台需有效采集资格或系统实际授予的有限片段"
+    @Published private(set) var backgroundStatus = "后台需有效采集、画中画或系统实际授予的执行资格"
     private(set) var foreground = true
     private(set) var hasLease = false
     var canAwaitApprovalInBackground: Bool { checkpoint?.phase == .waitingApproval && activeToolBackgroundCapable }
@@ -198,9 +198,17 @@ extension RunCheckpointStorage {
         lease = incoming; hasLease = true
         incoming.expirationHandler = { [weak self] in
             guard self?.checkpoint?.segmentID == identifier, self?.hasLease == true else { return }
-            self?.pause("后台执行资格失效或到期；已暂停，请核对设备后手动继续")
+            guard let self else { return }
+            if self.foreground {
+                // Returning to the app closes PiP, not the foreground task.
+                self.lease?.complete(success: false); self.lease = nil; self.hasLease = false
+                self.scheduler.cancel(identifier: identifier)
+                self.requestSegment()
+            } else {
+                self.pause("后台执行资格失效或到期；已暂停，请核对设备后手动继续")
+            }
         }
-        backgroundStatus = "有限后台资格有效；设备工具仍需独立校验，真机能力待验证"
+        backgroundStatus = "后台执行资格有效；设备工具仍需独立校验"
         incoming.report(completed: checkpoint?.milestones.count ?? 0, subtitle: "等待实际模型响应或工具结果；总步骤未知")
     }
     func setForeground(_ active: Bool) {
@@ -294,6 +302,7 @@ extension RunCheckpointStorage {
         pause(message)
     }
     func pause(_ message: String) {
+        BackgroundExecutionTrace.record("run.pause background=\(!foreground) hasLease=\(hasLease)")
         guard checkpoint?.phase == .running || checkpoint?.phase == .waitingApproval else { return }
         terminate(phase: .paused, message: message, success: false, cancelExecution: true)
     }

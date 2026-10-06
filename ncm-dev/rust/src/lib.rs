@@ -46,6 +46,8 @@ pub enum Stage {
     VideoAnswer,
     VideoPackets,
     TouchService,
+    ScreenshotConnection,
+    ScreenshotResponse,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -73,7 +75,14 @@ fn error(stage: Stage, cause: Cause) -> Error {
     Error { stage, cause }
 }
 async fn bounded<T, E>(stage: Stage, f: impl Future<Output = Result<T, E>>) -> Result<T, Error> {
-    tokio::time::timeout(Duration::from_secs(15), f)
+    bounded_for(stage, Duration::from_secs(15), f).await
+}
+async fn bounded_for<T, E>(
+    stage: Stage,
+    deadline: Duration,
+    f: impl Future<Output = Result<T, E>>,
+) -> Result<T, Error> {
+    tokio::time::timeout(deadline, f)
         .await
         .map_err(|_| error(stage, Cause::Timeout))?
         .map_err(|_| error(stage, Cause::Protocol))
@@ -255,12 +264,16 @@ impl Session {
             Stage::Screenshot,
         )?;
         let mut client = bounded(
-            Stage::Screenshot,
+            Stage::ScreenshotConnection,
             ScreenCaptureServiceClient::connect_rsd(&mut self.adapter, &mut self.handshake),
         )
         .await?;
-        let png = bounded(
-            Stage::Screenshot,
+        // A full-screen PNG can be several MiB. The ESP32 relay and background
+        // TCP scheduling need a transfer budget distinct from small handshakes.
+        // This remains one read-only request, never a retry of an input action.
+        let png = bounded_for(
+            Stage::ScreenshotResponse,
+            Duration::from_secs(90),
             client.take_screenshot(None, ImageFormat::Png),
         )
         .await?;

@@ -276,3 +276,27 @@ struct ToolErrorFixtureProvider: LLMProvider {
     }
 }
 #endif
+
+#if DEBUG
+/// Finite, offline real-run fixture. It never requests device input.
+struct TaskPiPProbeProvider: LLMProvider {
+    static let name = "task-pip-probe"
+    let configuration = DemoProvider().configuration
+    func complete(_ request: LLMRequest) async throws -> LLMResponse {
+        try await Task.sleep(for: .seconds(30))
+        return LLMResponse(text: "后台状态验收已结束", finishReason: .stop, request: request, providerName: "task-pip-probe")
+    }
+    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let response = try await complete(request)
+                    continuation.yield(.text(response.text))
+                    continuation.yield(.finish(reason: .stop, usage: nil)); continuation.finish()
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+#endif

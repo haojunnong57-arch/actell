@@ -23,6 +23,18 @@ import Foundation
     #endif
     private static func makeModel() -> AgentViewModel {
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--task-pip-probe") {
+            let sessions = ConversationStore(inMemory: true)
+            sessions.create(mode: .demo)
+            let primary: any RunBackgroundScheduler = ProcessInfo.processInfo.arguments.contains("--activity-probe-no-system")
+                ? ActivityOnlyProbeScheduler() : ContinuedProcessingScheduler()
+            let lifecycle = RunLifecycleCoordinator(
+                scheduler: PiPBackedRunScheduler(primary: primary),
+                storage: MemoryRunCheckpointStore())
+            return AgentViewModel(sessions: sessions, loadPersistentState: false,
+                runServices: .init(provider: TaskPiPProbeProvider(), bridge: DemoBridge()),
+                lifecycle: lifecycle, liveActivitiesEnabled: true)
+        }
         if ProcessInfo.processInfo.arguments.contains("--ui-testing") || ProcessInfo.processInfo.environment["PHONEAGENT_ISOLATED_TESTS"] == "1" {
             let arguments = ProcessInfo.processInfo.arguments
             if arguments.contains("--ui-test-reasoning-seed") || arguments.contains("--ui-test-reasoning-restore") {
@@ -112,3 +124,20 @@ import Foundation
         return AgentViewModel()
     }
 }
+
+#if DEBUG
+/// Finite UIKit handoff only; intentionally creates no system progress card.
+/// Used with the offline fixture to test the custom WidgetKit presentation alone.
+@MainActor private final class ActivityOnlyProbeScheduler: RunBackgroundScheduler {
+    private var leases: [String: ExecutionTransitionLease] = [:]
+    func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void) throws {
+        let lease = ExecutionTransitionLease()
+        lease.begin()
+        guard lease.valid else { throw AppError.unavailable("诊断任务未获得有限后台时间") }
+        leases[identifier] = lease
+        BackgroundExecutionTrace.record("activity.probeUIKitOnly")
+        launched(lease)
+    }
+    func cancel(identifier: String) { leases.removeValue(forKey: identifier)?.complete(success: false) }
+}
+#endif

@@ -138,3 +138,64 @@ NCM 适配器创建时不检查配对/连接，也不占用设备操作门。首
 会话列表只显示单行标题，以 40 点内容高度及上下内边距保持垂直居中，移除消息预览与状态徽标。首页设备控制入口移除，保留“设置 → 手机操控 → ESP32 控制”。思考、工具和授权卡片的图标共用 MessageHeaderIcon（body 字体、small 缩放）；思考符号改为 brain，标题改为“思考”，移除右侧生成状态与展开说明。展开内容使用动态 secondary 色的 85% 不透明度，稍微调浅。思考数据、取消、失败与历史恢复语义保留。
 
 验证：247 项核心测试通过（`.build/validation/core.pZ4mWA/Tests.xcresult`）；4 项 UI 用例通过（`.build/reasoning-list-ui.xcresult`），覆盖设置中的控制入口、完成后的思考折叠、失败内容保留、流式思考停止以及深色模式历史恢复。已检查思考展开截图。签名和无签名 iPhoneOS 构建通过（`.build/reasoning-list-build.log` / `.build/reasoning-list-device-build.log`），新版已在 iPhone 上安装并成功启动。
+
+
+## 后台截图与输入验收（2026-10-06）
+
+后台自动关闭控制连接的策略已移除：切后台、普通聊天结束或最后一个任务释放引用都保留已建立的认证会话。显式停止、锁屏导致受保护数据不可用、执行资格到期、真实传输故障仍撤销会话；不重放旧输入。设置页的连接和验证操作使用真实 UIKit 有限后台任务覆盖前后台切换。
+
+真机复现显示 `BGContinuedProcessingTask` 已实际授予，后台开发者服务查询可用，截图服务也能连接；旧错误 cause=2 是完整 PNG 请求/接收超过 15 秒。前台 App 图像约 219 KB，后台桌面图像约 4.9 MB，经 ESP32 的三次传输耗时分别为 27.31、25.46、26.85 秒。截图图像传输上限改为 90 秒，小型连接/握手仍为 15 秒，Swift 总接收上限仍为 120 秒。增加连接阶段 19 与请求/接收阶段 20，超时显示明确文字。
+
+使用生产 NCMDeviceBridge、原生后端和系统持续后台调度，真机三次后台截图成功，连接保持正常。另一次后台输入验收从桌面滑到 App 资源库，已通过 ESP32 返回的前后截图确认实际 UI 变化；恢复方向报告已写出，但最后的恢复截图因系统执行资格到期而未完成。无输入重发。视频会话开启后截图可更慢，不能将本次验收解释成不限时后台运行。
+
+证据：`.build/ncm-background-screenshot-success.txt`、`.build/ncm-background-probe.txt`、`.build/ncm-input-before.png`、`.build/ncm-input-after.png`。核心 250 项通过（`.build/validation/core.139UGz/Tests.xcresult`）；原生 Rust 27 项通过；签名和无签名 iPhoneOS build 均通过。新版已安装到 iPhone 15 Pro，未刷写固件。
+
+DEBUG 下可用 `--ncm-background-probe` 复现前台截图和三次后台截图；额外 `--ncm-background-input-probe` 做桌面的左右滑动验证，并在 App Documents 保存局部验收文件。正常启动没有此诊断行为，Release 不包含该入口。
+
+
+## PiP 后台执行验收（2026-10-06）
+
+用户明确要求启用已有 PiP 后，补齐 `audio` 后台模式，用原来的 AVSampleBufferDisplayLayer 状态卡片请求画中画。只有 AVKit 的实际开启回执才计入执行资格；内联预览和请求启动不计入。没有增加静音音轨或自动启动普通会话。DEBUG `--pip-background-probe` 挂载预览并请求 PiP，使用生产 NCMDeviceBridge 验证后台截图。
+
+首次真机验收仅开启 PiP、不申请持续后台任务，连续三次后台截图成功，完整 PNG 约 4.1 MB，耗时 23.30、23.61、21.97 秒；AVKit 在整个过程中确认 PiP 仍开启。证据 `.build/pip-background-probe.txt`、`.build/pip-ncm-background-probe.txt`。这证明当前手机与系统组合下 PiP 对实际后台工作有作用，不代表系统永远不会终止 App。
+
+NCM 的运行调度增加 PiPBackedRunScheduler，将实际 PiP 和系统授予的执行资格作为独立来源。一个来源失效时，另一个仍有效就保留运行资格；全部失效才触发原有暂停和传输撤销。显式停止仍关闭当前运行，停止一个会话不影响其他会话或 PiP，旧回调和重新开启 PiP 不自动恢复已停止的任务。旧 ScreenCaptureKit 路线保留。
+
+核心 255 项通过（`.build/validation/core.M3QXpw/Tests.xcresult`），新增覆盖系统到期但 PiP 有效、PiP 关闭但系统资格有效、系统拒绝时 PiP 回退、多个运行隔离以及旧回调不复活。最终签名与无签名 iPhoneOS 构建通过（`.build/pip-background-build.log`、`.build/pip-background-unsigned-build.log`），新版已安装并通过 AVKit 开启回执。接入调度后的仅 PiP 真机复验日志保存在 `.build/pip-integrated-ncm-background-probe.txt`。
+
+接入调度后的真机复验已完成：日志确认 `combined lease=true`，未申请系统执行片段；三次后台截图均成功，PNG 约 5.15 MB，耗时 21.96、21.82、21.83 秒，服务与 PiP 全程有效。验收结束保留 PiP 开启，未发送触控。此轮验证的是后台截图与执行资格，未做不限时或锁屏验收。
+
+
+## 任务驱动的 PiP 与实时活动（2026-10-07）
+
+上一次 `--pip-background-probe` 是截图验收而非 Agent 任务，没有 runIdentity，因此不会创建任务 Live Activity。该入口的前台覆盖预览已移除，正常任务的 ActivityKit 发布与导航保留。PiP 的采样图层改为在导航内容下方挂载，不占据或遮挡交互界面。
+
+PiP 由应用级任务状态驱动：任务运行时准备状态视频，前台不显示 PiP；切后台才由 AVKit 自动开始并补充显式请求；返回前台关闭窗口而保留任务；任务结束/停止时关闭。等待多个会话全部结束才释放媒体资源，用户关闭浮窗后同一后台阶段不自动再开。播放代理使用真实播放状态、无限直播时间范围及主机时钟时间基准，运行期间每秒更新状态帧，没有静音音轨。
+
+任务生命周期通过 Combine 直接观察，避免后台 SwiftUI 延迟刷新导致窗口漏关。停止时先请求 AVKit 关闭，任务已结束时再释放内容源；图层和音频会话在关闭回执后清理。前台关闭 PiP 且系统资格已失效时，运行协调器保持前台执行并重新申请后台资格，不错误暂停整个任务。
+
+核心 258 项通过（`.build/validation/core.tOuxqM/Tests.xcresult`），新增覆盖前台关闭 PiP 不停止任务、按任务与场景启用、用户关闭不反复开启，以及不依赖 SwiftUI 更新的后台任务完成观察。最终签名、无签名 iPhoneOS 构建通过（`.build/task-pip-build.log` / `.build/task-pip-unsigned-build.log`）。有限离线真机任务确认前台 `avkit=false`、后台 `avkit=true playing=true activities=1`，任务结束后 `policy=false avkit=false playing=false activities=0`，且系统关闭回执为“画中画已关闭”（`.build/task-pip-completed-probe.txt`）。验收未调用设备输入，也未写入用户会话历史。
+
+DEBUG `--task-pip-probe` 仅用于有限离线任务验收，正常启动和 Release 不包含自动诊断流程。
+
+返回前台复验日志 `.build/task-pip-foreground-return-probe.txt` 确认前台 AVKit 窗口已关闭。保持运行的前台任务不会因 PiP 关闭被暂停，另由核心生命周期用例覆盖。验收结束后退出离线诊断启动，恢复正常 App 启动与用户会话。
+
+
+## PiP 隐藏/播放状态与 LongRunningIntent 核对（2026-10-07）
+
+旧实现把 `setPlaying(false)` 直接转为撤销 PiP 执行资格；这会把媒体暂停与窗口真实关闭混为一谈。当系统资格也已过期时，可能导致整轮任务暂停。现在播放/暂时悬挂只改变媒体状态，实际 start/stop 回执仍决定 PiP 执行来源，真实关闭且无其他来源时继续执行原暂停逻辑，不强行标记系统资格有效。侧边隐藏是否触发了本次暂停，目前缺少当时的 AVKit 回执，不作为已复现结论。
+
+新增 `Documents/background-execution-events.log`，最多 200 条，只记录事件名和任务/前后台/AVKit active/suspended/playing 状态，以及系统申请接受/拒绝、UIKit 过渡到期、持续后台资格到期与运行暂停；不含任务正文、截图或密钥。回归覆盖暂停播放、暂时悬挂不撤销实际 PiP 回执，真正关闭则暂停。259 项核心测试通过（`.build/pip-hidden-core.log`）。
+
+本机 iPhoneOS 27 SDK 确认 `LongRunningIntent: ProgressReportingIntent` 和 `performBackgroundTask(options:operation:onCancel:)` 可用。Apple 文档说明其可延长 App Intent 工作的后台时间，但需要规律的真实进度更新，系统仍可能取消；它不会给随后独立运行的 App 任务自动续期。当前 PrepareAgentTaskIntent 只保存草稿并返回，没有在 perform 中等待 Agent 完成，因此仅更换协议不会覆盖既有任务。下一步接入应新增实际执行/接管任务的 Intent，把对应运行完整置于 performBackgroundTask 中，按实际模型/工具回执报告进度并按 run identity 处理取消，同时让运行协调器认可实际 Intent 资格，避免旧系统片段到期时提前停止它。现阶段未将此接口宣称为已接入或已实测更长时限。
+
+参考：https://developer.apple.com/documentation/appintents/longrunningintent 、https://developer.apple.com/documentation/appintents/longrunningintent/performbackgroundtask(options:operation:oncancel:) 。
+
+修正版已签名构建、无签名构建并安装。离线真机任务复验记录 `continuedGranted`、`pip.didStart`，任务结束时记录 `pip.stopRequested` 及 `pip.didStop active=false`（`.build/pip-hidden-lifecycle-events.log`），证明新增记录可捕获真实来源和关闭。侧边隐藏本身尚未进行真机复现，未将回归测试等同于该手势的系统回执。验收结束恢复正常 App 启动。
+
+
+### 2026-10-07 灵动岛与 PiP 对照
+
+先前混合系统后台任务卡片的对照不足以证明自定义活动显示正常，用户随后说明曾看到的是系统卡片；不能用那次结果证明 PiP 遮挡自定义卡片。授权完成后的 ActivityKit active 也不能等同于灵动岛已展示。
+
+提高 relevanceScore 的试验没有解决问题，已撤回。随后通过 DEBUG 参数 --task-pip-probe --activity-probe-no-system 禁用 BGContinuedProcessingTask，只使用有限 UIKit 后台时间；再用 --activity-probe-no-pip 控制唯一变量。01:05 第一轮无系统卡片、无 PiP，用户明确确认自定义星光／请求标识及“离线演示／正在请求模型”显示。01:06 第二轮仍无系统卡片，仅加入 PiP，用户明确确认自定义灵动岛随 PiP 开启而消失。日志 .build/activity-only-events.log 和 .build/activity-pip-only-events.log 分别记录 activity.probeUIKitOnly、activity.created 与第二轮 pip.didStart；后者 01:07:18 完成，01:07:19 停止 PiP。两轮无真实模型请求或 ESP32 输入。此单变量结果确认当前设备上的展示冲突，具体系统策略尚未确认，不能推广为所有 iOS 版本的限制。保留诊断参数，不改变正常启动策略，未实现二者同时展示的修复，未移除后台保活。签名与无签名构建通过，核心测试通过（.build/validation/core.KbvdwF/Tests.xcresult），测试后恢复正常 App。

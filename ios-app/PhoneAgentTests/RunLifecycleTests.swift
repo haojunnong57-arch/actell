@@ -46,6 +46,123 @@ import LLMProviderKit
     private func tool(_ id: String = "tap") -> RunCheckpoint.Tool {
         .init(callID: id, name: "tap", parameterSummary: "{\"x\":1,\"y\":2}", argumentDigest: "digest")
     }
+    func testReturningToForegroundBeforePiPStopsPreservesTaskAndRenewsSystemRequest() throws {
+        let activity = PiPExecutionActivity(), owner = UUID(), primary = FakeScheduler()
+        activity.update(owner: owner, active: true)
+        let lifecycle = RunLifecycleCoordinator(scheduler: PiPBackedRunScheduler(primary: primary, activity: activity), storage: MemoryRunCheckpointStore())
+        try lifecycle.begin(identity: identity, generation: token)
+        lifecycle.setForeground(false)
+        lifecycle.setForeground(true)
+        activity.update(owner: owner, active: false)
+        XCTAssertEqual(lifecycle.checkpoint?.phase, .running)
+        XCTAssertEqual(primary.identifiers.count, 2)
+        try lifecycle.requireExecution(generation: token, backgroundCapable: true)
+        lifecycle.stop(message: "cleanup")
+    }
+    func testMediaPauseOrSuspensionDoesNotRevokeActualPiPExecutionReceipt() throws {
+        let activity = PiPExecutionActivity(), owner = UUID(), primary = FakeScheduler()
+        let pip = StatusPiPController(executionActivity: activity, executionOwner: owner)
+        let lifecycle = RunLifecycleCoordinator(scheduler: PiPBackedRunScheduler(primary: primary, activity: activity), storage: MemoryRunCheckpointStore())
+        activity.update(owner: owner, active: true)
+        try lifecycle.begin(identity: identity, generation: token)
+        lifecycle.setForeground(false)
+        pip.setSystemPlayback(false, suspended: true)
+        pip.setSystemPlayback(false, suspended: false)
+        XCTAssertTrue(activity.active)
+        XCTAssertTrue(lifecycle.hasLease)
+        try lifecycle.requireExecution(generation: token, backgroundCapable: true)
+        activity.update(owner: owner, active: false)
+        XCTAssertEqual(lifecycle.checkpoint?.phase, .paused)
+    }
+    func testTaskPiPOnlyStartsInBackgroundAndHonorsDismissalUntilReturn() {
+        var policy = TaskPiPPolicy()
+        policy.setForeground(false)
+        XCTAssertFalse(policy.shouldStart)
+        policy.setForeground(true); policy.setRunning(true)
+        XCTAssertFalse(policy.shouldStart)
+        policy.setForeground(false)
+        XCTAssertTrue(policy.shouldStart)
+        policy.dismissed = true
+        XCTAssertFalse(policy.shouldStart)
+        policy.setRunning(true)
+        XCTAssertFalse(policy.shouldStart)
+        policy.setForeground(true); policy.setForeground(false)
+        XCTAssertTrue(policy.shouldStart)
+        policy.setRunning(false)
+        XCTAssertFalse(policy.shouldStart)
+    }
+    func testSystemExpirationKeepsBackgroundRunWhilePiPIsActive() throws {
+        let activity = PiPExecutionActivity(), owner = UUID(), primary = FakeScheduler()
+        activity.update(owner: owner, active: true)
+        let scheduler = PiPBackedRunScheduler(primary: primary, activity: activity)
+        let lifecycle = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
+        try lifecycle.begin(identity: identity, generation: token)
+        let grant = primary.grant()
+        lifecycle.setForeground(false)
+        grant.expirationHandler?()
+        XCTAssertTrue(lifecycle.hasLease)
+        XCTAssertEqual(lifecycle.checkpoint?.phase, .running)
+        try lifecycle.requireExecution(generation: token, backgroundCapable: true)
+        activity.update(owner: owner, active: false)
+        XCTAssertFalse(lifecycle.hasLease)
+        XCTAssertEqual(lifecycle.checkpoint?.phase, .paused)
+        lifecycle.stop(message: "cleanup")
+    }
+    func testPiPClosingKeepsRunUntilSystemSourceAlsoExpires() throws {
+        let activity = PiPExecutionActivity(), owner = UUID(), primary = FakeScheduler()
+        activity.update(owner: owner, active: true)
+        let lifecycle = RunLifecycleCoordinator(scheduler: PiPBackedRunScheduler(primary: primary, activity: activity), storage: MemoryRunCheckpointStore())
+        try lifecycle.begin(identity: identity, generation: token)
+        let grant = primary.grant()
+        lifecycle.setForeground(false)
+        activity.update(owner: owner, active: false)
+        XCTAssertTrue(lifecycle.hasLease)
+        try lifecycle.requireExecution(generation: token, backgroundCapable: true)
+        grant.expirationHandler?()
+        XCTAssertEqual(lifecycle.checkpoint?.phase, .paused)
+    }
+    func testRejectedSystemRequestCanUseActualPiPButNotInlinePreview() throws {
+        let primary = FakeScheduler(); primary.reject = true
+        let activity = PiPExecutionActivity(), owner = UUID()
+        let scheduler = PiPBackedRunScheduler(primary: primary, activity: activity)
+        var deliveries = 0
+        XCTAssertThrowsError(try scheduler.submit(identifier: "preview", launched: { _ in deliveries += 1 }))
+        XCTAssertEqual(deliveries, 0)
+        activity.update(owner: owner, active: true)
+        try scheduler.submit(identifier: "active", launched: { _ in deliveries += 1 })
+        XCTAssertEqual(deliveries, 1)
+        scheduler.cancel(identifier: "active")
+        activity.update(owner: owner, active: false)
+    }
+    func testStoppingOneRunDoesNotRevokeOtherPiPBackedRun() throws {
+        let activity = PiPExecutionActivity(), owner = UUID(), primary = FakeScheduler()
+        activity.update(owner: owner, active: true)
+        let scheduler = PiPBackedRunScheduler(primary: primary, activity: activity)
+        var a: (any RunBackgroundLease)?, b: (any RunBackgroundLease)?
+        try scheduler.submit(identifier: "a", launched: { a = $0 })
+        try scheduler.submit(identifier: "b", launched: { b = $0 })
+        var aExpired = 0, bExpired = 0
+        a?.expirationHandler = { aExpired += 1 }; b?.expirationHandler = { bExpired += 1 }
+        scheduler.cancel(identifier: "a")
+        XCTAssertTrue(activity.active)
+        activity.update(owner: owner, active: false)
+        XCTAssertEqual(aExpired, 0); XCTAssertEqual(bExpired, 1)
+        scheduler.cancel(identifier: "b")
+    }
+    func testLateGrantOrPiPRestartNeverRevivesStoppedRun() throws {
+        let activity = PiPExecutionActivity(), owner = UUID(), primary = FakeScheduler()
+        activity.update(owner: owner, active: true)
+        let scheduler = PiPBackedRunScheduler(primary: primary, activity: activity)
+        var deliveries = 0
+        try scheduler.submit(identifier: "stopped", launched: { _ in deliveries += 1 })
+        scheduler.cancel(identifier: "stopped")
+        let late = primary.grant()
+        XCTAssertEqual(late.completions, [false])
+        activity.update(owner: owner, active: false)
+        activity.update(owner: owner, active: true)
+        XCTAssertEqual(deliveries, 1)
+        activity.update(owner: owner, active: false)
+    }
     func testAsynchronousSubmissionFailureAndOldCallbackCannotAffectNewRun() throws {
         let scheduler = FakeScheduler()
         let lifecycle = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
@@ -156,6 +273,7 @@ import LLMProviderKit
         try c.begin(identity: identity, generation: token); _ = scheduler.grant()
         try c.prepare(tool(), generation: token, backgroundCapable: false)
         c.stop(message: "stop")
+        c.setForeground(true)
         let next = UUID(); try c.begin(identity: identity, generation: next); _ = scheduler.grant()
         c.setForeground(false)
         try c.requireExecution(generation: next, backgroundCapable: true)
@@ -169,9 +287,11 @@ import LLMProviderKit
         let oldID = scheduler.identifiers[0], lease = scheduler.grant()
         scheduler.launches[oldID]?(lease)
         let expire = lease.expirationHandler
+        c.setForeground(false)
         var pauses = 0; c.onPause = { _ in pauses += 1 }
         expire?(); expire?(); c.stop(message: "stop"); c.finish(success: true)
         XCTAssertEqual(pauses, 1); XCTAssertEqual(lease.completions, [false])
+        c.setForeground(true)
         let next = UUID(); try c.begin(identity: identity, generation: next)
         let fresh = scheduler.grant()
         expire?(); scheduler.launches[oldID]?(lease)
@@ -372,6 +492,20 @@ private struct DisconnectedModel: LLMProvider {
         let sent = await bridge.sent
         XCTAssertEqual(sent, 0); XCTAssertEqual(scheduler.identifiers.count, 1)
         XCTAssertEqual(c.checkpoint?.phase, .paused)
+    }
+    func testPiPObservesBackgroundTaskCompletionWithoutSwiftUIViewUpdates() async throws {
+        let scheduler = FakeScheduler(), bridge = BackgroundSpyBridge()
+        let lifecycle = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+            runServices: .init(provider: DemoProvider(), bridge: bridge), lifecycle: lifecycle)
+        let pip = StatusPiPController()
+        pip.observeTasks(in: model)
+        model.start(); _ = scheduler.grant()
+        try await waitUntil { pip.policy.running }
+        model.setForeground(false)
+        model.stop(message: "test completion")
+        try await waitUntil { !model.running && !model.stopping && !pip.policy.running }
+        XCTAssertFalse(pip.policy.shouldStart)
     }
     func testExpirationClosesFakeTransportAndCancelsModel() async throws {
         let scheduler = FakeScheduler(), bridge = BackgroundSpyBridge()

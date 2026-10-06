@@ -25,6 +25,7 @@ struct AgentActivitySnapshot: Equatable {
 
     init(enabled: Bool = true) {
         self.enabled = enabled
+        BackgroundExecutionTrace.record("activity.init enabled=\(enabled)")
         guard enabled else { return }
         // A new process has no resumable continuation. Never adopt an old run.
         let orphans = Activity<AgentActivityAttributes>.activities
@@ -37,6 +38,12 @@ struct AgentActivitySnapshot: Equatable {
         }
     }
 
+    #if DEBUG
+    var activeCountForProbe: Int {
+        activities.values.filter { $0.activityState == .active || $0.activityState == .stale }.count
+    }
+    #endif
+
     func setForeground(_ active: Bool) {
         foreground = active
         // Leave a truthful interrupted card on the island while away. On
@@ -46,7 +53,10 @@ struct AgentActivitySnapshot: Equatable {
 
     func submit(_ snapshot: AgentActivitySnapshot) {
         latest[snapshot.attributes.runID] = snapshot
-        guard enabled else { return }
+        guard enabled else {
+            BackgroundExecutionTrace.record("activity.skipped disabled=true")
+            return
+        }
         let previous = tail
         tail = Task { [weak self] in
             await previous?.value
@@ -67,6 +77,7 @@ struct AgentActivitySnapshot: Equatable {
                     await current.update(ActivityContent(state: snapshot.state, staleDate: nil))
                 } else {
                     await current.end(ActivityContent(state: snapshot.state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(300)))
+                    BackgroundExecutionTrace.record("activity.ended phase=\(snapshot.state.phase) foreground=\(foreground)")
                     activities.removeValue(forKey: run)
                     latest.removeValue(forKey: run)
                 }
@@ -77,16 +88,28 @@ struct AgentActivitySnapshot: Equatable {
         guard latest[run] == snapshot else { return }
         let content = ActivityContent(state: snapshot.state, staleDate: snapshot.staleDate)
         if let activity = activities[run] {
-            guard activity.activityState == .active || activity.activityState == .stale else { return }
+            guard activity.activityState == .active || activity.activityState == .stale else {
+                BackgroundExecutionTrace.record("activity.skipped state=\(activity.activityState)")
+                return
+            }
             await activity.update(content)
+            BackgroundExecutionTrace.record("activity.updated phase=\(snapshot.state.phase) tools=\(snapshot.state.completedTools) state=\(activity.activityState)")
         } else {
             guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+                BackgroundExecutionTrace.record("activity.denied authorization=false")
                 notice = "实时活动未开启；仍可在 App 内查看与确认"; return
             }
             do {
-                activities[run] = try Activity.request(attributes: snapshot.attributes, content: content, pushType: nil)
+                let activity = try Activity.request(attributes: snapshot.attributes, content: content, pushType: nil)
+                activities[run] = activity
+                BackgroundExecutionTrace.record("activity.created foreground=\(foreground) state=\(activity.activityState)")
                 notice = nil
-            } catch { notice = "实时活动暂不可用；仍可在 App 内查看与确认" }
+            } catch {
+                // Record system error metadata only, never task text or credentials.
+                let systemError = error as NSError
+                BackgroundExecutionTrace.record("activity.requestFailed domain=\(systemError.domain) code=\(systemError.code) foreground=\(foreground)")
+                notice = "实时活动暂不可用；仍可在 App 内查看与确认"
+            }
         }
     }
 }

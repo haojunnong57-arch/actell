@@ -22,7 +22,7 @@ struct StatusPiPPanel: View {
                     if controller.active { Button("关闭画中画") { controller.stop() } }
                 }.buttonStyle(.bordered)
                 Text(controller.message).font(.caption).foregroundStyle(.secondary)
-                Text("只显示任务类别、阶段和需确认状态；隐藏任务正文、截图和密钥。画中画不能确认动作，离开前台仍会停止 agent。")
+                Text("只显示任务类别、阶段和需确认状态；隐藏任务正文、截图和密钥。画中画不能确认动作。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -30,12 +30,12 @@ struct StatusPiPPanel: View {
     }
 }
 
-private struct StatusSampleBufferView: UIViewRepresentable {
+struct StatusSampleBufferView: UIViewRepresentable {
     let displayLayer: AVSampleBufferDisplayLayer
     func makeUIView(context: Context) -> StatusLayerView { StatusLayerView(displayLayer: displayLayer) }
     func updateUIView(_ view: StatusLayerView, context: Context) { view.setNeedsLayout() }
 }
-private final class StatusLayerView: UIView {
+final class StatusLayerView: UIView {
     private let displayLayer: AVSampleBufferDisplayLayer
     init(displayLayer: AVSampleBufferDisplayLayer) {
         self.displayLayer = displayLayer
