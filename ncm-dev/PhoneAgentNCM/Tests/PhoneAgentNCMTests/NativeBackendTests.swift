@@ -3,6 +3,22 @@ import XCTest
 import CNCMBackend
 @testable import PhoneAgentNCM
 final class NativeBackendTests: XCTestCase {
+    @MainActor func testLockdownGateIsIndependentOfRemotePairing() async {
+        let client = NativeLockdownSession()
+        do { try await client.connect(pairingRecord: Data("rp-record".utf8), expectedUDID: "PUBLIC-TEST", authorized: false); XCTFail("authorization gate") }
+        catch { XCTAssertEqual(error as? NativeBackendError, .authorizationRequired) }
+        do { try await client.stop(); XCTFail("idle session") }
+        catch { XCTAssertEqual(error as? NativeBackendError, .closed) }
+        var handle: UInt64 = 55
+        let invalid = Data("rp-record".utf8), udid = Data("PUBLIC-TEST".utf8)
+        invalid.withUnsafeBytes { record in udid.withUnsafeBytes { peer in
+            let r = ncm_bytes(data: record.bindMemory(to: UInt8.self).baseAddress, size: record.count)
+            let u = ncm_bytes(data: peer.bindMemory(to: UInt8.self).baseAddress, size: peer.count)
+            XCTAssertEqual(ncm_lockdown_start(1, 8, r, u, &handle), 1)
+            XCTAssertEqual(handle, 0)
+        }}
+        client.close(); client.close()
+    }
     @MainActor func testActualNativeABIAndMalformedIdentityBoundary() throws {
         XCTAssertEqual(NativeDeveloperServices.linkedABIVersion, 1)
         XCTAssertEqual(MemoryLayout<ncm_event>.size, 32)
@@ -26,6 +42,19 @@ final class NativeBackendTests: XCTestCase {
         catch { XCTAssertEqual(error as? NativeBackendError, .authorizationRequired) }
     }
     #if NCM_OFFLINE_FIXTURES
+    @MainActor func testMediaPreparationFailureRetainsSessionButUncertainTouchClosesIt() async throws {
+        let client = NativeDeveloperServices()
+        try await client.connectMediaFailureFixture()
+        do { try await client.startTouchMedia(); XCTFail("expected preparation timeout") }
+        catch { XCTAssertEqual(error as? NativeBackendError, .touchPreparationFailure(stage: 15, cause: 2)) }
+        // This crosses the same native handle after failure, not just a cached UI flag.
+        try await client.checkDeveloperReadiness()
+        do { _ = try await client.tapDelivery(x: 32768, y: 32768); XCTFail("expected uncertain delivery") }
+        catch { XCTAssertEqual(error as? NativeBackendError, .protocolFailure(stage: 11, cause: 7)) }
+        do { _ = try await client.listServices(); XCTFail("uncertain touch must close") }
+        catch { XCTAssertEqual(error as? NativeBackendError, .closed) }
+        client.close()
+    }
     private final class Fixture {
         let process = Process()
         let output = Pipe()

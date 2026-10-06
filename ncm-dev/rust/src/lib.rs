@@ -6,6 +6,7 @@ mod ffi;
 mod media;
 mod relay;
 pub use relay::RelayConnector;
+pub mod lockdown;
 mod png;
 mod transport;
 pub use idevice::remote_pairing::{RpPairingFile, VerifiedPeerIdentity};
@@ -39,6 +40,12 @@ pub enum Stage {
     Media,
     Input,
     Closed,
+    VideoReceiver,
+    VideoService,
+    VideoNegotiation,
+    VideoAnswer,
+    VideoPackets,
+    TouchService,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -265,29 +272,20 @@ impl Session {
             height: dimensions.height,
         })
     }
-    /// Starts real DisplayService audio/video negotiation and drains packets in
+    /// Starts real DisplayService video negotiation and drains packets in
     /// the owned tunnel. No HEVC decode. Explicit media consent is a caller duty.
-    /// Failure invalidates the entire generation; no uncertain state is reused.
+    /// Preparation sends no touch reports. Its scoped streams/drains are dropped
+    /// on error/cancellation; the authenticated tunnel and screenshot path survive.
     pub async fn start_touch_media(&mut self) -> Result<(), Error> {
         self.require("com.apple.coredevice.displayservice", Stage::Media)?;
         self.require("com.apple.coredevice.hid.universalhidservice", Stage::Input)?;
         if self.media.is_some() {
             return Err(error(Stage::Media, Cause::InvalidParameters));
         }
-        let mut guard = OperationGuard(Some(self.owner.0.clone()));
-        match media::Media::start(&mut self.adapter, &mut self.handshake).await {
-            Ok(media) => {
-                self.media = Some(media);
-                guard.0 = None;
-                Ok(())
-            }
-            Err(e) => {
-                self.invalidate();
-                Err(e)
-            }
-        }
+        self.media = Some(media::Media::start(&mut self.adapter, &mut self.handshake).await?);
+        Ok(())
     }
-    /// No replay on timeout/uncertain release. Valid media must be flowing in
+    /// No replay on timeout/uncertain release. A negotiated screen session must belong to
     /// this same authenticated generation; result never claims a visible tap.
     pub async fn tap(&mut self, x: u16, y: u16) -> Result<TouchDelivery, Error> {
         self.check()?;
@@ -478,6 +476,69 @@ mod tests {
         ));
         assert_eq!(connector.calls.load(Ordering::SeqCst), 0);
     }
+    #[tokio::test]
+    async fn failed_video_preparation_does_not_revoke_screenshot_generation() {
+        let (stream, peer) = tokio::io::duplex(1024);
+        drop(peer); // synthetic broken video transport, no device connection
+        let adapter = Adapter::new(
+            Box::new(stream),
+            "fdab::1".parse().unwrap(),
+            "fdab::2".parse().unwrap(),
+        )
+        .to_async_handle();
+        let services = [
+            "com.apple.coredevice.displayservice",
+            "com.apple.coredevice.hid.universalhidservice",
+            "com.apple.coredevice.screencaptureservice",
+        ]
+        .into_iter()
+        .map(|name| {
+            (
+                name.to_owned(),
+                idevice::rsd::RsdService {
+                    entitlement: String::new(),
+                    port: 1234,
+                    uses_remote_xpc: true,
+                    features: None,
+                    service_version: None,
+                },
+            )
+        })
+        .collect();
+        let mut session = Session {
+            owner: Owner::default(),
+            _control: None,
+            adapter,
+            handshake: RsdHandshake {
+                services,
+                protocol_version: 1,
+                properties: Default::default(),
+                uuid: String::new(),
+            },
+            _rsd_control: None,
+            prepared: true,
+            media: None,
+            valid: true,
+        };
+        let result =
+            tokio::time::timeout(Duration::from_secs(2), session.start_touch_media()).await;
+        assert!(!matches!(result, Ok(Ok(()))));
+        assert!(session.media.is_none());
+        assert!(session.prepared);
+        assert!(
+            session.check().is_ok(),
+            "preparation must not close the owned generation"
+        );
+        assert!(
+            session
+                .require(
+                    "com.apple.coredevice.screencaptureservice",
+                    Stage::Screenshot
+                )
+                .is_ok()
+        );
+    }
+
     #[test]
     fn tunnel_uses_negotiated_ipv6_and_port_only() {
         let mut info = idevice::tunnel::TunnelInfo {

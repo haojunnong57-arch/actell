@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "nd_relay.h"
+#include "bridge_lockdown_probe.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
@@ -29,22 +30,30 @@ static bool token(const char **cursor,char out[33]) {
 bridge_status nd_relay_prepare(nd_relay *s,const nd_server *catalog,const nd_link *link,const char *line,nd_relay_job *job) {
     if(!s||!catalog||!link||!line||!job||strlen(line)>ND_RELAY_LINE_LIMIT)return BRIDGE_E_ARGUMENT;
     bool busy=nd_relay_busy(s);const char *p=line;char nonce[33]={0};unsigned bit=0;nd_endpoint target={0};
-    if(!strncmp(p,"NR1 OPEN ",9)){
+    if(!strncmp(p,"NL1 OPEN ",9)){
+        p+=9;if(strlen(p)!=32||!token(&p,nonce)||*p)return BRIDGE_E_FORMAT;
+        if(busy)return BRIDGE_E_LIMIT;
+        target=(nd_endpoint){.service=ND_LOCKDOWN,.family=4,.port=BRIDGE_LOCKDOWN_PORT};
+        memcpy(target.address,link->peer4,4);
+        s->claimed=true;s->lockdown=true;s->started=0;s->target=target;s->base=*link;memcpy(s->nonce,nonce,sizeof nonce);
+        atomic_store(&s->done,0);atomic_store(&s->cancelled,false);atomic_store(&s->control_ready,false);atomic_store(&s->last_io_ms,(uint32_t)nd_now(NULL));bit=1;
+    }else if(!strncmp(p,"NR1 OPEN ",9)){
         p+=9;uint32_t generation=0,index=0;
         if(!number(&p,&generation)||*p++!=' '||!number(&p,&index)||*p++!=' '||strlen(p)!=32||!token(&p,nonce)||*p)return BRIDGE_E_FORMAT;
         if(busy)return BRIDGE_E_LIMIT;
         if(!generation||generation!=catalog->generation||index>=catalog->count||nd_now(NULL)>=catalog->expires)return BRIDGE_E_NOT_FOUND;
         target=catalog->endpoints[index];if(target.service!=ND_REMOTE_PAIRING)return BRIDGE_E_UNSUPPORTED;
-        s->claimed=true;s->started=0;s->target=target;s->base=*link;memcpy(s->nonce,nonce,sizeof nonce);
+        s->claimed=true;s->lockdown=false;s->started=0;s->target=target;s->base=*link;memcpy(s->nonce,nonce,sizeof nonce);
         atomic_store(&s->done,0);atomic_store(&s->cancelled,false);atomic_store(&s->control_ready,false);atomic_store(&s->last_io_ms,(uint32_t)nd_now(NULL));bit=1;
     }else if(!strncmp(p,"NR1 TUNNEL ",11)){
         p+=11;uint32_t port=0;if(strlen(p)<34||!token(&p,nonce)||*p++!=' '||!number(&p,&port)||*p||!port||port>65535)return BRIDGE_E_FORMAT;
-        if(!busy||strcmp(nonce,s->nonce)||atomic_load(&s->cancelled)||!atomic_load(&s->control_ready))return BRIDGE_E_NOT_FOUND;
+        if(!busy||s->lockdown||strcmp(nonce,s->nonce)||atomic_load(&s->cancelled)||!atomic_load(&s->control_ready))return BRIDGE_E_NOT_FOUND;
         if(s->started&2)return BRIDGE_E_LIMIT;
         target=s->target;target.port=(uint16_t)port;bit=2;
-    }else if(!strncmp(p,"NR1 CANCEL ",11)){
+    }else if(!strncmp(p,"NR1 CANCEL ",11)||!strncmp(p,"NL1 CANCEL ",11)){
+        bool lockdown=line[1]=='L';
         p+=11;if(strlen(p)!=32||!token(&p,nonce)||*p)return BRIDGE_E_FORMAT;
-        if(!busy||strcmp(nonce,s->nonce))return BRIDGE_E_NOT_FOUND;
+        if(!busy||s->lockdown!=lockdown||strcmp(nonce,s->nonce))return BRIDGE_E_NOT_FOUND;
         nd_relay_cancel(s);memset(job,0,sizeof *job);return BRIDGE_OK;
     }else return BRIDGE_E_FORMAT;
     *job=(nd_relay_job){.session=s,.link=s->base,.target=target,.bit=bit};job->link.alive=alive;job->link.context=job;s->started|=bit;
@@ -90,9 +99,9 @@ bridge_status nd_relay_run(nd_relay_job *j,int fd,nd_relay_stats *stats) {
     int yes=1;if(setsockopt(fd,SOL_SOCKET,SO_NOSIGPIPE,&yes,sizeof yes))goto done;
 #endif
     result=nd_socket_connect(&upstream,&j->link,&j->target,nd_now(NULL)+3000);
-    if(result!=BRIDGE_OK){(void)bridge_write_exact(&io,(const uint8_t *)"NR1 ERR connect\n",16,nd_now(NULL)+500);goto done;}
+    if(result!=BRIDGE_OK){const char *reply=j->session->lockdown?"NL1 ERR connect\n":"NR1 ERR connect\n";(void)bridge_write_exact(&io,(const uint8_t *)reply,strlen(reply),nd_now(NULL)+500);goto done;}
     if(j->bit==1)atomic_store(&j->session->control_ready,true);
-    result=bridge_write_exact(&io,(const uint8_t *)"NR1 OK\n",7,nd_now(NULL)+1000);
+    result=bridge_write_exact(&io,(const uint8_t *)(j->session->lockdown?"NL1 OK\n":"NR1 OK\n"),7,nd_now(NULL)+1000);
     if(result==BRIDGE_OK)result=pump(j,fd,upstream.fd,stats);
 done:
     nd_socket_close(&upstream);nd_socket_close(&client);nd_relay_abandon(j);return result;

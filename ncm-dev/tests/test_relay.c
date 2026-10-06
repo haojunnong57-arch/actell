@@ -24,6 +24,14 @@ int main(void){
     nd_link link={.local4={127,0,0,1},.peer4={127,0,0,1},.interface_index=if_nametoindex("lo0")};assert(link.interface_index);
     const char *nonce="0123456789abcdef0123456789abcdef";char open[96],tunnel[96],cancel[96];snprintf(open,sizeof open,"NR1 OPEN 7 0 %s",nonce);snprintf(tunnel,sizeof tunnel,"NR1 TUNNEL %s %u",nonce,port);snprintf(cancel,sizeof cancel,"NR1 CANCEL %s",nonce);
     nd_relay a={0},other={0};worker control={0},data={0},isolated={0};nd_relay_job rejected={0};int c,p,d,q,o,r;pthread_t ct,dt,ot;
+    nd_relay locked={0};nd_relay_job fixed={0};
+    assert(nd_relay_prepare(&locked,&catalog,&link,"NL1 OPEN 0123456789abcdef0123456789abcdef",&fixed)==BRIDGE_OK);
+    assert(fixed.target.service==ND_LOCKDOWN && fixed.target.family==4 && fixed.target.port==62078 && !memcmp(fixed.target.address,link.peer4,4));
+    atomic_store(&locked.control_ready,true);
+    assert(nd_relay_prepare(&locked,&catalog,&link,tunnel,&rejected)==BRIDGE_E_NOT_FOUND);
+    assert(nd_relay_prepare(&locked,&catalog,&link,cancel,&rejected)==BRIDGE_E_NOT_FOUND);
+    assert(nd_relay_prepare(&locked,&catalog,&link,"NL1 CANCEL 0123456789abcdef0123456789abcdef",&rejected)==BRIDGE_OK);
+    nd_relay_abandon(&fixed);assert(!nd_relay_busy(&locked));
     assert(nd_relay_prepare(&a,&catalog,&link,tunnel,&rejected)==BRIDGE_E_NOT_FOUND);
     assert(nd_relay_prepare(&a,&catalog,&link,"NR1 OPEN 6 0 0123456789abcdef0123456789abcdef",&rejected)==BRIDGE_E_NOT_FOUND);
     start(&a,&catalog,&link,open,&control,&c,&p,&ct,server);

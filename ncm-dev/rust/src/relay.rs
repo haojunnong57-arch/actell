@@ -21,6 +21,7 @@ pub struct RelayConnector {
     tunnel_opened: AtomicBool,
     local: Ipv4Addr,
     relay: SocketAddr,
+    lockdown: bool,
 }
 impl RelayConnector {
     pub fn new(interface_index: u32, generation: u32, index: u8) -> io::Result<Self> {
@@ -36,7 +37,14 @@ impl RelayConnector {
             tunnel_opened: AtomicBool::new(false),
             local: Ipv4Addr::new(192, 168, 7, 2),
             relay: ([192, 168, 7, 1], 28767).into(),
+            lockdown: false,
         })
+    }
+    /// Fixed peer .2:62078 through NL1, independent of RP discovery/identity.
+    pub fn new_lockdown(interface_index: u32) -> io::Result<Self> {
+        let mut connector = Self::new(interface_index, 1, 0)?;
+        connector.lockdown = true;
+        Ok(connector)
     }
     #[cfg(any(test, feature = "offline-fixtures"))]
     pub(crate) fn loopback(port: u16) -> Self {
@@ -49,12 +57,13 @@ impl RelayConnector {
             tunnel_opened: AtomicBool::new(false),
             local: Ipv4Addr::LOCALHOST,
             relay: (Ipv4Addr::LOCALHOST, port).into(),
+            lockdown: false,
         }
     }
     async fn open(&self, purpose: Purpose) -> io::Result<Stream> {
         let line = match purpose {
             Purpose::PairVerify => {
-                if self.opened.swap(true, Ordering::SeqCst) {
+                if self.lockdown || self.opened.swap(true, Ordering::SeqCst) {
                     return Err(io::ErrorKind::AlreadyExists.into());
                 }
                 format!(
@@ -64,12 +73,19 @@ impl RelayConnector {
             }
             Purpose::NegotiatedTunnel { port } => {
                 if port == 0
+                    || self.lockdown
                     || !self.opened.load(Ordering::SeqCst)
                     || self.tunnel_opened.swap(true, Ordering::SeqCst)
                 {
                     return Err(io::ErrorKind::InvalidInput.into());
                 }
                 format!("NR1 TUNNEL {} {}\n", self.nonce, port)
+            }
+            Purpose::LockdownSession => {
+                if !self.lockdown || self.opened.swap(true, Ordering::SeqCst) {
+                    return Err(io::ErrorKind::InvalidInput.into());
+                }
+                format!("NL1 OPEN {}\n", self.nonce)
             }
         };
         let socket = TcpSocket::new_v4()?;
@@ -94,7 +110,13 @@ impl RelayConnector {
                     break;
                 }
             }
-            if reply != b"NR1 OK\n" {
+            if reply
+                != (if self.lockdown {
+                    b"NL1 OK\n"
+                } else {
+                    b"NR1 OK\n"
+                })
+            {
                 return Err(io::Error::from(io::ErrorKind::ConnectionRefused));
             }
             Ok::<(), io::Error>(())

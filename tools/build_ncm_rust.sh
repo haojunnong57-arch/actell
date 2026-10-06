@@ -9,4 +9,5 @@ case "${1:-device}" in
  host) target=aarch64-apple-darwin ;;
  *) echo 'usage: build_ncm_rust.sh [device|simulator|host]' >&2; exit 2 ;;
 esac
+export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}"
 bash tools/with_ncm_rust.sh cargo build --offline --locked --manifest-path ncm-dev/rust/Cargo.toml --release --target "$target"

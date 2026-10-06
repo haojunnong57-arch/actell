@@ -45,9 +45,9 @@ static void serve(void *unused) {
                     command[n++]=(char)ch;
                 }
                 command[n]=0;
-                if(complete && !strncmp(command,"NR1 ",4)) {
+                if(complete && (!strncmp(command,"NR1 ",4)||!strncmp(command,"NL1 ",4))) {
                     nd_relay_job cancellation={0};
-                    relay_worker *w=!strncmp(command,"NR1 OPEN ",9)?&workers[0]:!strncmp(command,"NR1 TUNNEL ",11)?&workers[1]:NULL;
+                    relay_worker *w=(!strncmp(command,"NR1 OPEN ",9)||!strncmp(command,"NL1 OPEN ",9))?&workers[0]:!strncmp(command,"NR1 TUNNEL ",11)?&workers[1]:NULL;
                     if(!nd_relay_busy(&relay))relay_epoch=epoch;
                     nd_link pinned=link;pinned.context=&relay_epoch;
                     bridge_status result=nd_relay_prepare(&relay,&server,&pinned,command,w?&w->job:&cancellation);
@@ -56,12 +56,15 @@ static void serve(void *unused) {
                         if(xTaskCreate(relay_task,"ncm_relay",8192,w,4,NULL)==pdPASS)socket.fd=-1;
                         else nd_relay_abandon(&w->job);
                     } else {
-                        const char *reply=result==BRIDGE_OK?"NR1 OK\n":"NR1 ERR rejected\n";
+                        bool lockdown=command[1]=='L';
+                        const char *reply=lockdown?(result==BRIDGE_OK?"NL1 OK\n":"NL1 ERR rejected\n"):(result==BRIDGE_OK?"NR1 OK\n":"NR1 ERR rejected\n");
                         (void)bridge_write_exact(&io,(const uint8_t *)reply,strlen(reply),nd_now(NULL)+500);
                     }
                 }
-                else if(complete && (strstr(command," HTTP/")!=NULL))
-                    (void)nd_http_serve(&http,&server,&link,&io,command,output,sizeof output,deadline);
+                else if(complete && (strstr(command," HTTP/")!=NULL)) {
+                    bridge_status result=nd_http_serve(&http,&server,&link,&io,command,output,sizeof output,deadline);
+                    ESP_LOGI("ncm_http","%s result=%s socketError=%d",!strncmp(command,"POST ",5)?"POST":"GET",bridge_status_name(result),socket.error);
+                }
                 else if (complete && nd_server_command(&server,&link,command,output,sizeof output)==BRIDGE_OK)
                     (void)bridge_write_exact(&io,(const uint8_t *)output,strlen(output),nd_now(NULL)+1000);
                 nd_socket_close(&socket);

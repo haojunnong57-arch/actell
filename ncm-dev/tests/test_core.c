@@ -78,6 +78,9 @@ static void browser(void) {
         memset(&m,0,sizeof m);m.n=strlen(cases[i]);memcpy(m.input,cases[i],m.n);
         assert(nd_http_serve(&http,&server,&link,&io,"GET / HTTP/1.1",body,sizeof body,nd_now(NULL)+3000)==BRIDGE_OK);
         assert(strstr((char *)m.output,i?"400 Bad Request":"200 OK"));assert(!server.generation);
+        /* Form navigation under no-referrer sends Origin:null and is rejected.
+         * Preserve same-origin form submissions without accepting null origins. */
+        assert(strstr((char *)m.output,"Referrer-Policy: same-origin\r\n"));
     }
     const char *actions[]={"STATUS","PAIR","SCREENSHOT","CHECK4"};
     for(size_t i=0;i<4;i++){
@@ -88,6 +91,8 @@ static void browser(void) {
     }
     memset(&m,0,sizeof m);const char *cross="Host: 192.168.7.1:28767\r\nOrigin: https://evil.example\r\nContent-Length: 0\r\n\r\n";m.n=strlen(cross);memcpy(m.input,cross,m.n);
     assert(nd_http_serve(&http,&server,&link,&io,"POST /probe HTTP/1.1",body,sizeof body,nd_now(NULL)+3000)==BRIDGE_OK);assert(strstr((char *)m.output,"400 Bad Request"));
+    memset(&m,0,sizeof m);const char *opaque="Host: 192.168.7.1:28767\r\nOrigin: null\r\nContent-Length: 0\r\n\r\n";m.n=strlen(opaque);memcpy(m.input,opaque,m.n);
+    assert(nd_http_serve(&http,&server,&link,&io,"POST /probe HTTP/1.1",body,sizeof body,nd_now(NULL)+3000)==BRIDGE_OK);assert(strstr((char *)m.output,"Invalid origin"));assert(!server.generation);
     puts("Browser: idle GET, same origin/host/token, no action escalation, duplicate and transfer-coding rejection passed (memory only)");
 }
 int main(void){discovery();greeting();boundaries();browser();return 0;}

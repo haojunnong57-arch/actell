@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Authenticated DisplayService negotiation and discard-only media consumer.
+//! Authenticated DisplayService video negotiation and discard-only consumer.
 //! No pixels/audio are decoded, logged, persisted, or sent outside the tunnel.
 use crate::{Cause, Error, Stage, Stream, bounded, error};
 use idevice::{
@@ -7,10 +7,10 @@ use idevice::{
     core_device::{
         DisplayServiceClient, TouchEvent, TouchPoint, UniversalHidServiceClient,
         display_stream::{
-            RtpPacket, build_start_audio_parameters, build_start_video_parameters,
+            RtpPacket, build_start_video_parameters,
             negotiation::{
-                CallInfoBlob, ScreenVideoStream, build_screen_audio_offer,
-                build_screen_video_offer, parse_screen_video_answer,
+                CallInfoBlob, ScreenVideoStream, build_screen_video_offer,
+                parse_screen_video_answer,
             },
         },
     },
@@ -24,10 +24,8 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{sync::watch, task::JoinHandle, time::Instant};
-const AUDIO_PORT: u16 = 50000;
+use tokio::task::JoinHandle;
 const VIDEO_PORT: u16 = 50001;
-const FRESHNESS: Duration = Duration::from_secs(2);
 #[derive(Default)]
 struct Drains(Vec<JoinHandle<()>>);
 impl Drop for Drains {
@@ -38,11 +36,9 @@ impl Drop for Drains {
     }
 }
 pub(crate) struct Media {
-    _audio: DisplayServiceClient<Stream>,
     _video: DisplayServiceClient<Stream>,
     hid: UniversalHidServiceClient<Stream>,
     _drains: Drains,
-    latest: watch::Receiver<Option<Instant>>,
     healthy: Arc<AtomicBool>,
 }
 impl Media {
@@ -50,12 +46,10 @@ impl Media {
         adapter: &mut AdapterHandle,
         handshake: &mut RsdHandshake,
     ) -> Result<Self, Error> {
-        let fail = || error(Stage::Media, Cause::Protocol);
+        let fail = || error(Stage::VideoAnswer, Cause::Protocol);
         let mut drains = Drains::default();
         let healthy = Arc::new(AtomicBool::new(true));
-        let (latest_tx, mut latest) = watch::channel(None);
-        let audio_udp = bounded(Stage::Media, adapter.bind_udp(0)).await?;
-        let video_udp = bounded(Stage::Media, adapter.bind_udp(0)).await?;
+        let video_udp = bounded(Stage::VideoReceiver, adapter.bind_udp(0)).await?;
         let receiver = adapter.host_ip().to_string();
         let sender = adapter.peer_ip().to_string();
         // Compatibility profile captured in Device Hub's protocol source, not
@@ -70,34 +64,6 @@ impl Media {
             audio_device_uid: None,
         };
         let session = uuid::Uuid::new_v4();
-        let offer =
-            build_screen_audio_offer(&uuid::Uuid::new_v4().to_string().to_uppercase(), &info)
-                .map_err(|_| fail())?;
-        let mut audio = bounded(
-            Stage::Media,
-            DisplayServiceClient::connect_rsd(adapter, handshake),
-        )
-        .await?;
-        bounded(
-            Stage::Media,
-            audio.start_media_stream(build_start_audio_parameters(
-                &receiver,
-                audio_udp.local_port(),
-                &sender,
-                AUDIO_PORT,
-                offer,
-                140,
-                session,
-            )),
-        )
-        .await?;
-        let audio_health = healthy.clone();
-        drains.0.push(tokio::spawn(async move {
-            while let Ok(datagram) = audio_udp.recv().await {
-                drop(datagram);
-            }
-            audio_health.store(false, Ordering::SeqCst);
-        }));
         let ssrc =
             u32::from_be_bytes(uuid::Uuid::new_v4().as_bytes()[..4].try_into().unwrap()).max(1);
         let offer = build_screen_video_offer(
@@ -106,14 +72,14 @@ impl Media {
             ssrc,
         )
         .map_err(|_| fail())?;
-        // Independent reply-bearing connection for video; retain both until close.
+        // Retain the video session until close; audio is not needed for touch.
         let mut video = bounded(
-            Stage::Media,
+            Stage::VideoService,
             DisplayServiceClient::connect_rsd(adapter, handshake),
         )
         .await?;
         let answer = bounded(
-            Stage::Media,
+            Stage::VideoNegotiation,
             video.start_media_stream(build_start_video_parameters(
                 &receiver,
                 video_udp.local_port(),
@@ -135,8 +101,7 @@ impl Media {
             loop {
                 tokio::select! {
                     packet=video_udp.recv()=>match packet {
-                        Ok(p)=>if accept_rtp(&p.data,p.source_port,negotiated,&mut sequence)
-                            && latest_tx.send(Some(Instant::now())).is_err() { break; },
+                        Ok(p)=> { let _ = accept_rtp(&p.data,p.source_port,negotiated,&mut sequence); },
                         Err(_)=>break,
                     },
                     _=feedback.tick()=> {
@@ -147,28 +112,26 @@ impl Media {
                 }
             }
             video_health.store(false, Ordering::SeqCst);
-            let _ = latest_tx.send(None);
         }));
-        bounded(Stage::Media, latest.changed()).await?;
-        if latest.borrow().is_none() || !healthy.load(Ordering::SeqCst) {
-            return Err(fail());
-        }
+        // A successful reply-bearing video session, not arrival of RTP frames,
+        // is the prerequisite used by the verified touch_session reference.
+        // Idle/static screens and receiver filtering must not block HID reports.
+        // Reference touch_session allows HID surfaces time to become authenticated.
+        tokio::time::sleep(Duration::from_millis(350)).await;
         let hid = bounded(
-            Stage::Input,
+            Stage::TouchService,
             UniversalHidServiceClient::connect_rsd(adapter, handshake),
         )
         .await?;
         Ok(Self {
-            _audio: audio,
             _video: video,
             hid,
             _drains: drains,
-            latest,
             healthy,
         })
     }
     pub async fn tap(&mut self, x: u16, y: u16) -> Result<(), Error> {
-        if !self.healthy.load(Ordering::SeqCst) || !fresh(*self.latest.borrow(), Instant::now()) {
+        if !self.healthy.load(Ordering::SeqCst) {
             return Err(error(Stage::Input, Cause::MediaInactive));
         }
         let point = TouchPoint::new(x, y);
@@ -191,9 +154,6 @@ impl Media {
         .await
         .map_err(|_| error(Stage::Input, Cause::DeliveryUncertain))
     }
-}
-fn fresh(last: Option<Instant>, now: Instant) -> bool {
-    last.is_some_and(|t| now.saturating_duration_since(t) < FRESHNESS)
 }
 fn accept_rtp(data: &[u8], port: u16, expected: ScreenVideoStream, last: &mut Option<u16>) -> bool {
     if port != VIDEO_PORT {
@@ -253,13 +213,6 @@ fn extract_answer(value: &plist::Value) -> Result<&[u8], Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn stale_media_never_opens_input() {
-        let now = Instant::now();
-        assert!(!fresh(None, now));
-        assert!(!fresh(Some(now - FRESHNESS), now));
-        assert!(fresh(Some(now), now));
-    }
     #[test]
     fn media_requires_negotiated_identity_source_and_new_sequence() {
         let expected = ScreenVideoStream {

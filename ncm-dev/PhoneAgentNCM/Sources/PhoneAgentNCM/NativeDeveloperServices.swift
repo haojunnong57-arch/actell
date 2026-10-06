@@ -26,19 +26,20 @@ public struct AuthorizedRemoteIdentity {
 public struct ExistingSessionAuthorization {
     public let verifyExistingIdentity: Bool
     public let screen: Bool
-    public let mediaIncludingAudio: Bool
+    public let screenVideoStream: Bool
     public let input: Bool
-    public init(verifyExistingIdentity: Bool, screen: Bool = false, mediaIncludingAudio: Bool = false, input: Bool = false) {
+    public init(verifyExistingIdentity: Bool, screen: Bool = false, screenVideoStream: Bool = false, input: Bool = false) {
         self.verifyExistingIdentity = verifyExistingIdentity; self.screen = screen
-        self.mediaIncludingAudio = mediaIncludingAudio; self.input = input
+        self.screenVideoStream = screenVideoStream; self.input = input
     }
-    var mask: UInt32 { (screen ? 1 : 0) | (mediaIncludingAudio ? 2 : 0) | (input ? 4 : 0) | (verifyExistingIdentity ? 8 : 0) }
+    var mask: UInt32 { (screen ? 1 : 0) | (screenVideoStream ? 2 : 0) | (input ? 4 : 0) | (verifyExistingIdentity ? 8 : 0) }
 }
 public enum NativeBackendError: Error, Equatable {
     case invalidIdentity, authorizationRequired, unsupportedABI, invalidCandidate, busy, closed, malformedEvent
     case transport(code: Int32)
     /// Numeric protocol categories only; never raw peer data or keys.
     case protocolFailure(stage: UInt32, cause: UInt32)
+    case touchPreparationFailure(stage: UInt32, cause: UInt32)
 }
 public enum InputDelivery: Sendable { case reportsWrittenVisualEffectUnverified }
 
@@ -94,7 +95,7 @@ public enum InputDelivery: Sendable { case reportsWrittenVisualEffectUnverified 
     }
     public func checkDeveloperReadiness() async throws { _ = try await operation(1) }
     public func capturePNG() async throws -> Data { try await operation(2, expectedKind: 4) }
-    /// Starts an authenticated audio/video stream; both are drained locally.
+    /// Starts an authenticated screen video stream; packets are drained locally.
     public func startTouchMedia() async throws { _ = try await operation(3) }
     public func tapDelivery(x: UInt16, y: UInt16) async throws -> InputDelivery {
         _ = try await operation(4, x: x, y: y); return .reportsWrittenVisualEffectUnverified
@@ -112,7 +113,10 @@ public enum InputDelivery: Sendable { case reportsWrittenVisualEffectUnverified 
             let (header, data) = try await receive(token, requestID: id)
             guard header.kind == expectedKind else { throw NativeBackendError.malformedEvent }
             return data
-        } catch { if handle == token { close() }; throw error }
+        } catch {
+            if case NativeBackendError.touchPreparationFailure = error { throw error }
+            if handle == token { close() }; throw error
+        }
     }
     private func receive(_ token: UInt64, requestID: UInt64) async throws -> (ncm_event, Data) {
         // Overall connect/readiness/media stages can contain multiple 15s protocol
@@ -132,6 +136,7 @@ public enum InputDelivery: Sendable { case reportsWrittenVisualEffectUnverified 
                 guard copied == 0 else { throw NativeBackendError.transport(code: copied) }
             } else if status != 0 { throw NativeBackendError.transport(code: status) }
             guard event.request_id == requestID, event.reserved == 0 else { throw NativeBackendError.malformedEvent }
+            if event.kind == 10 { throw NativeBackendError.touchPreparationFailure(stage: event.stage, cause: event.cause) }
             if event.kind == 3 { throw NativeBackendError.protocolFailure(stage: event.stage, cause: event.cause) }
             return (event, data)
         }
@@ -139,6 +144,13 @@ public enum InputDelivery: Sendable { case reportsWrittenVisualEffectUnverified 
     }
     #if NCM_OFFLINE_FIXTURES
     /// Compiled only into the separately built host test target.
+    func connectMediaFailureFixture() async throws {
+        guard !busy, handle == 0 else { throw NativeBackendError.busy }
+        var started: UInt64 = 0
+        let code = ncm_test_start_media_failure(&started)
+        guard code == 0 else { throw NativeBackendError.transport(code: code) }
+        handle = started; try await finishConnect(started)
+    }
     func connectLoopbackFixture(port: UInt16) async throws {
         guard !busy, handle == 0 else { throw NativeBackendError.busy }
         var started: UInt64 = 0; let code = ncm_test_start_loopback(port, &started)
@@ -151,5 +163,63 @@ private func withSlices<T>(_ data: [Data], _ index: Int = 0, _ slices: [ncm_byte
     if index == data.count { return body(slices) }
     return data[index].withUnsafeBytes { bytes in
         withSlices(data, index + 1, slices + [ncm_bytes(data: bytes.bindMemory(to: UInt8.self).baseAddress, size: bytes.count)], body)
+    }
+}
+
+/// Ordinary Lockdown only. Caller explicitly supplies the existing pairing plist.
+/// Kept separate from the RP identity, discovery and screenshot/media API.
+@MainActor public final class NativeLockdownSession {
+    private var handle: UInt64 = 0
+    private var ready = false
+    private var busy = false
+    public init() {}
+    deinit { if handle != 0 { ncm_backend_close(handle) } }
+    public func close() {
+        let old = handle; handle = 0; ready = false
+        if old != 0 { ncm_backend_close(old) }
+    }
+    public func connect(pairingRecord: Data, expectedUDID: String, authorized: Bool) async throws {
+        try Task.checkCancellation()
+        guard authorized else { throw NativeBackendError.authorizationRequired }
+        guard !busy, handle == 0 else { throw NativeBackendError.busy }
+        guard !pairingRecord.isEmpty, pairingRecord.count <= 1024 * 1024,
+              !expectedUDID.isEmpty, expectedUDID.utf8.count <= 256 else { throw NativeBackendError.invalidIdentity }
+        guard NativeDeveloperServices.linkedABIVersion == NCM_BACKEND_ABI else { throw NativeBackendError.unsupportedABI }
+        let row = try NCMInterfaceBinding.resolve(NCMInterfaceBinding.inventory()).row
+        var started: UInt64 = 0
+        let code = withSlices([pairingRecord, Data(expectedUDID.utf8)]) { slices in
+            ncm_lockdown_start(row.index, UInt32(NCM_ALLOW_EXISTING_VERIFY), slices[0], slices[1], &started)
+        }
+        guard code == 0, started != 0 else { throw NativeBackendError.transport(code: code) }
+        handle = started; busy = true; defer { busy = false }
+        do { try await receive(started, requestID: 0); ready = true }
+        catch { close(); throw error }
+    }
+    /// Normal cleanup sends StopSession on the same TLS channel. Cancellation or
+    /// background close instead revokes transport; it cannot confirm remote stop.
+    public func stop() async throws {
+        guard !busy else { throw NativeBackendError.busy }
+        guard ready, handle != 0 else { throw NativeBackendError.closed }
+        busy = true; defer { busy = false; close() }
+        let token = handle
+        let code = ncm_backend_submit(token, 1, 5, 0, 0)
+        guard code == 0 else { throw NativeBackendError.transport(code: code) }
+        try await receive(token, requestID: 1)
+    }
+    private func receive(_ token: UInt64, requestID: UInt64) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(40))
+        while ContinuousClock.now < deadline {
+            try Task.checkCancellation()
+            guard handle == token else { throw NativeBackendError.closed }
+            var event = ncm_event()
+            let status = ncm_backend_poll(token, &event, nil, 0)
+            if status == 4 { try await Task.sleep(for: .milliseconds(10)); continue }
+            guard status == 0 else { throw NativeBackendError.transport(code: status) }
+            guard event.request_id == requestID, event.size == 0, event.reserved == 0 else { throw NativeBackendError.malformedEvent }
+            if event.kind == 3 { throw NativeBackendError.protocolFailure(stage: event.stage, cause: event.cause) }
+            guard event.kind == 2 else { throw NativeBackendError.malformedEvent }
+            return
+        }
+        throw NCMError.timeout
     }
 }

@@ -5,10 +5,17 @@
 #include <strings.h>
 #include <stdlib.h>
 #include <inttypes.h>
+#ifdef ESP_PLATFORM
+#include "esp_log.h"
+#endif
 #define HOST "192.168.7.1:28767"
 #define ORIGIN "http://" HOST
 static bridge_status respond(bridge_io *io,int code,const char *body,uint64_t deadline) {
-    char header[512];int n=snprintf(header,sizeof header,"HTTP/1.1 %d %s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %zu\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\n",code,code==200?"OK":"Bad Request",strlen(body));
+#ifdef ESP_PLATFORM
+    /* Error bodies are fixed parser messages; never log successful HTML/token. */
+    ESP_LOGI("ncm_http","response=%d reason=%s",code,code==200?"ok":body);
+#endif
+    char header[512];int n=snprintf(header,sizeof header,"HTTP/1.1 %d %s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %zu\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: same-origin\r\nContent-Security-Policy: default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n\r\n",code,code==200?"OK":"Bad Request",strlen(body));
     if(n<0 || (size_t)n>=sizeof header)return BRIDGE_E_LIMIT;
     bridge_status s=bridge_write_exact(io,(const uint8_t *)header,(size_t)n,deadline);
     return s==BRIDGE_OK?bridge_write_exact(io,(const uint8_t *)body,strlen(body),deadline):s;

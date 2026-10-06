@@ -8,6 +8,7 @@
  * At most two streams per instance, to one pinned discovered RP target. */
 typedef struct {
     bool claimed;
+    bool lockdown;
     char nonce[33];
     nd_endpoint target;
     nd_link base;

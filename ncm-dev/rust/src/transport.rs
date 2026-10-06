@@ -17,6 +17,7 @@ pub type DialFuture<'a> = Pin<Box<dyn Future<Output = io::Result<Stream>> + Send
 pub enum Purpose {
     PairVerify,
     NegotiatedTunnel { port: u16 },
+    LockdownSession,
 }
 /// The embedding app owns a previously selected NCM target. Every call must
 /// create an S3-originated stream to that SAME target, bound to the same NCM

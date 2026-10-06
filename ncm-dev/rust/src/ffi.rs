@@ -14,7 +14,9 @@ use std::{
     },
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
+#[path = "pairing.rs"]
+mod pairing;
 const INVALID: i32 = 1;
 const BUSY: i32 = 2;
 const CLOSED: i32 = 3;
@@ -63,6 +65,11 @@ struct Event {
     data: Vec<u8>,
     credit: Option<OwnedSemaphorePermit>,
 }
+impl Drop for Event {
+    fn drop(&mut self) {
+        self.data.zeroize();
+    }
+}
 impl Event {
     fn ok(id: u64, kind: u32, data: Vec<u8>) -> Self {
         Self {
@@ -102,6 +109,8 @@ struct Receiver {
     queue: mpsc::Receiver<Event>,
 }
 struct Entry {
+    pairing: bool,
+    pairing_state: AtomicUsize,
     submit: Mutex<(u64, mpsc::Sender<Request>)>,
     receive: Mutex<Receiver>,
     cancel: watch::Sender<bool>,
@@ -183,6 +192,8 @@ fn launch(
     let (events, queue) = mpsc::channel(1);
     let (cancel, mut cancelled) = watch::channel(false);
     let entry = Arc::new(Entry {
+        pairing: false,
+        pairing_state: AtomicUsize::new(0),
         submit: Mutex::new((0, tx)),
         receive: Mutex::new(Receiver {
             pending: None,
@@ -269,6 +280,164 @@ fn launch(
     }
     Ok(id)
 }
+// Independent ordinary Lockdown worker: no RP identity, discovery or control actions.
+fn launch_lockdown(
+    connector: impl NcmConnector + 'static,
+    identity: crate::lockdown::ExistingIdentity,
+) -> Result<u64, i32> {
+    WORKERS
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            (n < 2).then_some(n + 1)
+        })
+        .map_err(|_| BUSY)?;
+    let (tx, mut rx) = mpsc::channel::<Request>(1);
+    let (events, queue) = mpsc::channel(1);
+    let (cancel, mut cancelled) = watch::channel(false);
+    let entry = Arc::new(Entry {
+        pairing: false,
+        pairing_state: AtomicUsize::new(0),
+        submit: Mutex::new((0, tx)),
+        receive: Mutex::new(Receiver {
+            pending: None,
+            queue,
+        }),
+        cancel,
+        ready: AtomicBool::new(false),
+        done: AtomicBool::new(false),
+    });
+    let id = NEXT.fetch_add(1, Ordering::SeqCst);
+    {
+        let mut entries = registry().lock().map_err(|_| INVALID)?;
+        if id == 0 || entries.len() >= 2 {
+            WORKERS.fetch_sub(1, Ordering::SeqCst);
+            return Err(BUSY);
+        }
+        entries.insert(id, entry.clone());
+    }
+    let spawn = std::thread::Builder::new()
+        .name("ncm-lockdown".into())
+        .spawn(move || {
+            struct Finished(Arc<Entry>);
+            impl Drop for Finished {
+                fn drop(&mut self) {
+                    self.0.done.store(true, Ordering::SeqCst);
+                    self.0.ready.store(false, Ordering::SeqCst);
+                    WORKERS.fetch_sub(1, Ordering::SeqCst);
+                }
+            }
+            let _finished = Finished(entry.clone());
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return;
+            };
+            runtime.block_on(async {
+                let work = async {
+                    let connected = crate::lockdown::Session::connect(&connector, &identity).await;
+                    drop(identity);
+                    let mut session = match connected {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let _ = events.send(lockdown_failure(0, e)).await;
+                            return;
+                        }
+                    };
+                    let credit = Arc::new(Semaphore::new(1));
+                    entry.ready.store(true, Ordering::SeqCst);
+                    let mut ready = Event::ok(0, 2, Vec::new());
+                    ready.credit = credit.clone().acquire_owned().await.ok();
+                    if events.send(ready).await.is_err() {
+                        return;
+                    }
+                    while let Some(request) = rx.recv().await {
+                        let permit = credit.clone().acquire_owned().await.ok();
+                        let mut reply = if request.action == 5 {
+                            session
+                                .stop()
+                                .await
+                                .map(|_| Event::ok(request.id, 2, Vec::new()))
+                                .unwrap_or_else(|e| lockdown_failure(request.id, e))
+                        } else {
+                            lockdown_failure(request.id, crate::lockdown::Failure::Closed)
+                        };
+                        reply.credit = permit;
+                        if events.send(reply).await.is_err() || request.action == 5 {
+                            return;
+                        }
+                    }
+                };
+                tokio::select! {biased;_=cancelled.changed()=>{},_=work=>{}}
+            });
+        });
+    if spawn.is_err() {
+        registry().lock().map_err(|_| INVALID)?.remove(&id);
+        WORKERS.fetch_sub(1, Ordering::SeqCst);
+        return Err(INVALID);
+    }
+    Ok(id)
+}
+fn lockdown_failure(id: u64, e: crate::lockdown::Failure) -> Event {
+    Event {
+        header: EventHeader {
+            request_id: id,
+            kind: 3,
+            stage: e as u32 + 101,
+            cause: 1,
+            ..Default::default()
+        },
+        data: Vec::new(),
+        credit: None,
+    }
+}
+/// # Safety
+/// Byte slices must be valid for this call; handle must be writable. Input is copied
+/// synchronously. No file lookup, new pairing, screenshots, media or RP fallback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ncm_lockdown_start(
+    interface_index: u32,
+    permissions: u32,
+    record: Bytes,
+    udid: Bytes,
+    handle: *mut u64,
+) -> i32 {
+    protect(|| {
+        if handle.is_null() {
+            return INVALID;
+        }
+        unsafe {
+            *handle = 0;
+        }
+        if interface_index == 0 || permissions != VERIFY {
+            return INVALID;
+        }
+        let input = match unsafe { bytes(&record, 1024 * 1024) } {
+            Ok(b) => b,
+            Err(e) => return e,
+        };
+        let udid = match unsafe { text(&udid) } {
+            Ok(t) => t,
+            Err(e) => return e,
+        };
+        let identity = match crate::lockdown::ExistingIdentity::from_plist(input, &udid) {
+            Ok(i) => i,
+            Err(_) => return INVALID,
+        };
+        let connector = match RelayConnector::new_lockdown(interface_index) {
+            Ok(c) => c,
+            Err(_) => return INVALID,
+        };
+        match launch_lockdown(connector, identity) {
+            Ok(id) => {
+                unsafe {
+                    *handle = id;
+                }
+                0
+            }
+            Err(e) => e,
+        }
+    })
+}
 async fn execute(session: &mut Session, r: Request, permissions: u32) -> Event {
     let required = match r.action {
         1 => 0,
@@ -312,7 +481,14 @@ async fn execute(session: &mut Session, r: Request, permissions: u32) -> Event {
             cause: Cause::InvalidParameters,
         }),
     };
-    result.unwrap_or_else(|e| Event::failed(r.id, e))
+    result.unwrap_or_else(|e| {
+        let mut event = Event::failed(r.id, e);
+        // Failed preparation has emitted no HID reports and retains the session.
+        if r.action == 3 {
+            event.header.kind = 10;
+        }
+        event
+    })
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn ncm_backend_abi() -> u32 {
@@ -364,12 +540,15 @@ pub unsafe extern "C" fn ncm_backend_start(
 #[unsafe(no_mangle)]
 pub extern "C" fn ncm_backend_submit(handle: u64, id: u64, action: u32, x: u16, y: u16) -> i32 {
     protect(|| {
-        if id == 0 || !(1..=4).contains(&action) {
+        if id == 0 || !(1..=5).contains(&action) {
             return INVALID;
         }
         let Some(entry) = get(handle) else {
             return CLOSED;
         };
+        if entry.pairing {
+            return INVALID;
+        }
         if entry.done.load(Ordering::SeqCst) {
             return CLOSED;
         }
@@ -472,6 +651,88 @@ fn fixture_identity() -> ExistingIdentity {
         },
     }
 }
+// Synthetic ABI ownership fixture, compiled out of every device archive.
+#[cfg(feature = "offline-fixtures")]
+/// # Safety
+/// handle must be writable; no network or credentials are accessed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ncm_test_start_media_failure(handle: *mut u64) -> i32 {
+    protect(|| {
+        if handle.is_null() {
+            return INVALID;
+        }
+        unsafe {
+            *handle = 0;
+        }
+        let (tx, mut rx) = mpsc::channel::<Request>(1);
+        let (events, queue) = mpsc::channel(1);
+        let (cancel, mut cancelled) = watch::channel(false);
+        let entry = Arc::new(Entry {
+            pairing: false,
+            pairing_state: AtomicUsize::new(0),
+            submit: Mutex::new((0, tx)),
+            receive: Mutex::new(Receiver {
+                pending: None,
+                queue,
+            }),
+            cancel,
+            ready: AtomicBool::new(true),
+            done: AtomicBool::new(false),
+        });
+        let id = NEXT.fetch_add(1, Ordering::SeqCst);
+        registry().lock().unwrap().insert(id, entry.clone());
+        let spawn = std::thread::Builder::new().spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let work = async {
+                    if events.send(Event::ok(0, 1, b"[]".to_vec())).await.is_err() {
+                        return;
+                    }
+                    while let Some(request) = rx.recv().await {
+                        let event = match request.action {
+                            3 => {
+                                let mut e = Event::failed(
+                                    request.id,
+                                    Error {
+                                        stage: Stage::VideoNegotiation,
+                                        cause: Cause::Timeout,
+                                    },
+                                );
+                                e.header.kind = 10;
+                                e
+                            }
+                            4 => Event::failed(
+                                request.id,
+                                Error {
+                                    stage: Stage::Input,
+                                    cause: Cause::DeliveryUncertain,
+                                },
+                            ),
+                            _ => Event::ok(request.id, 2, Vec::new()),
+                        };
+                        if events.send(event).await.is_err() {
+                            return;
+                        }
+                    }
+                };
+                tokio::select! { biased; _=cancelled.changed()=>{}, _=work=>{} }
+            });
+            entry.done.store(true, Ordering::SeqCst);
+        });
+        if spawn.is_err() {
+            registry().lock().unwrap().remove(&id);
+            return INVALID;
+        }
+        unsafe {
+            *handle = id;
+        }
+        0
+    })
+}
+
 #[cfg(feature = "offline-fixtures")]
 /// # Safety
 /// handle must be writable. Target is restricted to IPv4 loopback.
@@ -494,6 +755,89 @@ pub unsafe extern "C" fn ncm_test_start_loopback(port: u16, handle: *mut u64) ->
 #[cfg(test)]
 mod tests {
     static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    #[tokio::test]
+    async fn pairing_persistence_ack_requires_exact_pending_state_and_rejects_replay() {
+        let _test = TEST_LOCK.lock().await;
+        let (tx, mut rx) = mpsc::channel(1);
+        let (_, queue) = mpsc::channel(1);
+        let (cancel, _) = watch::channel(false);
+        let entry = Arc::new(Entry {
+            pairing: true,
+            pairing_state: AtomicUsize::new(1),
+            submit: Mutex::new((0, tx)),
+            receive: Mutex::new(Receiver {
+                pending: None,
+                queue,
+            }),
+            cancel,
+            ready: AtomicBool::new(true),
+            done: AtomicBool::new(false),
+        });
+        let id = NEXT.fetch_add(1, Ordering::SeqCst);
+        registry().lock().unwrap().insert(id, entry.clone());
+        assert_eq!(pairing::ncm_pairing_ack(id, 2), NOT_READY);
+        assert_eq!(pairing::ncm_pairing_ack(id, 1), 0);
+        assert_eq!(pairing::ncm_pairing_ack(id, 1), NOT_READY);
+        assert_eq!(pairing::ncm_pairing_ack(id, 2), NOT_READY);
+        let request = rx.try_recv().unwrap();
+        assert_eq!(request.id, 1);
+        assert_eq!(request.action, 6);
+        entry.pairing_state.store(2, Ordering::SeqCst);
+        assert_eq!(pairing::ncm_pairing_ack(id, 1), NOT_READY);
+        assert_eq!(pairing::ncm_pairing_ack(id, 2), 0);
+        assert_eq!(rx.try_recv().unwrap().id, 2);
+        ncm_backend_close(id);
+        assert_eq!(pairing::ncm_pairing_ack(id, 2), CLOSED);
+    }
+
+    #[tokio::test]
+    async fn explicit_pairing_listener_requires_consent_and_close_releases_port() {
+        let _test = TEST_LOCK.lock().await;
+        let mut id = 99;
+        assert_eq!(unsafe { pairing::ncm_pairing_start(0, &mut id) }, INVALID);
+        assert_eq!(id, 0);
+        assert_eq!(unsafe { pairing::ncm_pairing_start(1, &mut id) }, 0);
+        let mut header = EventHeader::default();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let code = unsafe { ncm_backend_poll(id, &mut header, std::ptr::null_mut(), 0) };
+            if code == SMALL {
+                break;
+            }
+            assert_eq!(code, EMPTY);
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(header.kind, 5);
+        let mut payload = vec![0; header.size];
+        assert_eq!(
+            unsafe { ncm_backend_poll(id, &mut header, payload.as_mut_ptr(), payload.len()) },
+            0
+        );
+        let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert!(value.get("seed").is_none());
+        assert_eq!(value["txt"]["identifier"], value["identifier"]);
+        assert_eq!(pairing::ncm_pairing_ack(id, 1), NOT_READY);
+        assert_eq!(ncm_backend_submit(id, 1, 1, 0, 0), INVALID);
+        let port = value["port"].as_u64().unwrap() as u16;
+        ncm_backend_close(id);
+        ncm_backend_close(id);
+        loop {
+            if tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+                .await
+                .is_err()
+            {
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        while WORKERS.load(Ordering::SeqCst) != 0 {
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     #[tokio::test]
@@ -503,6 +847,8 @@ mod tests {
         let (tx, _) = mpsc::channel(1);
         let (cancel, _) = watch::channel(false);
         let entry = Arc::new(Entry {
+            pairing: false,
+            pairing_state: AtomicUsize::new(0),
             submit: Mutex::new((0, tx)),
             receive: Mutex::new(Receiver {
                 pending: None,
@@ -542,6 +888,8 @@ mod tests {
         let (_send, queue) = mpsc::channel(1);
         let (cancel, _) = watch::channel(false);
         let entry = Arc::new(Entry {
+            pairing: false,
+            pairing_state: AtomicUsize::new(0),
             submit: Mutex::new((0, tx)),
             receive: Mutex::new(Receiver {
                 pending: None,
@@ -569,6 +917,8 @@ mod tests {
             let (events, queue) = mpsc::channel(1);
             let (cancel, _) = watch::channel(false);
             let entry = Arc::new(Entry {
+                pairing: false,
+                pairing_state: AtomicUsize::new(0),
                 submit: Mutex::new((0, tx)),
                 receive: Mutex::new(Receiver {
                     pending: None,
@@ -652,5 +1002,64 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(ncm_backend_submit(id, 1, 2, 0, 0), CLOSED);
+    }
+    #[tokio::test]
+    async fn ordinary_lockdown_worker_ready_only_after_tls_and_stops_cleanly() {
+        let _test = TEST_LOCK.lock().await;
+        use crate::lockdown::tests as peer;
+        struct Connector(Mutex<Option<tokio::io::DuplexStream>>);
+        impl NcmConnector for Connector {
+            fn connect(&self, purpose: crate::Purpose) -> crate::DialFuture<'_> {
+                assert_eq!(purpose, crate::Purpose::LockdownSession);
+                Box::pin(async move {
+                    Ok(Box::new(self.0.lock().unwrap().take().unwrap()) as crate::Stream)
+                })
+            }
+        }
+        let (stream, mut device) = tokio::io::duplex(4096);
+        let id = launch_lockdown(Connector(Mutex::new(Some(stream))), peer::identity()).unwrap();
+        let request = peer::read(&mut device).await;
+        assert_eq!(
+            request.get("Request").and_then(plist::Value::as_string),
+            Some("StartSession")
+        );
+        let mut event = EventHeader::default();
+        assert_eq!(
+            unsafe { ncm_backend_poll(id, &mut event, std::ptr::null_mut(), 0) },
+            EMPTY
+        );
+        peer::write(&mut device, peer::start_reply()).await;
+        let mut tls = peer::acceptor(false).accept(device).await.unwrap();
+        async fn poll(id: u64) -> EventHeader {
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    let mut e = EventHeader::default();
+                    let status = unsafe { ncm_backend_poll(id, &mut e, std::ptr::null_mut(), 0) };
+                    if status == 0 {
+                        return e;
+                    }
+                    assert_eq!(status, EMPTY);
+                    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                }
+            })
+            .await
+            .unwrap()
+        }
+        let ready = poll(id).await;
+        assert_eq!(ready.kind, 2);
+        assert_eq!(ready.request_id, 0);
+        assert_eq!(ncm_backend_submit(id, 1, 5, 0, 0), 0);
+        let stop = peer::read(&mut tls).await;
+        assert_eq!(
+            stop.get("Request").and_then(plist::Value::as_string),
+            Some("StopSession")
+        );
+        let mut response = plist::Dictionary::new();
+        response.insert("Request".into(), "StopSession".into());
+        peer::write(&mut tls, response).await;
+        let stopped = poll(id).await;
+        assert_eq!(stopped.kind, 2);
+        assert_eq!(stopped.request_id, 1);
+        ncm_backend_close(id);
     }
 }

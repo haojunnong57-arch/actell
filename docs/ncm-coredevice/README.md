@@ -1,5 +1,9 @@
 # NCM 开发者服务路线：独立诊断与真实协议后端
 
+2026-10-06 系统配对开发：新增 App 系统确认/PIN、自动保存经过验证的 RemotePairing 身份、持续后台配对和经 S3 的认证/截图/点击入口。手工 Lockdown 导入移至高级诊断。详见 [PAIRING.md](PAIRING.md)；真实端到端控制仍待硬件验证。
+
+2026-10-06 更新：真机 Safari 诊断与 S3→iPhone Lockdown QueryType 已由用户回报成功。新增普通 Lockdown 的独立 NL1、StartSession/TLS、C ABI/Swift 和记录导入测试入口；离线验证及构建通过，尚未取得真实身份认证结果。详见 [LOCKDOWN.md](LOCKDOWN.md)。下文为此前三轮实现及验证记录。
+
 这是一条独立的 **USB 仅 NCM → iPhone 开发者服务** 路线。目前可构建并离线验证的是 NCM-only 固件、手机诊断 App、浏览器探针，以及实现 PairVerify/TLS-PSK/RSD/截图/媒体与触控调用的 Rust 后端库；**尚未证明 NCM 准入，后端已通过 S3 relay/Swift ABI 接到独立 App，未取得真实截图或输入成功证据**。
 
 - worktree：`/Users/developer/Developer/AI/ios-use/ncm-coredevice`
