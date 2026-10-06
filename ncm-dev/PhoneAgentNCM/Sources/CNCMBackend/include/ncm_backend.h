@@ -51,6 +51,8 @@ int32_t ncm_lockdown_start(uint32_t interface_index,uint32_t permissions,ncm_byt
 /* Actions: 1 read-only developer/DDI check, 2 capture PNG, 3 start media drain,
  * 4 tap normalized x/y. Every accepted request id must increase; no replay.
  * Touch media uses screen video only; no audio session is requested. Caller obtains consent. */
+// Drag uses normalized coordinates, 100–2000 ms; uncertain delivery is never replayed.
+int32_t ncm_backend_drag(uint64_t handle,uint64_t request_id,uint16_t x,uint16_t y,uint16_t end_x,uint16_t end_y,uint16_t duration_ms);
 int32_t ncm_backend_submit(uint64_t handle,uint64_t request_id,uint32_t action,uint16_t x,uint16_t y);
 int32_t ncm_backend_poll(uint64_t handle,ncm_event *,uint8_t *buffer,size_t capacity);
 /* Idempotent. Immediately revokes handle and requests worker cancellation. Does

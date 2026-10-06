@@ -38,7 +38,7 @@ struct ConversationView: View {
                                 if presentation.awaitingTaskConfirmation {
                                     VStack(alignment: .leading, spacing: 12) {
                                         Label("Siri · 待确认", systemImage: "waveform").font(.headline)
-                                        Text("任务已保存，尚未开始。请核对或编辑下方识别文本，再点“确认开始”。确认后会发送给当前模型，并授权 USB 执行本次任务内的普通点击和拖动。")
+                                        Text("任务已保存，尚未开始。请核对或编辑下方识别文本，再点“确认开始”。确认后会发送给当前模型，并授权 ESP32 执行本次任务内的普通点击和拖动。")
                                             .foregroundStyle(.secondary)
                                         Text(session.draft).textSelection(.enabled).accessibilityIdentifier("siriRecognizedTask")
                                         Button("取消这份草稿", role: .cancel) {
@@ -129,7 +129,7 @@ struct ConversationView: View {
             }
             if let warning = presentation.warning { Text(warning).font(.caption).foregroundStyle(.orange) }
             if session?.mode == .live && !running {
-                Text("发送即开始任务，并授权 USB 自动执行任务内的普通点击和拖动；你可随时停止。")
+                Text("发送即开始任务，并授权 ESP32 自动执行任务内的普通点击和拖动；你可随时停止。")
                     .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("taskInputAuthorizationHelp")
             }
             HStack(alignment: .bottom, spacing: 12) {

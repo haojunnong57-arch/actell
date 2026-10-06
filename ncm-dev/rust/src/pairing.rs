@@ -210,6 +210,9 @@ pub extern "C" fn ncm_pairing_ack(handle: u64, state: u32) -> i32 {
             action: 6,
             x: 0,
             y: 0,
+            end_x: 0,
+            end_y: 0,
+            duration: 0,
         }) {
             Ok(()) => {
                 submit.0 = u64::from(state);

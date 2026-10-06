@@ -130,6 +130,56 @@ impl Media {
             healthy,
         })
     }
+    pub async fn drag(
+        &mut self,
+        x: u16,
+        y: u16,
+        end_x: u16,
+        end_y: u16,
+        duration: u16,
+    ) -> Result<(), Error> {
+        if !(100..=2000).contains(&duration) {
+            return Err(error(Stage::Input, Cause::InvalidParameters));
+        }
+        if !self.healthy.load(Ordering::SeqCst) {
+            return Err(error(Stage::Input, Cause::MediaInactive));
+        }
+        let uncertain = || error(Stage::Input, Cause::DeliveryUncertain);
+        bounded(
+            Stage::Input,
+            self.hid
+                .send_touch(TouchEvent::Down(TouchPoint::new(x, y)), None),
+        )
+        .await
+        .map_err(|_| uncertain())?;
+        let start = tokio::time::Instant::now();
+        let steps = u32::from(duration).div_ceil(20);
+        for i in 1..=steps {
+            tokio::time::sleep_until(
+                start
+                    + Duration::from_millis(u64::from(duration) * u64::from(i) / u64::from(steps)),
+            )
+            .await;
+            let interpolate = |a: u16, b: u16| {
+                (i64::from(a) + (i64::from(b) - i64::from(a)) * i64::from(i) / i64::from(steps))
+                    as u16
+            };
+            let point = TouchPoint::new(interpolate(x, end_x), interpolate(y, end_y));
+            bounded(
+                Stage::Input,
+                self.hid.send_touch(TouchEvent::Move(point), None),
+            )
+            .await
+            .map_err(|_| uncertain())?;
+        }
+        bounded(
+            Stage::Input,
+            self.hid
+                .send_touch(TouchEvent::Up(TouchPoint::new(end_x, end_y)), None),
+        )
+        .await
+        .map_err(|_| uncertain())
+    }
     pub async fn tap(&mut self, x: u16, y: u16) -> Result<(), Error> {
         if !self.healthy.load(Ordering::SeqCst) {
             return Err(error(Stage::Input, Cause::MediaInactive));

@@ -7,15 +7,8 @@ import SwiftUI
 }
 struct NCMProbeView: View {
     @Environment(\.scenePhase) private var phase
-    @State private var showingTouchTest = false
     var body: some View {
-        NavigationStack {
-            List { PairingSection { showingTouchTest = true } }
-                .navigationTitle("S3 控制")
-        }
-        .fullScreenCover(isPresented: $showingTouchTest) {
-            TouchVerificationView(flow: PairingFlow.shared)
-        }
+        NavigationStack { ESP32ControlSettingsView() }
         .task { PairingFlow.shared.resume() }
         .onChange(of: phase) { _, value in
             if value == .background { PairingFlow.shared.background() }

@@ -45,6 +45,6 @@ assert 'guard await approve' in tools and 'image = nil' in tools
 assert 'requiresConfirmationEvenWhenAutonomous' not in tools # app-owned gate cannot be waived
 background_plist = plistlib.loads((ROOT / 'PhoneAgent/Info.plist').read_bytes())
 assert background_plist['UIBackgroundModes'] == ['screen-capture', 'processing']
-assert background_plist['BGTaskSchedulerPermittedIdentifiers'] == ['$(PRODUCT_BUNDLE_IDENTIFIER).backgroundRun.*']
+assert background_plist['BGTaskSchedulerPermittedIdentifiers'] == ['$(PRODUCT_BUNDLE_IDENTIFIER).backgroundRun.*', '$(PRODUCT_BUNDLE_IDENTIFIER).pairing']
 print(f'PASS: {len(files)} Swift files parsed; project/plist/pins and source guardrail assertions checked')
 print('This script does not perform Swift type-check, dependency resolution, Xcode, XCTest, Simulator, or device/TLS tests.')

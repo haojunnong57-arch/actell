@@ -1,4 +1,8 @@
-# PhoneAgent USB Device 固件（实验）
+# PhoneAgent USB Device 固件
+
+2026-10-06：主固件已接入经过独立 App 验证的开发者服务转发。一次 USB 网络初始化同时提供 `28766` 的原 PA3 服务和 `28767` 的 ND1/NR1/NL1 服务。新链路由主 App“设置 → S3 控制”发起，S3 只负责外向连接与有界转发，身份、认证、截图协议和触控协议由 App 处理。NCM-only 也可以通过开发者服务执行截图和点击；下文“NCM-only 拒绝 tap/drag”仅指 PA3 协议命令。
+
+构建继续使用 `tools/build_usb_device.sh ncm` / `hid`。主网络接口增加 IPv6 link-local 和 IGMP/MLD，用于同链路发现；不设置默认路由。转发服务源码位于 `main/developer_service.c`，复用 `ncm-dev/core` 协议模块；独立诊断固件也引用同一份服务实现。整合后构建与验证状态见 [主工程整合](../docs/ncm-coredevice/MAIN-INTEGRATION.md)。
 
 入口是 `main/main.c`，ESP32-S3 原生 USB Device。默认仅 NCM；HID 需要独立构建。当前源码使用 **PA3 免 PSK、跨任务复用 TCP**，无需设备或 App 密钥配置。App 与固件需要一起更新，不兼容 PA1/PA2。两种固件已本机构建；PA3 NCM+HID 已完成 COM 烧录、三段摘要校验和启动检查，iPhone 常连/HID 仍待验收，见 [PA3 升级说明](../docs/usb-device/PERSISTENT-USB.md)。以下为历史设备记录：2026-10-04 19:34 已通过 COM 烧录 PA2 NCM-only；用户随后确认 iPhone PA2 双向 PING、最新版 App 本机截图预览正常。23:03 经用户明确批准烧录已修复 STOP 竞争的 NCM+HID 候选，三段设备摘要、UART 启动检查通过，真实 HID 输入仍待验证，见 [HID 烧录与联调](../docs/usb-device/HID-BRINGUP.md)。历史记录见[首次实机记录](../docs/usb-device/NCM-BRINGUP.md)及[免 PSK 验证与烧录记录](../docs/usb-device/NO-PSK.md)。
 

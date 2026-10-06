@@ -55,6 +55,17 @@ final class NativeBackendTests: XCTestCase {
         catch { XCTAssertEqual(error as? NativeBackendError, .closed) }
         client.close()
     }
+    @MainActor func testDragCrossesNativeABIAndUncertainDeliveryClosesSession() async throws {
+        let client = NativeDeveloperServices()
+        try await client.connectMediaFailureFixture()
+        do { _ = try await client.dragDelivery(fromX: 0, fromY: 65535, toX: 65535, toY: 0, durationMS: 99); XCTFail("invalid duration") }
+        catch { XCTAssertEqual(error as? NativeBackendError, .malformedEvent) }
+        try await client.checkDeveloperReadiness()
+        do { _ = try await client.dragDelivery(fromX: 0, fromY: 65535, toX: 65535, toY: 0, durationMS: 1000); XCTFail("uncertain drag") }
+        catch { XCTAssertEqual(error as? NativeBackendError, .protocolFailure(stage: 11, cause: 7)) }
+        do { _ = try await client.listServices(); XCTFail("uncertain drag must close") }
+        catch { XCTAssertEqual(error as? NativeBackendError, .closed) }
+    }
     private final class Fixture {
         let process = Process()
         let output = Pipe()

@@ -1,4 +1,6 @@
-# NCM 开发者服务路线：独立诊断与真实协议后端
+# NCM 开发者服务路线
+
+当前主工程入口为 `ios-app` 的“设置 → S3 控制”和 `firmware-device`。协议库保留复用，独立 Probe/固件用于诊断。用户已在独立 App 中确认收到真实截图、经 S3 点击后计数增加；主工程整合的验证单独记录于 [MAIN-INTEGRATION.md](MAIN-INTEGRATION.md)。下方独立探索描述是历史阶段记录。
 
 2026-10-06 系统配对开发：新增 App 系统确认/PIN、自动保存经过验证的 RemotePairing 身份、持续后台配对和经 S3 的认证/截图/点击入口。手工 Lockdown 导入移至高级诊断。详见 [PAIRING.md](PAIRING.md)；真实端到端控制仍待硬件验证。
 

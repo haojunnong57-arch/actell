@@ -103,6 +103,9 @@ struct Request {
     action: u32,
     x: u16,
     y: u16,
+    end_x: u16,
+    end_y: u16,
+    duration: u16,
 }
 struct Receiver {
     pending: Option<Event>,
@@ -443,7 +446,7 @@ async fn execute(session: &mut Session, r: Request, permissions: u32) -> Event {
         1 => 0,
         2 => SCREEN,
         3 => MEDIA,
-        4 => INPUT,
+        4 | 6 => INPUT,
         _ => u32::MAX,
     };
     if permissions & required != required {
@@ -474,6 +477,10 @@ async fn execute(session: &mut Session, r: Request, permissions: u32) -> Event {
             .map(|_| Event::ok(r.id, 2, Vec::new())),
         4 => session
             .tap(r.x, r.y)
+            .await
+            .map(|_| Event::ok(r.id, 2, Vec::new())),
+        6 => session
+            .drag(r.x, r.y, r.end_x, r.end_y, r.duration)
             .await
             .map(|_| Event::ok(r.id, 2, Vec::new())),
         _ => Err(Error {
@@ -539,8 +546,52 @@ pub unsafe extern "C" fn ncm_backend_start(
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn ncm_backend_submit(handle: u64, id: u64, action: u32, x: u16, y: u16) -> i32 {
+    if !(1..=5).contains(&action) {
+        return INVALID;
+    }
+    submit_request(
+        handle,
+        Request {
+            id,
+            action,
+            x,
+            y,
+            end_x: 0,
+            end_y: 0,
+            duration: 0,
+        },
+    )
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn ncm_backend_drag(
+    handle: u64,
+    id: u64,
+    x: u16,
+    y: u16,
+    end_x: u16,
+    end_y: u16,
+    duration: u16,
+) -> i32 {
+    if !(100..=2000).contains(&duration) {
+        return INVALID;
+    }
+    submit_request(
+        handle,
+        Request {
+            id,
+            action: 6,
+            x,
+            y,
+            end_x,
+            end_y,
+            duration,
+        },
+    )
+}
+fn submit_request(handle: u64, request: Request) -> i32 {
+    let id = request.id;
     protect(|| {
-        if id == 0 || !(1..=5).contains(&action) {
+        if id == 0 {
             return INVALID;
         }
         let Some(entry) = get(handle) else {
@@ -561,7 +612,7 @@ pub extern "C" fn ncm_backend_submit(handle: u64, id: u64, action: u32, x: u16, 
         if id <= submit.0 {
             return INVALID;
         }
-        match submit.1.try_send(Request { id, action, x, y }) {
+        match submit.1.try_send(request) {
             Ok(()) => {
                 submit.0 = id;
                 0
@@ -704,7 +755,7 @@ pub unsafe extern "C" fn ncm_test_start_media_failure(handle: *mut u64) -> i32 {
                                 e.header.kind = 10;
                                 e
                             }
-                            4 => Event::failed(
+                            4 | 6 => Event::failed(
                                 request.id,
                                 Error {
                                     stage: Stage::Input,
@@ -901,11 +952,21 @@ mod tests {
         });
         let id = NEXT.fetch_add(1, Ordering::SeqCst);
         registry().lock().unwrap().insert(id, entry);
-        assert_eq!(ncm_backend_submit(id, 1, 2, 0, 0), 0);
-        assert_eq!(ncm_backend_submit(id, 1, 2, 0, 0), INVALID);
-        assert_eq!(ncm_backend_submit(id, 2, 2, 0, 0), BUSY);
-        assert_eq!(rx.try_recv().unwrap().id, 1);
+        // Invalid drag must not consume the monotonic request ID or queue slot.
+        assert_eq!(ncm_backend_drag(id, 1, 0, 0, 65535, 65535, 99), INVALID);
+        assert_eq!(ncm_backend_drag(id, 1, 0, 0, 65535, 65535, 2001), INVALID);
+        assert_eq!(ncm_backend_drag(id, 1, 0, 0, 65535, 65535, 100), 0);
+        let drag = rx.try_recv().unwrap();
+        assert_eq!(
+            (drag.action, drag.end_x, drag.end_y, drag.duration),
+            (6, 65535, 65535, 100)
+        );
         assert_eq!(ncm_backend_submit(id, 2, 2, 0, 0), 0);
+        assert_eq!(ncm_backend_drag(id, 2, 0, 0, 1, 1, 100), INVALID);
+        assert_eq!(ncm_backend_submit(id, 2, 2, 0, 0), INVALID);
+        assert_eq!(ncm_backend_submit(id, 3, 2, 0, 0), BUSY);
+        assert_eq!(rx.try_recv().unwrap().id, 2);
+        assert_eq!(ncm_backend_submit(id, 3, 2, 0, 0), 0);
         ncm_backend_close(id);
     }
     #[tokio::test]

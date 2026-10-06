@@ -3,6 +3,8 @@ import SwiftUI
 import BackgroundTasks
 import Observation
 
+enum NCMControlError: Error { case unavailable(String), stopped }
+
 @MainActor @Observable final class PairingFlow: NSObject, @preconcurrency NetServiceDelegate {
     static let shared = PairingFlow()
     static let taskID = (Bundle.main.bundleIdentifier ?? "com.ja1chen.PhoneAgent.NCMProbe") + ".pairing"
@@ -12,6 +14,9 @@ import Observation
     private let store = RemotePairRecordStore(url: URL.applicationSupportDirectory.appending(path: "RemotePairing/identity.plist"))
     private var service: NetService?
     private var generation = UUID()
+    private(set) var controlSessionID = UUID()
+    private var agentOwner: UUID?
+    var agentReserved: Bool { agentOwner != nil }
     private var registeredBackgroundTask = false
     private var mediaStarted = false
     private var job: Task<Void, Never>?
@@ -19,6 +24,7 @@ import Observation
     private var heartbeatEpoch = UUID()
     private var maintenanceBusy = false
     private var backgroundTask: BGTask?
+    private(set) var capturing = false
     var running = false
     var pairingActive = false
     var lastFailure: String?
@@ -29,13 +35,13 @@ import Observation
     var image: UIImage?
     var statusText: String {
         if pairingActive { return message }
-        if running { return ready ? "正在处理操作" : "正在连接 S3" }
+        if running { return ready ? "正在处理操作" : "正在连接 ESP32" }
         if ready {
             if lastFailure != nil { return "点击准备失败，截图仍可用" }
             return image == nil ? "截图与点击可用" : "截图已收到"
         }
-        if hasRecord { return lastFailure == nil ? "已配对，可连接 S3" : "连接未成功，请重新连接" }
-        return "先完成一次系统配对"
+        if hasRecord { return lastFailure == nil ? "已配对，可连接 ESP32" : "连接未成功，请重新连接" }
+        return message
     }
     override init() { super.init(); hasRecord = store.exists }
 
@@ -53,7 +59,7 @@ import Observation
     func startPairing() {
         guard !running else { return }
         hasRecord = store.exists
-        guard !hasRecord else { message = "身份已保留，直接验证 S3 连接；无需重新配对"; return }
+        guard !hasRecord else { message = "身份已保留，直接验证 ESP32 连接；无需重新配对"; return }
         guard registeredBackgroundTask else { message = "系统配对后台任务未注册，请重新打开 App"; return }
         guard #available(iOS 26.0, *) else { message = "系统交互配对需要 iOS 26 或更新版本的持续后台任务"; return }
         generation = UUID(); running = true; pairingActive = true; message = "正在申请配对后台任务，请等待入口就绪"
@@ -89,7 +95,7 @@ import Observation
                         self.message = "正在发布系统配对入口"
                     case .code(let value): self.pin = value; self.message = "在系统配对页面输入此 PIN"; continued.progress.completedUnitCount = 2
                     case .persisted(let committed): self.message = committed ? "身份已保存，正在确认配对完成" : "已验证手机身份，正在保存配对"; continued.progress.completedUnitCount = 3
-                    case .completed: self.message = "配对成功。回到 App，点击验证 S3 连接"; continued.progress.completedUnitCount = 4
+                    case .completed: self.message = "配对成功。回到 App，点击验证 ESP32 连接"; continued.progress.completedUnitCount = 4
                     }
                 })
                 success = true
@@ -112,18 +118,18 @@ import Observation
     }
     func cancel() {
         stopHeartbeat()
-        generation = UUID()
+        generation = UUID(); controlSessionID = UUID(); agentOwner = nil
         job?.cancel(); pairing.close(); service?.stop(); service = nil
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.taskID)
         if pairingActive { finishPairing(success: false) }
-        backend.close(); client.cancel(); ready = false; mediaStarted = false; image = nil; running = false; job = nil
+        backend.close(); client.cancel(); ready = false; mediaStarted = false; image = nil; running = false; capturing = false; job = nil
         message = "已停止；已保存的身份会保留"
     }
     func background() {
         // The continued task intentionally keeps pairing alive while Settings is open.
         if !pairingActive {
             cancel()
-            message = "App 已进入后台，控制会话已关闭；配对身份保留。回到前台可重新验证 S3 连接"
+            message = "App 已进入后台，控制会话已关闭；配对身份保留。回到前台可重新验证 ESP32 连接"
         }
     }
     func resume() {
@@ -131,10 +137,10 @@ import Observation
         if hasRecord, !pairingActive, !running, !ready { verify() }
     }
     func verify() {
-        guard !running, store.exists else { return }
+        guard !running, agentOwner == nil, store.exists else { return }
         let previousMaintenance = heartbeatTask
         stopHeartbeat()
-        generation = UUID(); let epoch = generation
+        generation = UUID(); controlSessionID = UUID(); let epoch = generation
         running = true; ready = false; mediaStarted = false; image = nil; lastFailure = nil; backend.close()
         job = Task { @MainActor in
             defer { if generation == epoch { running = false; job = nil } }
@@ -143,7 +149,7 @@ import Observation
                 try Task.checkCancellation()
                 guard generation == epoch else { return }
                 var identity = try store.load().identity(); defer { identity.clearSeed() }
-                message = "正在从 S3 发现手机 RemotePairing 服务"
+                message = "正在从 ESP32 发现手机 RemotePairing 服务"
                 var discovery = try await client.request(.discoverIPv4)
                 if discovery.endpoints?.contains(where: { $0.service == "remotepairing" }) != true {
                     discovery = try await client.request(.discoverIPv6)
@@ -151,17 +157,17 @@ import Observation
                 try Task.checkCancellation()
                 guard generation == epoch else { return }
                 guard let endpoint = discovery.endpoints?.first(where: { $0.service == "remotepairing" }) else {
-                    message = "S3 未发现手机 RemotePairing 服务。配对身份已保留，下一步需要定位 NCM 服务发现问题"; return
+                    message = "ESP32 未发现手机 RemotePairing 服务。配对身份已保留，下一步需要定位 NCM 服务发现问题"; return
                 }
-                message = "正在经 S3 验证身份并建立开发者隧道"
+                message = "正在经 ESP32 验证身份并建立开发者隧道"
                 try await backend.connect(identity: identity, authorization: ExistingSessionAuthorization(verifyExistingIdentity: true, screen: true, screenVideoStream: true, input: true), discovery: discovery, endpoint: endpoint)
                 try await backend.checkDeveloperReadiness()
                 try Task.checkCancellation(); guard generation == epoch else { return }
-                ready = true; startHeartbeat(); message = "S3 认证、开发者隧道和服务检查成功，可测试截图与输入"
+                ready = true; startHeartbeat(); message = "ESP32 认证、开发者隧道和服务检查成功，可测试截图与输入"
             } catch { guard generation == epoch else { return }; backend.close(); message = failure(error); lastFailure = message }
         }
     }
-    func capture() { operation {
+    func capture() { operation(capturing: true) {
         let png = try await self.backend.capturePNG()
         try Task.checkCancellation()
         guard let image = UIImage(data: png) else { throw NativeBackendError.malformedEvent }
@@ -177,12 +183,12 @@ import Observation
         try Task.checkCancellation()
         self.message = "已发送屏幕中心点击，请观察手机确认实际效果"
     } }
-    private func operation(_ action: @escaping @MainActor () async throws -> Void) {
-        guard ready, !running else { return }
+    private func operation(capturing: Bool = false, _ action: @escaping @MainActor () async throws -> Void) {
+        guard ready, !running, agentOwner == nil else { return }
         generation = UUID(); let epoch = generation
-        running = true
+        running = true; self.capturing = capturing
         job = Task { @MainActor in
-            defer { if generation == epoch { running = false; job = nil } }
+            defer { if generation == epoch { running = false; self.capturing = false; job = nil } }
             do {
                 // User requests queue behind an in-flight keepalive; the UI only
                 // becomes busy after a user operation, never for maintenance.
@@ -203,15 +209,62 @@ import Observation
                     lastFailure = message
                 } else {
                     stopHeartbeat(); ready = false; mediaStarted = false; backend.close()
-                    message = failure(error) + "；请重新连接 S3"; lastFailure = message
+                    message = failure(error) + "；请重新连接 ESP32"; lastFailure = message
                 }
             }
         }
     }
+    /// A task pins one authenticated session. Reconnect never silently substitutes
+    /// another generation; diagnostics and task traffic share the operation gate.
+    func agentOperation<T>(owner: UUID, session: UUID, action: (NativeDeveloperServices) async throws -> T) async throws -> T {
+        guard ready, controlSessionID == session else { throw NCMControlError.unavailable("ESP32 控制未连接，请在设置 → USB 连接 → ESP32 控制中连接") }
+        guard !running, agentOwner == nil || agentOwner == owner else { throw NCMControlError.unavailable("ESP32 控制正忙，请等待当前操作完成") }
+        agentOwner = owner
+        running = true
+        defer { if controlSessionID == session { running = false } }
+        do {
+            while maintenanceBusy {
+                try await Task.sleep(for: .milliseconds(10))
+                guard ready, controlSessionID == session, agentOwner == owner else { throw NCMControlError.stopped }
+            }
+            try Task.checkCancellation()
+            guard ready, controlSessionID == session, agentOwner == owner else { throw NCMControlError.stopped }
+            let value = try await action(backend)
+            try Task.checkCancellation()
+            guard ready, controlSessionID == session, agentOwner == owner else { throw NCMControlError.stopped }
+            return value
+        } catch {
+            guard controlSessionID == session else { throw NCMControlError.stopped }
+            if case NativeBackendError.touchPreparationFailure = error {
+                mediaStarted = false; message = failure(error) + "。本次未发送输入，截图连接保留"; lastFailure = message
+                throw NCMControlError.unavailable(message)
+            }
+            if error is CancellationError || (error as? NCMControlError) != nil {
+                cancel(); throw NCMControlError.stopped
+            }
+            message = failure(error) + "；请重新连接 ESP32"; lastFailure = message
+            stopHeartbeat(); ready = false; mediaStarted = false; backend.close()
+            controlSessionID = UUID(); agentOwner = nil; running = false
+            throw NCMControlError.unavailable(message)
+        }
+    }
+    func prepareAgentInput(_ services: NativeDeveloperServices) async throws {
+        if !mediaStarted {
+            try await services.startTouchMedia()
+            try Task.checkCancellation()
+            mediaStarted = true
+        }
+    }
+    func releaseAgent(owner: UUID, session: UUID) {
+        guard agentOwner == owner, controlSessionID == session else { return }
+        // Cancellation during an operation revokes transport; normal completion
+        // only releases ownership, retaining the foreground control connection.
+        if running { cancel() } else { agentOwner = nil }
+    }
     private func stopHeartbeat() {
         heartbeatEpoch = UUID(); heartbeatTask?.cancel(); heartbeatTask = nil; maintenanceBusy = false
     }
-    /// Read-only service traffic keeps the S3's 60-second relay idle lease alive.
+    /// Read-only service traffic keeps the ESP32's 60-second relay idle lease alive.
     /// Shares the operation gate; never overlaps a screenshot or touch request.
     private func startHeartbeat() {
         stopHeartbeat(); let epoch = heartbeatEpoch
@@ -228,8 +281,8 @@ import Observation
                 } catch {
                     guard self.heartbeatEpoch == epoch else { return }
                     self.maintenanceBusy = false; self.ready = false; self.mediaStarted = false
-                    self.backend.close()
-                    self.message = "前台连接保活失败：" + self.failure(error) + "；请重新连接 S3"
+                    self.backend.close(); self.controlSessionID = UUID(); self.agentOwner = nil
+                    self.message = "前台连接保活失败：" + self.failure(error) + "；请重新连接 ESP32"
                     self.lastFailure = self.message
                     return
                 }
@@ -243,50 +296,73 @@ import Observation
             return "触控准备失败：\(labels[stage] ?? "视频准备")，\(reasons[cause] ?? "原因 \(cause)")"
         }
         if case NativeBackendError.protocolFailure(let stage, let cause) = error {
-            let labels: [UInt32: String] = [1:"配对身份", 2:"S3 转发连接", 3:"手机身份认证", 4:"动态隧道入口", 5:"隧道 TLS", 6:"远程服务列表", 7:"开发者模式", 8:"开发者镜像", 9:"截图", 10:"屏幕视频会话", 11:"点击发送", 12:"会话关闭"]
+            let labels: [UInt32: String] = [1:"配对身份", 2:"ESP32 转发连接", 3:"手机身份认证", 4:"动态隧道入口", 5:"隧道 TLS", 6:"远程服务列表", 7:"开发者模式", 8:"开发者镜像", 9:"截图", 10:"屏幕视频会话", 11:"点击发送", 12:"会话关闭"]
             return "\(labels[stage] ?? "协议")失败（原因 \(cause)）；身份已保留"
         }
         if error is CancellationError { return "已停止，身份已保留" }
-        return "连接失败，请检查 S3 固件、NCM 接口和本地网络权限；身份已保留"
+        return "连接失败，请检查 ESP32 固件、NCM 接口和本地网络权限；身份已保留"
     }
 }
 
 struct PairingSection: View {
     @State private var flow = PairingFlow.shared
     let showTouchTest: () -> Void
+    private var stateText: String {
+        if flow.pairingActive { return "配对中" }
+        if flow.ready { return "已连接" }
+        if flow.running { return "连接中" }
+        return flow.hasRecord ? "未连接" : "未配对"
+    }
+    private var showsDetail: Bool {
+        (flow.running && !flow.ready) || flow.lastFailure != nil ||
+        (!flow.hasRecord && flow.message != "先开始系统配对；已有身份会自动保留")
+    }
     var body: some View {
         Section {
-            HStack {
-                Label(flow.ready ? "已连接" : flow.running ? "处理中" : "未连接",
-                      systemImage: flow.ready ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(flow.ready ? .green : .secondary)
-                Spacer()
-                if flow.hasRecord { Text("已配对").foregroundStyle(.secondary) }
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text(stateText).foregroundStyle(flow.ready ? .green : .secondary)
+                        if flow.running && !flow.ready { ProgressView().controlSize(.small) }
+                    }
+                    if showsDetail {
+                        Text(flow.lastFailure ?? flow.statusText)
+                            .font(.footnote).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("pairingResult")
+                    }
+                    if let pin = flow.pin {
+                        Text(pin).font(.title.monospacedDigit())
+                            .accessibilityIdentifier("pairingPIN")
+                    }
+                }
+                Spacer(minLength: 0)
+                HStack(spacing: 8) {
+                    if flow.ready || (!flow.running && !flow.agentReserved) {
+                        Button(flow.ready ? "重新连接" : flow.hasRecord ? "连接" : "配对") {
+                            if flow.hasRecord { flow.verify() }
+                            else { flow.startPairing() }
+                        }.disabled(flow.running || flow.agentReserved)
+                    }
+                    if flow.running || flow.ready || flow.agentReserved {
+                        Button("停止") { flow.cancel() }
+                    }
+                }.buttonStyle(.bordered)
             }
-            if !flow.hasRecord {
-                Button("系统配对") { flow.startPairing() }.disabled(flow.running)
-            }
-            if let pin = flow.pin {
-                Text(pin).font(.largeTitle.monospacedDigit()).accessibilityIdentifier("pairingPIN")
-            }
-            Text(flow.statusText).font(.footnote).foregroundStyle(.secondary)
-                .accessibilityIdentifier("pairingResult")
-            HStack {
-                Text("服务控制")
-                Spacer()
-                Button(flow.ready ? "重新连接" : "连接") { flow.verify() }
-                    .disabled(!flow.hasRecord || flow.running)
-                Button("停止") { flow.cancel() }.disabled(!flow.running && !flow.ready)
-            }.buttonStyle(.bordered)
         }
-        Section("操作") {
-            Button("获取截图") { flow.capture() }.disabled(!flow.ready || flow.running)
-            Button("点击验证", action: showTouchTest).disabled(!flow.ready || flow.running)
-            if flow.running { ProgressView("处理中") }
-        }
-        if let image = flow.image {
-            Section("截图") {
-                Image(uiImage: image).resizable().scaledToFit().accessibilityLabel("手机截图")
+        if flow.ready {
+            Section("服务验证") {
+                Button { flow.capture() } label: {
+                    HStack {
+                        Text(flow.capturing ? "正在获取截图" : "获取截图")
+                        if flow.capturing { ProgressView().controlSize(.small) }
+                    }
+                }.disabled(flow.running || flow.agentReserved)
+                Button("点击验证", action: showTouchTest).disabled(flow.running || flow.agentReserved)
+            }
+            if let image = flow.image {
+                Section("截图") {
+                    Image(uiImage: image).resizable().scaledToFit().accessibilityLabel("手机截图")
+                }
             }
         }
     }
@@ -317,10 +393,10 @@ struct TouchVerificationView: View {
                 Text(result).multilineTextAlignment(.center).accessibilityIdentifier("touchVerificationResult")
                 Text(flow.message).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 if !flow.ready {
-                    Button("重新连接 S3") { flow.verify() }.disabled(flow.running)
+                    Button("重新连接 ESP32") { flow.verify() }.disabled(flow.running || flow.agentReserved)
                 }
                 if testing { ProgressView() }
-                Button("经 S3 点击中央目标") { test() }.buttonStyle(.bordered).disabled(testing || !flow.ready || flow.running)
+                Button("经 ESP32 点击中央目标") { test() }.buttonStyle(.bordered).disabled(testing || !flow.ready || flow.running || flow.agentReserved)
                 Text("保持此页打开。计数增加才说明界面收到触摸；单纯报告发送成功不计入。")
                     .font(.footnote).foregroundStyle(.secondary)
             }.padding()

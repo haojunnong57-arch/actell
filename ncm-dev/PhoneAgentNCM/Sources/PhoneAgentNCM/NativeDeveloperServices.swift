@@ -101,14 +101,21 @@ public enum InputDelivery: Sendable { case reportsWrittenVisualEffectUnverified 
         _ = try await operation(4, x: x, y: y); return .reportsWrittenVisualEffectUnverified
     }
     public func tap(x: UInt16, y: UInt16) async throws { _ = try await tapDelivery(x: x, y: y) }
-    private func operation(_ action: UInt32, x: UInt16 = 0, y: UInt16 = 0, expectedKind: UInt32 = 2) async throws -> Data {
+    public func dragDelivery(fromX: UInt16, fromY: UInt16, toX: UInt16, toY: UInt16, durationMS: UInt16) async throws -> InputDelivery {
+        guard (100...2000).contains(durationMS) else { throw NativeBackendError.malformedEvent }
+        _ = try await operation(6, x: fromX, y: fromY, drag: (toX, toY, durationMS))
+        return .reportsWrittenVisualEffectUnverified
+    }
+    private func operation(_ action: UInt32, x: UInt16 = 0, y: UInt16 = 0, expectedKind: UInt32 = 2, drag: (UInt16, UInt16, UInt16)? = nil) async throws -> Data {
         guard !busy else { throw NativeBackendError.busy }
         guard ready, handle != 0 else { throw NativeBackendError.closed }
         busy = true; defer { busy = false }; let token = handle
         serial += 1; let id = serial
         do {
             try Task.checkCancellation()
-            let code = ncm_backend_submit(token, id, action, x, y)
+            let code: Int32
+            if let drag { code = ncm_backend_drag(token, id, x, y, drag.0, drag.1, drag.2) }
+            else { code = ncm_backend_submit(token, id, action, x, y) }
             guard code == 0 else { throw NativeBackendError.transport(code: code) }
             let (header, data) = try await receive(token, requestID: id)
             guard header.kind == expectedKind else { throw NativeBackendError.malformedEvent }

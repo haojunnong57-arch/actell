@@ -61,6 +61,12 @@ def generate():
             ref = add((name if relative.startswith("Shared/") else "") + relative, "PBXFileReference", lastKnownFileType="sourcecode.swift", path=relative, sourceTree="SOURCE_ROOT")
             children.append(ref)
             sources.append(add((name if relative.startswith("Shared/") else "") + relative + "Build", "PBXBuildFile", fileRef=ref))
+        if name == "PhoneAgent":
+            for path in sorted((ROOT.parent / "ncm-dev/PhoneAgentNCM/Sources/PhoneAgentNCM").glob("*.swift")):
+                relative = "../ncm-dev/PhoneAgentNCM/Sources/PhoneAgentNCM/" + path.name
+                ref = add(relative, "PBXFileReference", lastKnownFileType="sourcecode.swift", path=relative, sourceTree="SOURCE_ROOT")
+                children.append(ref)
+                sources.append(add(relative + "Build", "PBXBuildFile", fileRef=ref))
         resources = []
         for path in sorted((ROOT / name).rglob("*.xcstrings")):
             relative = path.relative_to(ROOT).as_posix()
@@ -104,6 +110,15 @@ def generate():
                             INFOPLIST_KEY_UIApplicationSceneManifest_Generation="YES",
                             INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents="YES",
                             INFOPLIST_KEY_UILaunchScreen_Generation="YES")
+            settings.update(ARCHS="arm64", ENABLE_USER_SCRIPT_SANDBOXING="NO",
+                            HEADER_SEARCH_PATHS=["$(inherited)", "$(SRCROOT)/../ncm-dev/PhoneAgentNCM/Sources/CNCMBackend/include"],
+                            OTHER_LDFLAGS=["$(inherited)", "-lphoneagent_ncm_backend", "-framework", "Security", "-framework", "SystemConfiguration"],
+                            **{"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]": ["$(inherited)", "$(SRCROOT)/../.build/ncm-rust/aarch64-apple-ios/release"],
+                               "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]": ["$(inherited)", "$(SRCROOT)/../.build/ncm-rust/aarch64-apple-ios-sim/release"]})
+            phases.insert(0, add("NCMBackendBuild", "PBXShellScriptBuildPhase", buildActionMask=2147483647,
+                                 files=[], inputPaths=[], outputPaths=[], runOnlyForDeploymentPostprocessing=0,
+                                 alwaysOutOfDate=1, name="Build NCM backend", shellPath="/bin/bash",
+                                 shellScript='case "$PLATFORM_NAME" in\n iphoneos) mode=device ;;\n iphonesimulator) mode=simulator ;;\n *) exit 1 ;;\nesac\nbash "$SRCROOT/../tools/build_ncm_rust.sh" "$mode"\n'))
             widget = "PhoneAgentLiveActivity"
             embedded = add("EmbedLiveActivityBuild", "PBXBuildFile", fileRef=uid(widget + "Product"), settings=dict(ATTRIBUTES=["RemoveHeadersOnCopy"]))
             phases.append(add("EmbedLiveActivity", "PBXCopyFilesBuildPhase", buildActionMask=2147483647, dstPath="", dstSubfolderSpec=13,
@@ -118,7 +133,8 @@ def generate():
             if name == "PhoneAgentUITests":
                 settings.update(TEST_TARGET_NAME="PhoneAgent")
             else:
-                settings.update(TEST_HOST="$(BUILT_PRODUCTS_DIR)/PhoneAgent.app/PhoneAgent", BUNDLE_LOADER="$(TEST_HOST)")
+                settings.update(TEST_HOST="$(BUILT_PRODUCTS_DIR)/PhoneAgent.app/PhoneAgent", BUNDLE_LOADER="$(TEST_HOST)",
+                                HEADER_SEARCH_PATHS=["$(inherited)", "$(SRCROOT)/../ncm-dev/PhoneAgentNCM/Sources/CNCMBackend/include"])
             proxy = add(name + "AppProxy", "PBXContainerItemProxy", containerPortal=uid("Project"), proxyType=1, remoteGlobalIDString=uid("PhoneAgentTarget"), remoteInfo="PhoneAgent")
             dependencies.append(add(name + "AppDependency", "PBXTargetDependency", target=uid("PhoneAgentTarget"), targetProxy=proxy))
         targets.append(add(name + "Target", "PBXNativeTarget", name=name, productName=name, productReference=product,
