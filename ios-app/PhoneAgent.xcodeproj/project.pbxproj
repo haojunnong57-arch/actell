@@ -73,6 +73,40 @@
 		FA081CB2F51D3CC8C1F7768E /* PhoneAgent/Storage/ConversationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B002B8C03496728A5C8565B0 /* PhoneAgent/Storage/ConversationStore.swift */; };
 		FD371D0E34BEE2874EA7281F /* SwiftAgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = CDF64BC031F1B5C9F069ED47 /* SwiftAgentKit */; };
 		FD5C6539F68A51889A137CDE /* PhoneAgent/Status/AgentStatusSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C881FC710C45193DBE50ECD /* PhoneAgent/Status/AgentStatusSnapshot.swift */; };
+		0E2633EC6C9921CFE824BBB2 /* NCM integration */ = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "171A5B62BCA1E4164C4EA1E3";
+		};
+		C5EAF381413ACA8E754F2BF1 /* NCM integration */ = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "BCA8498B77D720BF91683CBF";
+		};
+		9CBC2D826DE7049361FC1EDB /* NCM integration */ = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "CBCEC982943D8CE96A6C74C6";
+		};
+		CC1CEC9C2F04F5D0407158B5 /* NCM integration */ = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "304D61E5C622C76BCD1DAC42";
+		};
+		FC3A25164BC402F4DF3BC179 /* NCM integration */ = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "1E8A43829317E28D3442573E";
+		};
+		E8ADA441A84F89AAA979BCD6 /* NCM integration */ = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "0EF34F6BE34BE116F4F8E907";
+		};
+		EA81110C7C3D3169181C7CC0 /* NCM integration */ = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "EE6EB756D3002D8C82D48B9E";
+		};
+		ABEACD3C9E30E1E785C237EB /* NCM integration */ = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "63CAA5B14316F1A734C10A31";
+		};
+		80951CB0FCCCB7C439F6042C /* PhoneAgent/Bridge/NCMDeviceBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D4DC201A0C5A7F2587476B0; };
+		6FA033584CFF0CA3EA452F97 /* PhoneAgentTests/NCMDeviceBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17AEE24E6BE43C95C36E59E6; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -176,6 +210,56 @@
 		EBC4AB71601E4DA533BC2251 /* PhoneAgent/LiveActivity/AgentLiveActivityController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneAgent/LiveActivity/AgentLiveActivityController.swift; sourceTree = SOURCE_ROOT; };
 		F24D73DC116942FF937BCAB8 /* Shared/AgentActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/AgentActivityAttributes.swift; sourceTree = SOURCE_ROOT; };
 		F6B755ABE7391EEA7A6D428B /* PhoneAgent/Bridge/TLSBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneAgent/Bridge/TLSBridge.swift; sourceTree = SOURCE_ROOT; };
+		1E8A43829317E28D3442573E /* NCM integration */ = {
+			"path" = "../ncm-dev/PhoneAgentNCM/Sources/PhoneAgentNCM/Diagnostic.swift";
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		EE6EB756D3002D8C82D48B9E /* NCM integration */ = {
+			"path" = "PhoneAgent/ESP32Control/PairingFlow.swift";
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		171A5B62BCA1E4164C4EA1E3 /* NCM integration */ = {
+			"path" = "../ncm-dev/PhoneAgentNCM/Sources/PhoneAgentNCM/NCMProbeClient.swift";
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		63CAA5B14316F1A734C10A31 /* NCM integration */ = {
+			"path" = "../ncm-dev/PhoneAgentNCM/Sources/PhoneAgentNCM/InterfaceBinding.swift";
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		0EF34F6BE34BE116F4F8E907 /* NCM integration */ = {
+			"path" = "../ncm-dev/PhoneAgentNCM/Sources/PhoneAgentNCM/RemotePairingSession.swift";
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		CBCEC982943D8CE96A6C74C6 /* NCM integration */ = {
+			"path" = "PhoneAgent/ESP32Control/ESP32ControlSettingsView.swift";
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		304D61E5C622C76BCD1DAC42 /* NCM integration */ = {
+			"path" = "../ncm-dev/PhoneAgentNCM/Sources/PhoneAgentNCM/RemotePairRecordStore.swift";
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		BCA8498B77D720BF91683CBF /* NCM integration */ = {
+			"path" = "../ncm-dev/PhoneAgentNCM/Sources/PhoneAgentNCM/NativeDeveloperServices.swift";
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		8D4DC201A0C5A7F2587476B0 /* PhoneAgent/Bridge/NCMDeviceBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneAgent/Bridge/NCMDeviceBridge.swift; sourceTree = SOURCE_ROOT; };
+		17AEE24E6BE43C95C36E59E6 /* PhoneAgentTests/NCMDeviceBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneAgentTests/NCMDeviceBridgeTests.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -220,6 +304,7 @@
 		01C9D5910E626DA35A0A8FDF /* PhoneAgentTests */ = {
 			isa = PBXGroup;
 			children = (
+				17AEE24E6BE43C95C36E59E6 /* PhoneAgentTests/NCMDeviceBridgeTests.swift */,
 				B1C6BD4ADEB0BB2BDF4A6D91 /* PhoneAgentTests/AgentPresentationTests.swift */,
 				17BD0F356D152AC2B11057B5 /* PhoneAgentTests/ConversationTests.swift */,
 				46693BDF9568EA4A77D61F09 /* PhoneAgentTests/DependencyStorageTests.swift */,
@@ -239,6 +324,7 @@
 		0BFD595BCD020595427B3001 /* PhoneAgent */ = {
 			isa = PBXGroup;
 			children = (
+				8D4DC201A0C5A7F2587476B0 /* PhoneAgent/Bridge/NCMDeviceBridge.swift */,
 				8F8355D89D025B99C0374C30 /* PhoneAgent/Agent/AgentViewModel.swift */,
 				BBB418CC025ECF7C8F6F4777 /* PhoneAgent/Agent/DeviceTools.swift */,
 				624450FC263A4E2F7FCEE97D /* PhoneAgent/Agent/ModelStreamDecoder.swift */,
@@ -281,6 +367,14 @@
 				5CCB0FE80D8697727E76D525 /* PhoneAgent/Intents/Localizable.xcstrings */,
 				E508E5D56E68A7157853C5C9 /* PhoneAgent/PrivacyInfo.xcprivacy */,
 				6D5D9004797377E10C60545A /* Licenses */,
+				CBCEC982943D8CE96A6C74C6 /* NCM integration */,
+				EE6EB756D3002D8C82D48B9E /* NCM integration */,
+				171A5B62BCA1E4164C4EA1E3 /* NCM integration */,
+				0EF34F6BE34BE116F4F8E907 /* NCM integration */,
+				1E8A43829317E28D3442573E /* NCM integration */,
+				304D61E5C622C76BCD1DAC42 /* NCM integration */,
+				63CAA5B14316F1A734C10A31 /* NCM integration */,
+				BCA8498B77D720BF91683CBF /* NCM integration */,
 			);
 			name = PhoneAgent;
 			sourceTree = "<group>";
@@ -394,6 +488,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 2F8C79022BA56E966F1916DE /* Build configuration list for PBXNativeTarget "PhoneAgent" */;
 			buildPhases = (
+				A7C830303F11E9D980DB096E /* NCM integration */,
 				6BD257A8C37F8066C1D2497E /* Sources */,
 				2C7D5B2F99EC01905016A62F /* Frameworks */,
 				7ECA44F4398600971FDA4FB0 /* Resources */,
@@ -486,6 +581,21 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		A7C830303F11E9D980DB096E /* NCM integration */ = {
+			"alwaysOutOfDate" = "1";
+			"inputPaths" = ();
+			"buildActionMask" = "2147483647";
+			"shellPath" = "/bin/bash";
+			"isa" = "PBXShellScriptBuildPhase";
+			"runOnlyForDeploymentPostprocessing" = "0";
+			"outputPaths" = ();
+			"shellScript" = "case \"$PLATFORM_NAME\" in\n iphoneos) mode=device ;;\n iphonesimulator) mode=simulator ;;\n *) exit 1 ;;\nesac\nbash \"$SRCROOT/../tools/build_ncm_rust.sh\" \"$mode\"\n";
+			"name" = "Build NCM backend";
+			"files" = ();
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		65C584114805380A979D647F /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -500,6 +610,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				80951CB0FCCCB7C439F6042C /* PhoneAgent/Bridge/NCMDeviceBridge.swift */,
 				3A63C56C1146913C500545F7 /* PhoneAgent/Agent/AgentViewModel.swift in Sources */,
 				52280C3606C0FFD5808D35F4 /* PhoneAgent/Agent/DeviceTools.swift in Sources */,
 				DD6C862F22CD0C39F54617D0 /* PhoneAgent/Agent/ModelStreamDecoder.swift in Sources */,
@@ -538,6 +649,14 @@
 				FA081CB2F51D3CC8C1F7768E /* PhoneAgent/Storage/ConversationStore.swift in Sources */,
 				3E843658D3205FF32E628ECD /* PhoneAgent/Storage/TaskStore.swift in Sources */,
 				97D21CD776C33EA661A6F765 /* Shared/AgentActivityAttributes.swift in Sources */,
+				9CBC2D826DE7049361FC1EDB /* NCM integration */,
+				EA81110C7C3D3169181C7CC0 /* NCM integration */,
+				0E2633EC6C9921CFE824BBB2 /* NCM integration */,
+				E8ADA441A84F89AAA979BCD6 /* NCM integration */,
+				FC3A25164BC402F4DF3BC179 /* NCM integration */,
+				CC1CEC9C2F04F5D0407158B5 /* NCM integration */,
+				ABEACD3C9E30E1E785C237EB /* NCM integration */,
+				C5EAF381413ACA8E754F2BF1 /* NCM integration */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -554,6 +673,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6FA033584CFF0CA3EA452F97 /* PhoneAgentTests/NCMDeviceBridgeTests.swift */,
 				EED32CB403AAFD20E1DA950B /* PhoneAgentTests/AgentPresentationTests.swift in Sources */,
 				4F6C2C9E88CC0DF3A0804311 /* PhoneAgentTests/ConversationTests.swift in Sources */,
 				0A341B6FC0976B8722FE3C8D /* PhoneAgentTests/DependencyStorageTests.swift in Sources */,
@@ -616,6 +736,12 @@
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				TARGETED_DEVICE_FAMILY = "1,2";
+				ENABLE_USER_SCRIPT_SANDBOXING = "NO";
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = ("$(inherited)", "$(SRCROOT)/../.build/ncm-rust/aarch64-apple-ios-sim/release",);
+				OTHER_LDFLAGS = ("$(inherited)", "-lphoneagent_ncm_backend", "-framework", "Security", "-framework", "SystemConfiguration",);
+				HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/../ncm-dev/PhoneAgentNCM/Sources/CNCMBackend/include",);
+				ARCHS = "arm64";
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = ("$(inherited)", "$(SRCROOT)/../.build/ncm-rust/aarch64-apple-ios/release",);
 			};
 			name = Release;
 		};
@@ -668,6 +794,7 @@
 		62419C57EF0FAE2065F3C8C7 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/../ncm-dev/PhoneAgentNCM/Sources/CNCMBackend/include",);
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -719,12 +846,19 @@
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				TARGETED_DEVICE_FAMILY = "1,2";
+				ENABLE_USER_SCRIPT_SANDBOXING = "NO";
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = ("$(inherited)", "$(SRCROOT)/../.build/ncm-rust/aarch64-apple-ios-sim/release",);
+				OTHER_LDFLAGS = ("$(inherited)", "-lphoneagent_ncm_backend", "-framework", "Security", "-framework", "SystemConfiguration",);
+				HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/../ncm-dev/PhoneAgentNCM/Sources/CNCMBackend/include",);
+				ARCHS = "arm64";
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = ("$(inherited)", "$(SRCROOT)/../.build/ncm-rust/aarch64-apple-ios/release",);
 			};
 			name = Debug;
 		};
 		9D8F64F8859635F9B7D34615 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				HEADER_SEARCH_PATHS = ("$(inherited)", "$(SRCROOT)/../ncm-dev/PhoneAgentNCM/Sources/CNCMBackend/include",);
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;

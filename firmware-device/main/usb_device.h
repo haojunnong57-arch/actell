@@ -4,6 +4,7 @@
 #include "protocol.h"
 #include "esp_err.h"
 esp_err_t usb_network_start(void);
+uint32_t usb_network_index(void);
 void usb_install(void);
 uint32_t usb_epoch(void);
 bool usb_online(void);

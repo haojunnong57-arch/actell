@@ -17,7 +17,15 @@ struct ControlDebugView: View {
                     }
                     Text(model.status).font(.subheadline).accessibilityLabel("当前状态：\(model.status)").accessibilityIdentifier("debugStatus")
                     Picker("运行模式", selection: $model.mode) { ForEach(RunMode.allCases) { Text($0.label).tag($0) } }.pickerStyle(.segmented).disabled(model.running || model.stopping)
-                    if model.mode == .live { USBCapturePanel(model: model, capture: model.capture); bridgeCard }
+                    if model.mode == .live {
+                        if DeviceControlRoute.current == .ncmDeveloper {
+                            NavigationLink { ESP32ControlSettingsView() } label: {
+                                HStack { Text("ESP32 控制"); Spacer(); Text(PairingFlow.shared.ready ? "已连接" : "未连接").foregroundStyle(.secondary) }
+                            }
+                            Text("截图和输入经 ESP32 NCM 连接。先配对并连接，再开始任务；保持 App 在前台。")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else { USBCapturePanel(model: model, capture: model.capture); bridgeCard }
+                    }
                     VStack(alignment: .leading, spacing: 10) {
                         Text("任务").font(.headline)
                         TextEditor(text: $model.goal).frame(minHeight: 95).padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 12)).disabled(model.running || model.stopping).accessibilityLabel("任务输入")
@@ -54,7 +62,7 @@ struct ControlDebugView: View {
                     }
                     if let warning = model.storageWarning { Label(warning, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange) }
                     if let error = model.errorMessage { Text(error).font(.callout).foregroundStyle(.red) }
-                    Text("采集有效时可在后台执行本次 USB 控制任务；旧 TLS 设备工具仍仅前台可用并逐次确认。真实跨 App 闭环仍需实测。")
+                    Text(DeviceControlRoute.current == .ncmDeveloper ? "当前 NCM 控制会话在 App 进入后台后关闭；实际输入效果以新截图为准。" : "采集有效时可在后台执行本次 USB 控制任务；旧 TLS 设备工具仍仅前台可用并逐次确认。真实跨 App 闭环仍需实测。")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(20)
             }
@@ -68,7 +76,7 @@ struct ControlDebugView: View {
                 Button("同意本次运行并开始") { model.start(resuming: resumeAfterConsent) }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("本次任务文字与后续截图会发送到 \(model.settings.baseURL)，使用模型 \(model.settings.model)。开始后，USB 控制会按本次任务自动执行普通点击和拖动，无需逐次确认；你可随时停止。截图可能含个人信息，请先隐藏敏感内容。API 可能计费，最多 12 次模型调用，token 上限依赖服务报告，无法保证金额上限。")
+                Text("本次任务文字与后续截图会发送到 \(model.settings.baseURL)，使用模型 \(model.settings.model)。开始后，ESP32 控制会按本次任务自动执行普通点击和拖动，无需逐次确认；你可随时停止。截图可能含个人信息，请先隐藏敏感内容。API 可能计费，最多 12 次模型调用，token 上限依赖服务报告，无法保证金额上限。")
             }
     }
     private var bridgeCard: some View {

@@ -1,3 +1,5 @@
+> 本分支的独立 **NCM → iPhone 开发者服务** 实现见 [NCM 开发者路线](docs/ncm-coredevice/README.md)。新目标在 `ncm-dev/`；当前交付诊断固件、无签名 App 和受限接口，尚未实现真实截图/输入。下文保留已提交基线的主线说明。
+
 > **主线集成版（2026-10-04）**：保留 ESP Host 工程与已有板级实测记录，整合 iOS 27 ScreenCaptureKit、无无线 USB Device NCM/HID、Siri 草稿入口、Live Activities 及统一有限后台生命周期。新 USB Device 路线尚未完成真机联调。最新构建、测试、分支和恢复说明以 [集成记录](docs/integration/INTEGRATION.md) 为准；各历史阶段文档保留原有时间与验证范围。
 
 # ESP32 控制 iPhone：源码与方案检查点

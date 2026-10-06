@@ -1,4 +1,5 @@
 #include "usb_device.h"
+#include "developer_service.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "lwip/sockets.h"
@@ -81,6 +82,7 @@ static bool process_line(char *line,int64_t now) {
 }
 void app_main(void) {
     ESP_ERROR_CHECK(usb_network_start());
+    ESP_ERROR_CHECK(developer_service_start(usb_online, usb_epoch, usb_network_index()));
     int listener=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
     ESP_ERROR_CHECK(listener<0 ? ESP_FAIL:ESP_OK);
     struct sockaddr_in address={.sin_family=AF_INET,.sin_port=htons(28766)};

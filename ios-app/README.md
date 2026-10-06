@@ -1,3 +1,5 @@
+> **2026-10-06 路由更新**：主任务截图、点击与拖动默认使用已配对的 ESP32 NCM 开发者通道，连接入口为“设置 → USB 连接 → ESP32 控制”。保留原 ScreenCaptureKit/PA3 HID 和 TLS 实现，以 `DeviceControlRoute` 预留后续选择，不新增开关。当前 NCM 控制需要主 App 保持前台。以下旧链路章节为历史记录，当前行为见 [主线整合记录](../docs/ncm-coredevice/MAIN-INTEGRATION.md)。
+
 > **主线集成版最低 iOS 27**，Bundle ID 保持 `com.ja1chen.PhoneAgent`。SCK / USB、Siri、Live Activities 和通用有限后台片段共用同一执行实例；批准、输入与恢复边界见 [集成记录](../docs/integration/INTEGRATION.md)。以下历史验证章节按原日期保留。
 
 > **本地工程更新（2026-10-04）**：已接入会话列表、会话页、真实流式回复、工具步骤/参数、单次批准/拒绝/停止及本地历史；执行层保留 SwiftAgentKit，工具展示选择性复用 ManifoldKit MIT 源码，Markdown 使用 MarkdownUI。会话 UI 与工具错误处理基于 `e183d6d` 扩展。实际编译、单元和 UI 验证见 [AGENT-UI-VALIDATION.md](docs/AGENT-UI-VALIDATION.md)，实现与开源复用清单见 [AGENT-UI.md](docs/AGENT-UI.md)。主 Bundle ID 固定 `com.ja1chen.PhoneAgent`，PiP 后台能力仍未启用。
@@ -85,3 +87,11 @@ python3 scripts/check_source.py
 ## Siri 任务入口
 
 通过“用 PhoneAgent 创建任务”保存待确认草稿，回到新会话核对并点击“确认开始”。支持概括状态查询和停止当前运行。方案、启动方式与集成点见 [SIRI-ENTRY.md](docs/SIRI-ENTRY.md)，验证边界见 [SIRI-VALIDATION.md](docs/SIRI-VALIDATION.md)。
+
+## S3 控制设置子页面
+
+“设置 → USB 连接 → ESP32 控制”提供系统配对、连接/停止、截图和真实点击计数验证。界面和状态管理位于 `PhoneAgent/ESP32Control`，主 App 编译复用 `../ncm-dev/PhoneAgentNCM` 的 Swift/C ABI 和 Rust 后端，Xcode 构建阶段自动构建当前平台的静态库。当前支持 arm64 真机和 arm64 模拟器。协议库仍在 `ncm-dev`，独立 Probe 只作为共用界面的测试入口。
+
+主 App 在启动时注册独立的 `.pairing` 后台任务，配对时允许用户进入系统设置完成授权；普通控制会话在 App 进入后台或受保护数据不可用时关闭。配对身份保存在主 App 沙盒，不读取或导出独立 Probe 的身份，因此主 App 首次使用需要自己的系统配对。已配对身份随主 App 更新保留。
+
+固件使用 `../tools/build_usb_device.sh ncm`。本次接入设置子页面，不把原有模型任务运行器切换到新的开发者服务后端。构建和实机验证边界见 [主工程整合](../docs/ncm-coredevice/MAIN-INTEGRATION.md)。
