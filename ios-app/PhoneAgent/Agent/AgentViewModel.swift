@@ -22,7 +22,7 @@ struct AgentRunServices {
     @Published var bridgeStatus = "真实桥接未启动"
     @Published private(set) var usbConnectionStatus: USBConnectionStatus = .idle
     let usbDiagnostics = USBDiagnosticsLog()
-    let capture = ScreenCaptureController()
+    let capture: ScreenCaptureController
     private var previewTask: Task<Void, Never>?
     @Published private(set) var previewingCapture = false
     private var usbClient: (any USBConnectionSession)?
@@ -59,7 +59,46 @@ struct AgentRunServices {
     private var activeActionCallID: String?
     private var activityHandoffRun: RunIdentity?
     private var runIdentity: RunIdentity?
-    var currentRun: RunIdentity? { runIdentity }
+    var ownedRun: RunIdentity? { runIdentity }
+    var currentRun: RunIdentity? {
+        if let id = selectedConversationID, let run = sessionRuntimes[id]?.ownedRun { return run }
+        return runIdentity ?? sessionRuntimes.values.compactMap(\.ownedRun).first
+    }
+    private var primarySessionID: UUID?
+    private var sessionRuntimes: [UUID: AgentViewModel] = [:]
+    private var sessionSubscriptions: [UUID: AnyCancellable] = [:]
+    private weak var runtimeOwner: AgentViewModel?
+    private let persistentRuntime: Bool
+    private let runServicesFactory: (@MainActor (UUID) -> AgentRunServices)?
+    var hasBusySessions: Bool { running || stopping || sessionRuntimes.values.contains { $0.running || $0.stopping } }
+    var displayStatus: AgentStatusSnapshot {
+        let worker = currentRun.flatMap { existingExecutionModel(for: $0.conversationID) } ?? self
+        return .make(mode: worker.mode, phase: worker.activeRecord?.phase, running: worker.running, awaitingApproval: worker.approval != nil)
+    }
+    private var appOwner: AgentViewModel { runtimeOwner ?? self }
+    func executionModel(for id: UUID) -> AgentViewModel {
+        if let runtimeOwner { return runtimeOwner.executionModel(for: id) }
+        if primarySessionID == nil { primarySessionID = id }
+        if primarySessionID == id { return self }
+        if let value = sessionRuntimes[id] { return value }
+        let directory = URL.applicationSupportDirectory.appending(path: "PhoneAgent/Sessions/" + id.uuidString)
+        let worker = AgentViewModel(sessions: sessions, loadPersistentState: persistentRuntime,
+            approvalRecords: approvalRecords,
+            attachments: attachments, skills: skills, providers: providers, sharedCapture: capture,
+            sharedActivities: liveActivities, checkpointDirectory: directory, restoreLegacyState: false,
+            runServicesFactory: runServicesFactory, makeUSBClient: makeUSBClient)
+        worker.runtimeOwner = self; worker.primarySessionID = id; worker.selectedConversationID = id
+        worker.foreground = foreground; worker.currentScene = currentScene; worker.protectedDataAvailable = protectedDataAvailable
+        worker.lifecycle.setForeground(foreground)
+        sessionRuntimes[id] = worker
+        sessionSubscriptions[id] = worker.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        return worker
+    }
+    func existingExecutionModel(for id: UUID) -> AgentViewModel? {
+        if let runtimeOwner { return runtimeOwner.existingExecutionModel(for: id) }
+        return primarySessionID == id ? self : sessionRuntimes[id]
+    }
+
     private var store: TaskStore?
     private var activeID: UUID?
     private var generation = UUID()
@@ -84,18 +123,23 @@ struct AgentRunServices {
          lifecycle: RunLifecycleCoordinator? = nil,
          approvalRecords: ApprovalRecordStore? = nil, liveActivitiesEnabled: Bool? = nil,
          attachments: AttachmentStore? = nil, skills: SkillStore? = nil,
+         providers: ProviderStore? = nil, sharedCapture: ScreenCaptureController? = nil,
+         sharedActivities: AgentLiveActivityController? = nil, checkpointDirectory: URL? = nil,
+         restoreLegacyState: Bool = true, runServicesFactory: (@MainActor (UUID) -> AgentRunServices)? = nil,
          makeUSBClient: @escaping @MainActor (USBDiagnosticsLog, @escaping @Sendable (USBConnectionStatus) -> Void) -> any USBConnectionSession = { USBCommandClient(diagnostics: $0, onProgress: $1) }) {
-        self.providers = ProviderStore(defaults: loadPersistentState ? .standard : nil)
+        self.providers = providers ?? ProviderStore(defaults: loadPersistentState ? .standard : nil)
+        self.capture = sharedCapture ?? ScreenCaptureController()
+        self.persistentRuntime = loadPersistentState; self.runServicesFactory = runServicesFactory
         self.skills = skills ?? SkillStore(inMemory: !loadPersistentState)
         self.attachments = attachments ?? AttachmentStore(directory: loadPersistentState ? nil : FileManager.default.temporaryDirectory.appendingPathComponent("test-assets-\(UUID())"))
         self.makeUSBClient = makeUSBClient
         self.approvalRecords = approvalRecords ?? ApprovalRecordStore(inMemory: !loadPersistentState)
-        self.liveActivities = AgentLiveActivityController(enabled: liveActivitiesEnabled ?? loadPersistentState)
+        self.liveActivities = sharedActivities ?? AgentLiveActivityController(enabled: liveActivitiesEnabled ?? loadPersistentState)
         self.runServices = runServices
         self.allowSystemProcessing = loadPersistentState
-        self.lifecycle = lifecycle ?? RunLifecycleFactory.make(persistent: loadPersistentState, scheduler: executionScheduler)
+        self.lifecycle = lifecycle ?? RunLifecycleFactory.make(persistent: loadPersistentState, scheduler: executionScheduler, directory: checkpointDirectory)
         var legacy: [TaskRecord] = []
-        if loadPersistentState {
+        if loadPersistentState && restoreLegacyState {
             do { let s = try TaskStore(); legacy = try s.load(); store = s; records = legacy }
             catch { storageWarning = "旧任务记录未能读取；原文件保留" }
         }
@@ -107,39 +151,62 @@ struct AgentRunServices {
                 self.cancelRun(message: failure, phase: .interrupted)
             } else { self.cancelRun(message: message, phase: .interrupted) }
         }
-        providerSubscription = providers.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
+        providerSubscription = self.providers.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         lifecycleSubscription = self.lifecycle.$backgroundStatus.sink { [weak self] in self?.backgroundStatus = $0 }
         for saved in self.lifecycle.recoveries { self.sessions.addRecoveryNotice(saved) }
-        capture.onDiagnostic = { [weak self] event in self?.usbDiagnostics.record(event) }
-        capture.onLoss = { [weak self] in
-            guard let self, self.usbClient != nil || self.screenExecutionContext != nil || self.bridge is LocalScreenBridge else { return }
-            self.usbDiagnostics.record("capture.loss revokeInput=true hasUSB=\(self.usbClient != nil)")
-            self.stop(message: "系统采集已停止，输入已禁用")
+        if persistentRuntime && restoreLegacyState {
+            let root = URL.applicationSupportDirectory.appending(path: "PhoneAgent/Sessions")
+            for folder in (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [] {
+                guard UUID(uuidString: folder.lastPathComponent) != nil else { continue }
+                let recovery = RunLifecycleFactory.make(persistent: true, scheduler: RunExecutionScheduler(), directory: folder)
+                for saved in recovery.recoveries { self.sessions.addRecoveryNotice(saved) }
+            }
+        }
+        if sharedCapture == nil {
+            capture.onDiagnostic = { [weak self] event in self?.usbDiagnostics.record(event) }
+            capture.onLoss = { [weak self] in
+                guard let self else { return }
+                for worker in self.sessionRuntimes.values where worker.screenExecutionContext != nil || worker.bridge is LocalScreenBridge { worker.stop(message: "系统采集已停止，输入已禁用") }
+                guard self.usbClient != nil || self.screenExecutionContext != nil || self.bridge is LocalScreenBridge else { return }
+                self.usbDiagnostics.record("capture.loss revokeInput=true hasUSB=\(self.usbClient != nil)")
+                self.stop(message: "系统采集已停止，输入已禁用")
+            }
         }
     }
     @discardableResult func createConversation(mode: RunMode) -> UUID {
         let id = sessions.create(mode: mode); selectConversation(id); return id
     }
     func selectConversation(_ id: UUID) {
-        guard sessions.conversation(id) != nil, selectedConversationID != id else { return }
-        if running || listenerTask != nil { stop(message: "已离开会话，本轮执行已中断", interrupted: true) }
+        if let runtimeOwner { runtimeOwner.selectConversation(id); return }
+        guard sessions.conversation(id) != nil else { return }
         selectedConversationID = id
+        let worker = executionModel(for: id)
         if sessions.conversation(id)?.providerID == nil, let profile = providers.profiles.first {
             sessions.selectProvider(profile.id, model: profile.settings.model, in: id)
         }
-        mode = sessions.conversation(id)?.mode ?? .demo
-        latestFrame = nil; approval = nil; errorMessage = nil
+        if !worker.running && !worker.stopping {
+            worker.mode = sessions.conversation(id)?.mode ?? .demo
+            worker.errorMessage = nil
+        }
     }
     func leaveConversation(_ id: UUID) {
+        if let runtimeOwner { runtimeOwner.leaveConversation(id); return }
         guard selectedConversationID == id else { return }
-        if running { stop(message: "已离开会话，本轮执行已中断", interrupted: true) }
         selectedConversationID = nil; sessions.saveNow()
     }
-    func isRunning(in id: UUID) -> Bool { running && runIdentity?.conversationID == id }
-    func approval(in id: UUID) -> Approval? { runIdentity?.conversationID == id ? approval : nil }
+    func isRunning(in id: UUID) -> Bool { existingExecutionModel(for: id)?.running == true }
+    func approval(in id: UUID) -> Approval? {
+        guard let worker = existingExecutionModel(for: id), worker.runIdentity?.conversationID == id else { return nil }
+        return worker.approval
+    }
     func approve(_ approved: Bool, approvalID: UUID, conversationID: UUID) {
-        guard runIdentity?.conversationID == conversationID, approval?.id == approvalID else { return }
-        approve(approved)
+        guard let worker = existingExecutionModel(for: conversationID), worker.runIdentity?.conversationID == conversationID,
+              worker.approval?.id == approvalID else { return }
+        worker.approve(approved)
+    }
+    func stop(run: RunIdentity) -> Bool {
+        guard let worker = existingExecutionModel(for: run.conversationID), worker.runIdentity == run, worker.running, !worker.stopping else { return false }
+        worker.stop(); return true
     }
     func selectedProvider(in conversationID: UUID) -> ProviderProfile? {
         providers.profile(sessions.conversation(conversationID)?.providerID)
@@ -148,15 +215,15 @@ struct AgentRunServices {
         sessions.conversation(conversationID)?.modelID ?? selectedProvider(in: conversationID)?.settings.model ?? ""
     }
     func selectProvider(_ id: UUID, in conversationID: UUID) {
-        guard !running, !stopping, let profile = providers.profile(id) else { return }
+        guard !isRunning(in: conversationID), existingExecutionModel(for: conversationID)?.stopping != true, let profile = providers.profile(id) else { return }
         sessions.selectProvider(id, model: profile.settings.model, in: conversationID)
     }
     func selectModel(_ model: String, in conversationID: UUID) {
-        guard !running, !stopping, let profile = selectedProvider(in: conversationID) else { return }
+        guard !isRunning(in: conversationID), existingExecutionModel(for: conversationID)?.stopping != true, let profile = selectedProvider(in: conversationID) else { return }
         sessions.selectProvider(profile.id, model: model, in: conversationID)
     }
     @discardableResult func saveProvider(_ draft: ProviderProfile, key: String) -> Bool {
-        guard !running, !stopping else { return false }
+        guard !appOwner.hasBusySessions else { return false }
         do {
             let value = try providers.prepared(draft)
             if !key.isEmpty {
@@ -168,15 +235,15 @@ struct AgentRunServices {
         } catch { errorMessage = Self.safeError(error); return false }
     }
     func removeProvider(_ id: UUID) {
-        guard !running, !stopping else { return }
+        guard !appOwner.hasBusySessions else { return }
         do { try providers.remove(id) } catch { errorMessage = Self.safeError(error) }
     }
     func restoreProvider(_ id: UUID) {
-        guard !running, !stopping else { return }
+        guard !appOwner.hasBusySessions else { return }
         do { try providers.restore(id) } catch { errorMessage = Self.safeError(error) }
     }
     func discoveryKey(for draft: ProviderProfile, typedKey: String) throws -> String {
-        guard !running, !stopping else { throw AppError.stopped }
+        guard !appOwner.hasBusySessions else { throw AppError.stopped }
         if !typedKey.isEmpty { return typedKey }
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--ui-testing") { return "" }
@@ -199,6 +266,8 @@ struct AgentRunServices {
     private var currentScene = ScreenUSBExecutionContext.Scene.active
     private var canContinueUSBSetup: Bool { usbConnectionStatus.allowsSetup(in: currentScene) }
     func setScene(_ scene: ScreenUSBExecutionContext.Scene) {
+        for worker in sessionRuntimes.values { worker.setScene(scene) }
+
         if usbClient != nil || usbConnectionStatus.isConnecting {
             usbDiagnostics.record("scene \(currentScene) -> \(scene) connecting=\(usbConnectionStatus.isConnecting) running=\(running)", attempt: usbGeneration)
         }
@@ -211,7 +280,7 @@ struct AgentRunServices {
         lifecycle.setForeground(active)
         if active { sessions.saveNow(); persist() }
         // System CPU/network time does not authorize the legacy TLS tools.
-        if !active, screenExecutionContext == nil { bridge?.cancelTransport(); liveBridge?.cancelTransport() }
+        if !active, screenExecutionContext == nil, !(bridge is NCMDeviceBridge) { bridge?.cancelTransport(); liveBridge?.cancelTransport() }
         // An established USB connection belongs to the App, not the current
         // task or view. Background/lock can revoke input without closing TCP.
         if !active, usbClient != nil, usbConnectionStatus.isReady {
@@ -226,6 +295,7 @@ struct AgentRunServices {
         }
     }
     func setProtectedDataAvailable(_ available: Bool) {
+        for worker in sessionRuntimes.values { worker.setProtectedDataAvailable(available) }
         if available != protectedDataAvailable, usbClient != nil {
             usbDiagnostics.record("protectedDataAvailable=\(available)", attempt: usbGeneration)
         }
@@ -342,7 +412,10 @@ struct AgentRunServices {
     func start(resuming: Bool = false) {
         guard !running, !stopping else { return }
         if resuming, let record = activeRecord { goal = record.goal; mode = record.mode }
-        let id = createConversation(mode: mode)
+        let id: UUID
+        if let primarySessionID, sessions.conversation(primarySessionID) != nil {
+            id = primarySessionID; selectConversation(id)
+        } else { id = createConversation(mode: mode) }
         _ = send(goal, in: id, cloudConsent: true)
     }
     struct PreparedAttachments {
@@ -351,27 +424,33 @@ struct AgentRunServices {
         var text = ""
     }
     func importDraftAttachment(data: Data, name: String, in id: UUID) async throws {
-        try canImportAttachment(in: id); assetMutations += 1
-        defer { assetMutations -= 1 }
+        let worker = executionModel(for: id)
+        if worker !== self { try await worker.importDraftAttachment(data: data, name: name, in: id); return }
+        try canImportAttachment(in: id); appOwner.assetMutations += 1
+        defer { appOwner.assetMutations -= 1 }
         let asset = try await attachments.store(data, name: name, conversationID: id)
         try Task.checkCancellation(); try canImportAttachment(in: id)
         sessions.addDraftAttachment(asset, in: id)
     }
     func importDraftAttachment(file: URL, in id: UUID) async throws {
-        try canImportAttachment(in: id); assetMutations += 1
-        defer { assetMutations -= 1 }
+        let worker = executionModel(for: id)
+        if worker !== self { try await worker.importDraftAttachment(file: file, in: id); return }
+        try canImportAttachment(in: id); appOwner.assetMutations += 1
+        defer { appOwner.assetMutations -= 1 }
         let asset = try await attachments.importFile(file, conversationID: id)
         try Task.checkCancellation(); try canImportAttachment(in: id)
         sessions.addDraftAttachment(asset, in: id)
     }
     private func canImportAttachment(in id: UUID) throws {
-        guard !running, !stopping, !clearingAssets, selectedConversationID == id, sessions.conversation(id) != nil else { throw AppError.stopped }
+        guard !running, !stopping, !appOwner.clearingAssets, appOwner.selectedConversationID == id, sessions.conversation(id) != nil else { throw AppError.stopped }
     }
     @discardableResult func sendDraft(_ text: String, in id: UUID, cloudConsent: Bool) async throws -> Bool {
+        let worker = executionModel(for: id)
+        if worker !== self { return try await worker.sendDraft(text, in: id, cloudConsent: cloudConsent) }
         guard let before = sessions.conversation(id) else { return false }
         let providerBefore = selectedProvider(in: id)
-        try canImportAttachment(in: id); assetMutations += 1
-        defer { assetMutations -= 1 }
+        try canImportAttachment(in: id); appOwner.assetMutations += 1
+        defer { appOwner.assetMutations -= 1 }
         var prepared = PreparedAttachments(references: before.draftAttachments ?? [])
         for asset in prepared.references {
             try Task.checkCancellation()
@@ -389,8 +468,10 @@ struct AgentRunServices {
         return send(text, in: id, cloudConsent: cloudConsent, prepared: prepared)
     }
     @discardableResult func send(_ text: String, in conversationID: UUID, cloudConsent: Bool = false, prepared: PreparedAttachments = PreparedAttachments()) -> Bool {
-        guard !running, !stopping, !clearingAssets, foreground, protectedDataAvailable, listenerTask == nil,
-              selectedConversationID == conversationID, let session = sessions.conversation(conversationID) else { return false }
+        let worker = executionModel(for: conversationID)
+        if worker !== self { return worker.send(text, in: conversationID, cloudConsent: cloudConsent, prepared: prepared) }
+        guard !running, !stopping, !appOwner.clearingAssets, foreground, protectedDataAvailable, listenerTask == nil,
+              primarySessionID == conversationID, let session = sessions.conversation(conversationID) else { return false }
         guard prepared.references == (session.draftAttachments ?? []) else { return false }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let query = trimmed.isEmpty && !prepared.references.isEmpty ? "请查看附件" : trimmed
@@ -402,7 +483,7 @@ struct AgentRunServices {
         let selectedBridge: any DeviceBridge
         let selectedProvider: any LLMProvider
         do {
-            if let runServices { selectedBridge = runServices.bridge; selectedProvider = runServices.provider }
+            if let services = runServicesFactory?(conversationID) ?? runServices { selectedBridge = services.bridge; selectedProvider = services.provider }
             else if selectedMode == .demo { selectedBridge = DemoBridge(); selectedProvider = DemoProvider() }
             else {
                 guard let profile = self.selectedProvider(in: conversationID) else { throw AppError.invalid("请在会话中选择服务商；原服务商可能已移除") }
@@ -415,9 +496,9 @@ struct AgentRunServices {
                 let key = try SecretStore.load(profile.keyAccount) ?? ""
                 let cloud = try PrivateVisionProvider(settings: runSettings, apiKey: key, limits: limits,
                     protocolType: profile.protocolType, parameters: profile.parameters(for: runSettings.model), metadata: profile.metadata(for: runSettings.model))
-                let usbInput = usbClient.map { client in
+                let usbInput = appOwner.usbClient.map { client in
                     LiveDeviceBridgeRouter.USBInput(transport: client, health: client.health,
-                                                   supportsHID: usbConnectionStatus == .ready(hid: true))
+                                                   supportsHID: appOwner.usbConnectionStatus == .ready(hid: true))
                 }
                 switch DeviceControlRoute.current {
                 case .ncmDeveloper:
@@ -425,7 +506,7 @@ struct AgentRunServices {
                 case .localCaptureUSB:
                     selectedBridge = try LiveDeviceBridgeRouter.make(frames: capture.frames, captureActive: capture.active,
                     usb: usbInput, backgroundEnabled: true,
-                    legacy: liveBridge, usbStatus: usbConnectionStatus, diagnostics: usbDiagnostics) { [weak self] reason in
+                    legacy: liveBridge, usbStatus: appOwner.usbConnectionStatus, diagnostics: usbDiagnostics) { [weak self] reason in
                         Task { @MainActor in
                             guard self?.generation == token, self?.finishingRun == false else { return }
                             let message = reason == .sessionInvalid ? (self?.screenExecutionContext?.failureMessage ?? reason.message) : reason.message
@@ -448,6 +529,7 @@ struct AgentRunServices {
             screenExecutionContext?.revoke(); screenExecutionContext = nil; executionScheduler.configure(context: nil, allowSystemProcessing: false)
             provider?.cancel(); provider = nil
             sessions.finish(identity, phase: .blocked, summary: "无法保存运行检查点；未开始执行")
+            Task { await selectedBridge.stop() }
             errorMessage = "无法保存运行检查点；未开始执行"; return false
         }
         runIdentity = identity; generation = token; mode = selectedMode; finishingRun = false
@@ -783,6 +865,12 @@ struct AgentRunServices {
     /// URL contents only select a page. No URL parameter approves, denies or
     /// starts anything. A link to an old run cannot expose a new run's gate.
     @discardableResult func openActivityURL(_ url: URL) -> Bool {
+        if runtimeOwner == nil, let route = AgentActivityRoute(url: url), let worker = existingExecutionModel(for: route.sessionID), worker !== self {
+            let accepted = worker.openActivityURL(url)
+            activityNavigation = worker.activityNavigation; activityLinkError = worker.activityLinkError
+            return accepted
+        }
+
         guard let route = AgentActivityRoute(url: url), let session = sessions.conversation(route.sessionID),
               session.messages.contains(where: { $0.runID == route.runID }) else {
             activityLinkError = "找不到这条实时活动的会话或轮次"; return false
@@ -817,13 +905,13 @@ struct AgentRunServices {
             activityHandoffRun = nil // One deliberate handoff to this same run.
             return
         }
-        if running { stop(message: "已离开控制调试，本轮执行已中断", interrupted: true) }
+        // Closing a view does not own the lifetime of a run.
     }
-    func clearHistory() { guard !running, !stopping else { return }; records = []; activeID = nil; latestFrame = nil; sessions.clear(); persist() }
+    func clearHistory() { guard !appOwner.hasBusySessions else { return }; records = []; activeID = nil; latestFrame = nil; sessions.clear(); persist() }
     func cacheMessageImage(_ url: URL, messageID: UUID, conversationID: UUID, downloader: MessageImageDownloader = MessageImageDownloader()) async throws -> StoredAttachment {
-        guard !clearingAssets else { throw AppError.unavailable("正在清理附件，请稍后重试") }
-        assetMutations += 1
-        defer { assetMutations -= 1 }
+        guard !appOwner.clearingAssets else { throw AppError.unavailable("正在清理附件，请稍后重试") }
+        appOwner.assetMutations += 1
+        defer { appOwner.assetMutations -= 1 }
         func authorizedMessage() -> ChatMessage? {
             sessions.conversation(conversationID)?.messages.first { $0.id == messageID && MessageImageSources.urls(in: $0.text).contains(url) }
         }
@@ -842,9 +930,9 @@ struct AgentRunServices {
         return asset
     }
     func clearUnreferencedAttachments() async throws -> Int {
-        guard !running, !stopping, assetMutations == 0, !clearingAssets else { throw AppError.stopped }
-        clearingAssets = true
-        defer { clearingAssets = false }
+        guard !appOwner.hasBusySessions, appOwner.assetMutations == 0, !appOwner.clearingAssets else { throw AppError.stopped }
+        appOwner.clearingAssets = true
+        defer { appOwner.clearingAssets = false }
         return try await attachments.removeUnreferenced(keeping: sessions.referencedAttachments)
     }
     private func log(_ text: String) { mutate { $0.log(text) } }

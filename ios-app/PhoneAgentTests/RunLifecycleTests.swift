@@ -387,3 +387,41 @@ private struct DisconnectedModel: LLMProvider {
         XCTAssertEqual(model.activeRecord?.phase, .interrupted)
     }
 }
+
+@MainActor final class ExecutionTransitionLeaseTests: XCTestCase {
+    func testUpgradePreservesProgressExpiryAndCompletesOnce() {
+        let handoff = ExecutionTransitionLease(), actual = FakeLease()
+        var expirations = 0
+        handoff.expirationHandler = { expirations += 1 }
+        handoff.report(completed: 3, subtitle: "received")
+        handoff.upgrade(to: actual)
+        XCTAssertTrue(handoff.valid)
+        XCTAssertEqual(actual.reports, [3])
+        handoff.expireTransition() // Late UIKit expiry must not revoke the upgraded grant.
+        XCTAssertTrue(handoff.valid)
+        actual.expirationHandler?()
+        XCTAssertEqual(expirations, 1)
+        XCTAssertEqual(actual.completions, [false])
+        XCTAssertFalse(handoff.valid)
+        handoff.complete(success: true); handoff.expire()
+        XCTAssertEqual(expirations, 1)
+        XCTAssertEqual(actual.completions, [false])
+    }
+    func testGrantArrivingAfterCancellationCannotRestartExecution() {
+        let handoff = ExecutionTransitionLease(), actual = FakeLease()
+        handoff.complete(success: false)
+        handoff.upgrade(to: actual)
+        XCTAssertFalse(handoff.valid)
+        XCTAssertEqual(actual.completions, [false])
+    }
+    func testIndependentLeasesDoNotExpireEachOther() {
+        let first = ExecutionTransitionLease(), second = ExecutionTransitionLease()
+        let a = FakeLease(), b = FakeLease()
+        first.upgrade(to: a); second.upgrade(to: b)
+        first.expire()
+        XCTAssertFalse(first.valid); XCTAssertTrue(second.valid)
+        XCTAssertEqual(a.completions, [false]); XCTAssertTrue(b.completions.isEmpty)
+        second.complete(success: true)
+        XCTAssertEqual(b.completions, [true])
+    }
+}

@@ -168,7 +168,6 @@ extension StatusPiPController: AVPictureInPictureControllerDelegate, AVPictureIn
             text(snapshot.title, y: 83, size: 29, color: .white, weight: .medium)
             text(snapshot.phase.rawValue, y: 143, size: 37, color: .systemTeal, weight: .bold)
             text(snapshot.detail, y: 216, size: 24, color: .white, weight: .regular)
-            text("任务正文已隐藏 · 无悬浮审批", y: 298, size: 20, color: .lightGray, weight: .regular)
         }
         var pixel: CVPixelBuffer?
         let attributes: [CFString: Any] = [kCVPixelBufferCGImageCompatibilityKey: true, kCVPixelBufferCGBitmapContextCompatibilityKey: true, kCVPixelBufferIOSurfacePropertiesKey: [:]]

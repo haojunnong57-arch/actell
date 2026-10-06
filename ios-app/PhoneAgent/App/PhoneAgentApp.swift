@@ -9,7 +9,7 @@ import SwiftUI
         WindowGroup {
             ContentView(model: model, statusPiP: statusPiP, commands: PhoneAgentRuntime.shared.commands)
                 .preferredColorScheme(testColorScheme)
-                .onChange(of: AgentStatusSnapshot.make(mode: model.mode, phase: model.activeRecord?.phase, running: model.running, awaitingApproval: model.approval != nil), initial: true) { _, snapshot in
+                .onChange(of: model.displayStatus, initial: true) { _, snapshot in
                     statusPiP.update(snapshot)
                 }
                 .onChange(of: model.approval?.id) { _, id in
@@ -17,7 +17,6 @@ import SwiftUI
                     if id != nil { Task { await PhoneAgentRuntime.shared.invokeSiriFixtureIfNeeded(busy: true) } }
                     #endif
                 }
-                .overlay { if scenePhase != .active { Color.black.ignoresSafeArea().overlay(Text("已隐藏任务与截图").foregroundStyle(.white)) } }
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     if phase == .background { PairingFlow.shared.background() }
                     else if phase == .active { PairingFlow.shared.resume() }

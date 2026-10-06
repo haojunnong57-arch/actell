@@ -1,6 +1,6 @@
 # iOS Use · PhoneAgent + ESP32 USB Device
 
-当前主路径：iOS 27 主 App 经已配对的 ESP32 NCM 开发者服务获取截图并执行点击/拖动。入口为“设置 → USB 连接 → ESP32 控制”；导航栏设备按钮使用同一控制页面。原 ScreenCaptureKit/PA3 USB HID 与 TLS 链路保留，由 `DeviceControlRoute` 预留切换，暂不添加开关。当前 NCM 控制需保持主 App 前台。会话支持选择 OpenAI Chat Completions 兼容服务商与模型。
+当前主路径：iOS 27 主 App 经已配对的 ESP32 NCM 开发者服务获取截图并执行点击/拖动。入口为“设置 → 手机操控 → ESP32 控制”；首页和消息页不再显示设备入口，设置内的控制入口保留。原 ScreenCaptureKit/PA3 USB HID 与 TLS 链路保留，由 `DeviceControlRoute` 预留切换，暂不添加开关。各会话可并行执行，离开页面不停止；NCM 后台任务复用系统调度，无需启动录屏。同一手机的控制任务按整轮排队。系统资格到期、锁屏或连接故障仍会停止任务。模型服务商在“设置 → 服务商”管理。会话支持选择 OpenAI Chat Completions 兼容服务商与模型。
 
 - [本次待办评估、实现与验证](docs/PROJECT-TODOS.md)
 - [iOS 构建与测试](ios-app/README.md)

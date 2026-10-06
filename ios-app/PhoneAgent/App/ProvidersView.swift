@@ -8,7 +8,7 @@ struct ProvidersView: View {
     @State private var removing: ProviderProfile?
     init(model: AgentViewModel) { self.model = model; providers = model.providers }
     var body: some View {
-        NavigationStack {
+        Group {
             List {
                 if let warning = providers.warning { Text(warning).foregroundStyle(.orange) }
                 if providers.profiles.isEmpty {
@@ -24,7 +24,7 @@ struct ProvidersView: View {
                             Text(profile.settings.baseURL).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }.buttonStyle(.plain).accessibilityIdentifier("provider-\(profile.id)")
-                    .swipeActions { Button("移除", role: .destructive) { removing = profile }.disabled(model.running || model.stopping) }
+                    .swipeActions { Button("移除", role: .destructive) { removing = profile }.disabled(model.hasBusySessions) }
                 }
                 if !providers.removed.isEmpty {
                     Section("已移除 · 可恢复") {
@@ -32,7 +32,7 @@ struct ProvidersView: View {
                             HStack {
                                 Text(profile.name)
                                 Spacer()
-                                Button("恢复") { model.restoreProvider(profile.id) }.disabled(model.running || model.stopping)
+                                Button("恢复") { model.restoreProvider(profile.id) }.disabled(model.hasBusySessions)
                             }
                         }
                     }
@@ -44,11 +44,10 @@ struct ProvidersView: View {
             }
             .navigationTitle("服务商")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
                 ToolbarItem(placement: .primaryAction) {
                     Button { editing = ProviderProfile() } label: { Image(systemName: "plus") }
                         .accessibilityLabel("添加服务商").accessibilityIdentifier("addProvider")
-                        .disabled(model.running || model.stopping || providers.warning != nil)
+                        .disabled(model.hasBusySessions || providers.warning != nil)
                 }
             }
             .sheet(item: $editing) { profile in ProviderEditor(model: model, profile: profile) }
@@ -131,7 +130,7 @@ private struct ProviderEditor: View {
                 }
                 if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
             }
-            .disabled(model.running || model.stopping)
+            .disabled(model.hasBusySessions)
             .navigationTitle("编辑服务商").navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingModels) {
                 ProviderModelPicker(profile: profile) { profile.settings.model = $0 }
@@ -146,7 +145,7 @@ private struct ProviderEditor: View {
                     Button("保存") {
                         profile.models = modelList.components(separatedBy: .newlines)
                         if model.saveProvider(profile, key: key) { key = ""; dismiss() }
-                    }.disabled(model.running || model.stopping).accessibilityIdentifier("saveProvider")
+                    }.disabled(model.hasBusySessions).accessibilityIdentifier("saveProvider")
                 }
             }
         }

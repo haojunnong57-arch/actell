@@ -1,6 +1,6 @@
 # PhoneAgent iOS
 
-最低 iOS 27，Bundle ID 保持 `com.ja1chen.PhoneAgent`。主任务默认通过 ESP32 NCM 开发者服务获取截图与输入，导航栏设备按钮与“设置 → USB 连接 → ESP32 控制”共用控制页面；原 ScreenCaptureKit/PA3 HID 和 TLS 实现保留，暂未提供切换开关。当前 NCM 控制需保持主 App 前台；独立服务商页支持添加、编辑、确认移除及恢复。会话选择服务商/模型，当前运行不允许切换配置。现有单服务商配置与 Keychain 引用自动保留；修改服务地址不会转发旧地址的密钥。
+最低 iOS 27，Bundle ID 保持 `com.ja1chen.PhoneAgent`。截图与输入工具默认通过 ESP32 NCM 开发者服务执行；连接只在实际工具调用时校验，普通聊天不要求连接。手机操控入口位于“设置 → 手机操控 → ESP32 控制”；首页和消息页不再显示设备入口。原 ScreenCaptureKit/PA3 HID 和 TLS 实现保留，暂未提供切换开关。NCM 任务在系统后台资格有效时可继续，无需启动录屏；各会话独立运行，同一手机控制按整轮排队。服务商管理位于“设置 → 服务商”，支持添加、编辑、确认移除及恢复。会话选择服务商/模型，当前运行不允许切换配置。现有单服务商配置与 Keychain 引用自动保留；修改服务地址不会转发旧地址的密钥。
 
 真实模型使用 screenshot / tap / drag / wait 设备工具，最终文字回复结束本轮。启用用户导入的技能后，额外提供 list_skills / search_skills / load_skill，只按需读取该技能包的文本。同一响应可含多个工具，按返回顺序串行执行；每个动作仍须经过原有授权、截图与故障检查，ID 不得重复或重用。模型调用数、输入数、累计 token 与固定运行时长不再作为产品预算。图像/协议大小、网络故障、系统后台资格、锁屏、手动停止、未知动作不重放仍然生效。App 不保证系统无限后台执行。
 
@@ -35,6 +35,6 @@ RUN_UI_TESTS=1 bash ios-app/scripts/test_core.sh <隔离模拟器-UDID>
 
 页面提供系统配对、连接/停止、截图和真实点击计数验证；文件位于 `PhoneAgent/ESP32Control`。主 App 编译复用 `../ncm-dev/PhoneAgentNCM` 的 Swift/C ABI 和 Rust 后端，构建阶段自动生成当前平台的静态库，支持 arm64 真机和 arm64 模拟器。Probe 共用同一界面。
 
-配对使用独立 `.pairing` 系统持续任务；普通 NCM 控制会话在 App 进入后台或受保护数据不可用时关闭。主 App 沙盒中的身份随更新保留，不读取或导出 Probe 的身份。截图复用已有认证会话，状态维持“已连接”，仅截图按钮显示操作进度。
+配对使用独立 `.pairing` 系统持续任务；普通 NCM 任务复用系统持续执行调度，并用系统短时后台任务衔接申请过程，无需启动录屏。有效任务保留认证连接；后台资格到期、受保护数据不可用或连接故障时停止。空闲连接进入后台时关闭。主 App 沙盒中的身份随更新保留，不读取或导出 Probe 的身份。切换或退出会话页面不取消执行；各会话独立保存 Agent、模型请求、审批、检查点与实时活动。同一台手机的 NCM 控制任务按整轮排队，等待任务取消不撤销当前设备所有者。截图复用已有认证会话，状态维持“已连接”，仅截图按钮显示操作进度。
 
 固件使用 `bash tools/build_usb_device.sh ncm`；主任务 screenshot/tap/drag 已切换到新开发者后端，旧链路保留在统一路由选择入口。详见 [主工程整合](../docs/ncm-coredevice/MAIN-INTEGRATION.md)。Siri 与旧系统集成历史见 [归档文档](../archives/history/ios-app/docs/SIRI-ENTRY.md)。

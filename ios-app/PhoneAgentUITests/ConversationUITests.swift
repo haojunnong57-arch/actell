@@ -12,60 +12,155 @@ import XCTest
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
     }
-    func testDeviceControlsReplaceDebugAndSettingsUSBWithoutStartingAnything() {
+    func testDeviceControlsAndSettingsDoNotStartAnything() {
         let app = launch()
-        XCTAssertTrue(app.buttons["deviceControls"].waitForExistence(timeout: 10))
-        app.buttons["deviceControls"].tap()
-        XCTAssertTrue(app.navigationBars["设备控制"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["connectUSBNCM"].exists)
-        XCTAssertTrue(app.buttons["startScreenCapture"].exists)
-        XCTAssertFalse(app.buttons["startScreenCapture"].isEnabled)
-        XCTAssertEqual(app.staticTexts["usbConnectionStatus"].label, "USB 尚未连接")
-        for label in ["离线演示", "最新截图", "动作记录", "旧 USB Host 方案", "开始监听"] {
-            XCTAssertFalse(app.staticTexts[label].exists)
-        }
-        capture("device-panel")
-        app.buttons["完成"].tap(); app.buttons["设置"].tap()
+        XCTAssertFalse(app.buttons["openProviders"].exists)
+        XCTAssertFalse(app.buttons["deviceControls"].exists)
+        app.buttons["设置"].tap()
         XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["controlDebug"].exists)
-        XCTAssertFalse(app.staticTexts["USB 连接"].exists)
+        XCTAssertTrue(app.buttons["openProviders"].exists)
+        XCTAssertTrue(app.buttons["esp32ControlSettings"].exists)
         capture("settings")
+        app.buttons["esp32ControlSettings"].tap()
+        XCTAssertTrue(app.navigationBars["ESP32 控制"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["startScreenCapture"].exists)
+        capture("device-panel")
+    }
+    private func openProviders(_ app: XCUIApplication) {
+        XCTAssertFalse(app.buttons["openProviders"].exists)
+        app.buttons["设置"].tap()
+        XCTAssertTrue(app.buttons["openProviders"].waitForExistence(timeout: 5))
+        app.buttons["openProviders"].tap()
+        XCTAssertTrue(app.navigationBars["服务商"].waitForExistence(timeout: 5))
+    }
+    private func closeProviders(_ app: XCUIApplication) {
+        app.navigationBars["服务商"].buttons["BackButton"].tap()
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
+        app.buttons["关闭"].tap()
     }
     private func addProvider(_ app: XCUIApplication, name: String, model: String) {
         app.buttons["addProvider"].tap()
         let field = app.textFields["providerName"]
-        XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(name)
+        XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.tap(); field.typeText(name)
         let modelField = app.textFields["providerModel"]
-        modelField.tap(); modelField.typeText(model)
+        modelField.tap(); modelField.tap(); modelField.typeText(model)
         app.buttons["saveProvider"].tap()
         XCTAssertTrue(app.staticTexts[name].waitForExistence(timeout: 5))
     }
     func testMultipleProvidersAndSessionModelSelection() {
-        let app = launch()
-        XCTAssertTrue(app.buttons["openProviders"].waitForExistence(timeout: 10))
-        app.buttons["openProviders"].tap()
-        addProvider(app, name: "Fixture One", model: "model-a")
-        addProvider(app, name: "Fixture Two", model: "model-b")
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-composer-models"]
+        app.launch()
+        openProviders(app)
+        XCTAssertTrue(app.staticTexts["Fixture One"].exists)
+        XCTAssertTrue(app.staticTexts["Fixture Two"].exists)
         capture("providers")
-        app.buttons["关闭"].tap(); app.buttons["newConversation"].tap()
+        closeProviders(app); app.buttons["newConversation"].tap()
         let picker = app.buttons["conversationModelPicker"]
+        XCTAssertFalse(picker.exists)
+        app.textViews["messageInput"].tap()
+        app.textViews["messageInput"].tap()
         XCTAssertTrue(picker.waitForExistence(timeout: 5)); picker.tap()
         app.buttons["Fixture Two"].tap()
-        XCTAssertTrue(picker.label.contains("model-b"))
+        if app.buttons["Fixture Two"].exists { app.buttons["Fixture Two"].tap() }
+        if !picker.exists { app.textViews["messageInput"].tap() }
+        let selectedProvider = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "model-b"), object: picker)
+        XCTAssertEqual(XCTWaiter.wait(for: [selectedProvider], timeout: 5), .completed)
         picker.tap(); app.buttons["其他模型…"].tap()
         let input = app.alerts.textFields.firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 3))
-        input.tap(); input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 7) + "model-custom")
-        app.alerts.buttons["使用"].tap()
-        XCTAssertTrue(picker.label.contains("model-custom"))
+        input.tap(); input.tap(); input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 7) + "model-custom")
+        XCTAssertEqual(input.value as? String, "model-custom")
+        // Finish keyboard editing before tapping the alert action; iOS 27
+        // relocates this alert while the software keyboard is visible.
+        input.typeText("\n")
+        if app.alerts.buttons["使用"].exists { app.alerts.buttons["使用"].tap() }
+        app.textViews["messageInput"].tap()
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "model-custom"), object: picker)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
         capture("conversation-model")
-        app.buttons["deviceControls"].tap()
-        XCTAssertTrue(app.navigationBars["设备控制"].waitForExistence(timeout: 5))
-        app.buttons["完成"].tap()
-        XCTAssertTrue(picker.label.contains("model-custom"))
+        XCTAssertFalse(app.buttons["deviceControls"].exists)
+        XCTAssertFalse(app.buttons["设置"].exists)
+        XCTAssertFalse(app.buttons["滚动到最新消息"].exists)
+        let add = app.buttons["addAttachment"].frame
+        let send = app.buttons["sendMessage"].frame
+        XCTAssertEqual(add.midY, send.midY, accuracy: 1)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertFalse(app.buttons["deviceControls"].exists)
+        app.buttons["设置"].tap()
+        app.buttons["esp32ControlSettings"].tap()
+        XCTAssertTrue(app.navigationBars["ESP32 控制"].waitForExistence(timeout: 5))
+    }
+    func testComposerActivationPreservesVisibleBottomAndMovesActionsBelowText() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-composer-history"]
+        app.launch()
+        app.staticTexts["新会话"].firstMatch.tap()
+        let input = app.textViews["messageInput"]
+        let last = app.staticTexts["滚动验收最后一条消息"]
+        XCTAssertTrue(last.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["conversationModelPicker"].exists)
+        print("Collapsed viewport", app.scrollViews["conversationMessages"].value ?? "", "input", input.frame, "last", last.frame)
+        let collapsedGap = input.frame.minY - last.frame.maxY
+        let add = app.buttons["addAttachment"]
+        let send = app.buttons["sendMessage"]
+        XCTAssertEqual(add.frame.midY, send.frame.midY, accuracy: 1)
+        XCTAssertLessThan(abs(add.frame.midY - input.frame.midY), 2)
+        capture("composer-collapsed")
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["conversationModelPicker"].waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(add.frame.minY, input.frame.midY)
+        XCTAssertGreaterThan(send.frame.minY, input.frame.midY)
+        XCTAssertEqual(add.frame.midY, send.frame.midY, accuracy: 1)
+        print("Expanded viewport", app.scrollViews["conversationMessages"].value ?? "", "input", input.frame, "last exists", last.exists)
+        let bottomKept = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            last.exists && abs(input.frame.minY - last.frame.maxY - collapsedGap) < 12
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [bottomKept], timeout: 5), .completed)
+        capture("composer-expanded-keyboard")
+        app.scrollViews["conversationMessages"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !app.keyboards.firstMatch.exists && last.exists && abs(input.frame.minY - last.frame.maxY - collapsedGap) < 12
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed)
+        XCTAssertFalse(app.buttons["conversationModelPicker"].exists)
+        capture("composer-keyboard-dismissed")
+    }
+    func testKeyboardPreservesBottomContentWhileReadingHistory() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-composer-history"]
+        app.launch()
+        app.staticTexts["新会话"].firstMatch.tap()
+        let input = app.textViews["messageInput"]
+        XCTAssertTrue(app.staticTexts["滚动验收最后一条消息"].waitForExistence(timeout: 5))
+        app.scrollViews["conversationMessages"].swipeDown()
+        let markers = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "滚动验收 ")).allElementsBoundByIndex
+        let visible = markers.filter { $0.frame.minY > 116 && $0.frame.maxY < input.frame.minY }
+        guard let selectedMarker = visible.max(by: { $0.frame.maxY < $1.frame.maxY }) else { return XCTFail("缺少底部可见的历史消息") }
+        let marker = app.staticTexts[selectedMarker.label]
+        let gap = input.frame.minY - marker.frame.maxY
+        print("History before", app.scrollViews["conversationMessages"].value ?? "", marker.label, "gap", gap)
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let preserved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            marker.exists && abs(input.frame.minY - marker.frame.maxY - gap) < 12
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [preserved], timeout: 5), .completed)
+        print("History after", app.scrollViews["conversationMessages"].value ?? "", "gap", input.frame.minY - marker.frame.maxY)
+        capture("composer-history-keyboard")
+        app.scrollViews["conversationMessages"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !app.keyboards.firstMatch.exists && marker.exists && abs(input.frame.minY - marker.frame.maxY - gap) < 12
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed)
+        capture("composer-history-keyboard-dismissed")
     }
     func testProviderRemovalNeedsConfirmationAndCanBeRestored() {
-        let app = launch(); app.buttons["openProviders"].tap()
+        let app = launch(); openProviders(app)
         addProvider(app, name: "Recoverable", model: "model-a")
         app.staticTexts["Recoverable"].swipeLeft(); app.buttons["移除"].tap()
         XCTAssertTrue(app.buttons["移除服务商"].waitForExistence(timeout: 3))
@@ -87,7 +182,7 @@ import XCTest
         app.buttons["suggestedPrompt"].tap(); app.buttons["sendMessage"].tap()
         XCTAssertTrue(app.buttons["approveTool"].waitForExistence(timeout: 10))
         app.buttons["stopRun"].tap()
-        XCTAssertTrue(app.staticTexts["已停止"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["已停止；已发出的动作可能已执行，请核对设备"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["approveTool"].exists)
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.staticTexts["查看演示画面，点击计数器一次，再检查结果"].firstMatch.tap()
@@ -97,7 +192,7 @@ import XCTest
     func testDiscoverModelsConfigureParameterAndSelectCachedModelInConversation() {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing", "--ui-test-model-catalog"]; app.launch()
-        app.buttons["openProviders"].tap(); app.staticTexts["Catalog Fixture"].tap()
+        openProviders(app); app.staticTexts["Catalog Fixture"].tap()
         XCTAssertTrue(app.buttons["fetchModels"].waitForExistence(timeout: 5)); app.buttons["fetchModels"].tap()
         XCTAssertTrue(app.buttons["chooseDiscoveredModel"].waitForExistence(timeout: 5))
         app.buttons["chooseDiscoveredModel"].tap()
@@ -106,8 +201,10 @@ import XCTest
         let parameter = app.textFields["parameter-temperature"]
         XCTAssertTrue(parameter.waitForExistence(timeout: 3)); parameter.tap(); parameter.typeText("0.4")
         capture("model-parameters")
-        app.buttons["saveProvider"].tap(); app.buttons["关闭"].tap(); app.buttons["newConversation"].tap()
+        app.buttons["saveProvider"].tap(); closeProviders(app); app.buttons["newConversation"].tap()
         let picker = app.buttons["conversationModelPicker"]
+        app.textViews["messageInput"].tap()
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
         XCTAssertTrue(picker.label.contains("fixture-vision")); picker.tap(); app.buttons["fixture-other"].tap()
         XCTAssertTrue(picker.label.contains("fixture-other"))
         capture("discovered-model-selection")

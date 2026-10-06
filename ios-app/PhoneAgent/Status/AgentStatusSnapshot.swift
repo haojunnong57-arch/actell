@@ -19,7 +19,7 @@ struct AgentStatusSnapshot: Equatable, Sendable {
         switch phase {
         case .confirmation: return "请回到 App 查看截图并确认"
         case .interrupted: return "返回后需手动重新开始"
-        case .running: return "切换 App 会中断执行"
+        case .running: return "后台运行由系统分配执行时间"
         default: return "此卡片只展示状态，不执行操作"
         }
     }

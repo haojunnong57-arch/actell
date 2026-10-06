@@ -79,7 +79,8 @@ import SwiftAgentKit
         XCTAssertNil(other.presentation(for: realMessage)?.image)
         XCTAssertNil(other.presentation(for: realMessage)?.approval)
         XCTAssertNil(other.pendingApproval)
-        XCTAssertNil(ui.pendingApproval)
+        XCTAssertNotNil(ui.pendingApproval)
+        model.stop()
         XCTAssertFalse(ui.dispatch(.send(sessionID: ui.sessionID, text: "过期窗口", cloudConsent: false)))
         try await waitUntil { !model.stopping }
     }

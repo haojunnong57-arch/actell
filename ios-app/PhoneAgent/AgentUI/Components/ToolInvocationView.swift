@@ -8,6 +8,15 @@
 
 import SwiftUI
 
+/// Shared symbol sizing for message disclosure and approval headers.
+struct MessageHeaderIcon: View {
+    let systemName: String
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.body).imageScale(.small).foregroundStyle(.secondary).accessibilityHidden(true)
+    }
+}
+
 struct ToolInvocationConfiguration {
     let tool: ToolStep
     var onApprove: (() -> Void)?
@@ -37,8 +46,7 @@ struct ToolInvocationView<Preview: View>: View {
 
     private var toolHeader: some View {
         HStack(spacing: 8) {
-            Image(systemName: configuration.tool.symbol)
-                .font(.body).imageScale(.small).foregroundStyle(.secondary).accessibilityHidden(true)
+            MessageHeaderIcon(systemName: configuration.tool.symbol)
             Text(configuration.tool.title)
                 .font(.body).fontWeight(.regular).foregroundStyle(.secondary)
             Spacer(minLength: 8)
@@ -129,7 +137,7 @@ struct ToolApprovalCard<Preview: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Image(systemName: "wrench.and.screwdriver").imageScale(.small).foregroundStyle(.secondary).accessibilityHidden(true)
+                MessageHeaderIcon(systemName: "wrench.and.screwdriver")
                 Text(configuration.tool.title).foregroundStyle(.secondary)
                 Spacer()
                 Text("需要授权").font(.caption).foregroundStyle(.secondary)

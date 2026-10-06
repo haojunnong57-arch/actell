@@ -19,9 +19,9 @@ struct AgentActivitySnapshot: Equatable {
     @Published private(set) var notice: String?
     private var foreground = true
     private let enabled: Bool
-    private var activity: Activity<AgentActivityAttributes>?
+    private var activities: [UUID: Activity<AgentActivityAttributes>] = [:]
     private var tail: Task<Void, Never>?
-    private var latest: AgentActivitySnapshot?
+    private var latest: [UUID: AgentActivitySnapshot] = [:]
 
     init(enabled: Bool = true) {
         self.enabled = enabled
@@ -41,11 +41,11 @@ struct AgentActivitySnapshot: Equatable {
         foreground = active
         // Leave a truthful interrupted card on the island while away. On
         // return, end it; the executor is already cancelled in either case.
-        if active, let latest, latest.state.phase.isTerminal { submit(latest) }
+        if active { for snapshot in latest.values where snapshot.state.phase.isTerminal { submit(snapshot) } }
     }
 
     func submit(_ snapshot: AgentActivitySnapshot) {
-        latest = snapshot
+        latest[snapshot.attributes.runID] = snapshot
         guard enabled else { return }
         let previous = tail
         tail = Task { [weak self] in
@@ -56,13 +56,9 @@ struct AgentActivitySnapshot: Equatable {
     }
 
     private func apply(_ snapshot: AgentActivitySnapshot) async {
-        if let old = activity, old.attributes.runID != snapshot.attributes.runID {
-            var state = old.content.state; state.phase = .interrupted; state.approvalID = nil; state.updatedAt = Date()
-            await old.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .immediate)
-            activity = nil
-        }
+        let run = snapshot.attributes.runID
         if snapshot.state.phase.isTerminal {
-            if let current = activity, current.attributes.runID == snapshot.attributes.runID {
+            if let current = activities[run] {
                 if !foreground, snapshot.state.phase == .interrupted {
                     // One final update, no heartbeat or background task. Ending
                     // here would immediately remove the useful return-to-app
@@ -71,15 +67,16 @@ struct AgentActivitySnapshot: Equatable {
                     await current.update(ActivityContent(state: snapshot.state, staleDate: nil))
                 } else {
                     await current.end(ActivityContent(state: snapshot.state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(300)))
-                    activity = nil
+                    activities.removeValue(forKey: run)
+                    latest.removeValue(forKey: run)
                 }
-            }
+            } else { latest.removeValue(forKey: run) }
             return
         }
         // Suppress queued obsolete updates and never start after cancellation.
-        guard latest == snapshot else { return }
+        guard latest[run] == snapshot else { return }
         let content = ActivityContent(state: snapshot.state, staleDate: snapshot.staleDate)
-        if let activity {
+        if let activity = activities[run] {
             guard activity.activityState == .active || activity.activityState == .stale else { return }
             await activity.update(content)
         } else {
@@ -87,7 +84,7 @@ struct AgentActivitySnapshot: Equatable {
                 notice = "实时活动未开启；仍可在 App 内查看与确认"; return
             }
             do {
-                activity = try Activity.request(attributes: snapshot.attributes, content: content, pushType: nil)
+                activities[run] = try Activity.request(attributes: snapshot.attributes, content: content, pushType: nil)
                 notice = nil
             } catch { notice = "实时活动暂不可用；仍可在 App 内查看与确认" }
         }

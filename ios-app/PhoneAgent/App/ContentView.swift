@@ -9,7 +9,7 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var path: [UUID] = []
     @State private var search = ""
-    private enum Panel: String, Identifiable { case settings, providers, device; var id: String { rawValue } }
+    private enum Panel: String, Identifiable { case settings; var id: String { rawValue } }
     @State private var panel: Panel?
     init(model: AgentViewModel, statusPiP: StatusPiPController, commands: SessionCommandService) {
         self.commands = commands
@@ -41,20 +41,8 @@ struct ContentView: View {
                         if let warning = sessions.warning { Label(warning, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange) }
                         ForEach(visible) { session in
                             NavigationLink(value: session.id) {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    HStack(spacing: 8) {
-                                        Text(session.title).font(.headline).lineLimit(1)
-                                        if session.phase == .awaitingApproval, model.approval(in: session.id) != nil {
-                                            Text("待确认").font(.caption2).foregroundStyle(.orange)
-                                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                                .background(.orange.opacity(0.10), in: Capsule())
-                                                .fixedSize()
-                                                .accessibilityIdentifier("conversation-needs-approval")
-                                        }
-                                        Spacer(minLength: 0)
-                                    }
-                                    Text(session.preview).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                                }
+                                Text(session.title).font(.headline).lineLimit(1)
+                                    .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
                             }
                             .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 16))
                             .swipeActions { if !model.isRunning(in: session.id) { Button("删除", role: .destructive) { sessions.delete(session.id) } } }
@@ -66,24 +54,16 @@ struct ContentView: View {
             .navigationTitle("会话")
             .searchable(text: $search, prompt: "搜索会话")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button { panel = .settings } label: { Image(systemName: "gearshape") }.accessibilityLabel("设置") }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { panel = .providers } label: { Image(systemName: "server.rack") }
-                        .accessibilityLabel("服务商").accessibilityIdentifier("openProviders")
-                    Button { panel = .device } label: { Image(systemName: "iphone.gen3.radiowaves.left.and.right") }
-                        .accessibilityLabel("设备控制").accessibilityIdentifier("deviceControls")
-                }
+                ToolbarItem(placement: .topBarLeading) { Button { panel = .settings } label: { Image(systemName: "gear") }.accessibilityLabel("设置") }
                 ToolbarItem(placement: .topBarTrailing) { Button(action: createConversation) { Image(systemName: "square.and.pencil") }.accessibilityLabel("新建会话").accessibilityIdentifier("newConversationToolbar") }
             }
             .navigationDestination(for: UUID.self) { id in
                 ConversationView(model: model, conversationID: id,
-                    openSettings: { panel = .settings }, openDevice: { panel = .device }, openProviders: { panel = .providers }).id(id)
+                    openProviders: { panel = .settings }).id(id)
             }
             .sheet(item: $panel) { item in
                 switch item {
                 case .settings: SettingsView(model: model)
-                case .providers: ProvidersView(model: model)
-                case .device: DeviceControlsView(model: model)
                 }
             }
 

@@ -89,7 +89,6 @@ enum SessionPublicStatus: String, Sendable {
         case .open:
             guard let id = command.sessionID, let session = sessions.conversation(id),
                   session.entry?.state == .pendingConfirmation else { throw SessionCommandError.missingSession }
-            guard !runner.commandBusy else { return .deferred }
             return .open(id)
         case .status:
             let status = runner.commandStatus
@@ -102,14 +101,15 @@ enum SessionPublicStatus: String, Sendable {
 }
 
 extension AgentViewModel: SessionCommandRunning {
-    var commandBusy: Bool { running || stopping || isListening }
+    var commandBusy: Bool { hasBusySessions || isListening }
     var commandStatus: SessionPublicStatus {
-        if stopping { return .stopping }
-        if running { return approval == nil ? .running : .awaitingApproval }
+        if let run = currentRun, let worker = existingExecutionModel(for: run.conversationID) {
+            if worker.stopping { return .stopping }
+            if worker.running { return worker.approval == nil ? .running : .awaitingApproval }
+        }
         return .idle
     }
     func cancelCommandRun(_ identity: RunIdentity) -> Bool {
-        guard currentRun == identity, running, !stopping else { return false }
-        stop(); return true // Existing runner/coordinator drain, never just UI state.
+        return stop(run: identity) // Existing runner/coordinator drain, never just UI state.
     }
 }

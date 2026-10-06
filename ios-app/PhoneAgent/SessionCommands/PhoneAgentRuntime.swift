@@ -1,6 +1,6 @@
 import Foundation
 
-/// There is one app process, one conversation store, and one lifecycle-managed runner.
+/// There is one app process, one conversation store, and independently lifecycle-managed conversation runners.
 @MainActor final class PhoneAgentRuntime {
     static let shared = PhoneAgentRuntime()
     let model: AgentViewModel
@@ -69,6 +69,20 @@ import Foundation
                     try? await model.importDraftAttachment(data: Data("Synthetic file contents".utf8), name: "synthetic.md", in: id)
                 }
                 return model
+            }
+            if arguments.contains("--ui-test-composer-models") {
+                let model = AgentViewModel(sessions: sessions, loadPersistentState: false)
+                try? model.providers.save(ProviderProfile(name: "Fixture One", settings: .init(baseURL: "https://fixture.invalid/v1", model: "model-a")))
+                try? model.providers.save(ProviderProfile(name: "Fixture Two", settings: .init(baseURL: "https://fixture.invalid/v1", model: "model-b")))
+                return model
+            }
+            if arguments.contains("--ui-test-composer-history") {
+                let id = sessions.create(mode: .live)
+                for index in 0..<30 {
+                    sessions.addNotice("滚动验收 \(index)\n保持键盘开合前后的底部可见内容\n这是仅用于 UI 验收的本地记录", in: id)
+                }
+                sessions.addNotice("滚动验收最后一条消息", in: id)
+                return AgentViewModel(sessions: sessions, loadPersistentState: false)
             }
             if arguments.contains("--ui-test-model-catalog") {
                 let model = AgentViewModel(sessions: sessions, loadPersistentState: false)

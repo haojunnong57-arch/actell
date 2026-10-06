@@ -13,7 +13,7 @@ struct SkillsView: View {
                 Text("技能是供模型按需读取的本地文本参考。启用后，发送任务时允许模型查询摘要、读取相关内容；不会执行脚本，也不能扩大任务或设备权限。")
                     .font(.caption)
                 Button("导入 SKILL.md 或文本技能包", systemImage: "square.and.arrow.down") { importing = true }
-                    .disabled(model.running || model.stopping).accessibilityIdentifier("importSkill")
+                    .disabled(model.hasBusySessions).accessibilityIdentifier("importSkill")
                 DisclosureGroup("支持的格式") {
                     Text("选择 SKILL.md，或根目录含 SKILL.md 的文件夹。元数据用 --- 包围，必须有 name: 和 description:，可选 version:；支持简单文本及 | / > 多行值。包内只支持 UTF-8 Markdown/TXT，最多 32 个文档、每个 64 KiB、整包 512 KiB；不支持 ZIP、脚本、二进制文件或符号链接。参考文档按相对路径单独加载。")
                         .font(.caption)
@@ -44,7 +44,7 @@ struct SkillsView: View {
                                     .accessibilityIdentifier("enableSkill-" + skill.id.uuidString)
                                 Button("删除", role: .destructive) { deleting = skill }.buttonStyle(.borderless)
                                     .accessibilityIdentifier("deleteSkill-" + skill.id.uuidString)
-                            }.disabled(model.running || model.stopping)
+                            }.disabled(model.hasBusySessions)
                         }
                     }
                 }
@@ -67,7 +67,7 @@ struct SkillsView: View {
         } message: { Text("只删除 App 内此版本的副本，原始导入文件与其他版本保留。以后需要时可以重新导入。") }
     }
     private func perform(_ operation: () throws -> Void) {
-        guard !model.running, !model.stopping else { status = "请先停止当前任务再修改技能"; return }
+        guard !model.hasBusySessions else { status = "请先停止当前任务再修改技能"; return }
         do { try operation() }
         catch { status = error.localizedDescription }
     }

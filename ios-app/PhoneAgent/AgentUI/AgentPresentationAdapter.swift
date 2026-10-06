@@ -21,18 +21,19 @@ struct ToolPresentation {
 
 @MainActor final class AgentPresentationAdapter: ObservableObject {
     private let model: AgentViewModel
+    private let navigationModel: AgentViewModel
     let sessionID: UUID
     private var subscriptions = Set<AnyCancellable>()
 
     init(model: AgentViewModel, sessionID: UUID) {
-        self.model = model; self.sessionID = sessionID
-        model.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
+        self.navigationModel = model; self.model = model.executionModel(for: sessionID); self.sessionID = sessionID
+        self.model.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
         model.sessions.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
     }
 
     var activityNavigation: ActivityNavigation? { model.activityNavigation.flatMap { $0.route.sessionID == sessionID ? $0 : nil } }
     var session: AgentConversation? { model.sessions.conversation(sessionID) }
-    var activeRun: RunIdentity? { model.currentRun.flatMap { $0.conversationID == sessionID ? $0 : nil } }
+    var activeRun: RunIdentity? { model.ownedRun.flatMap { $0.conversationID == sessionID ? $0 : nil } }
     var backgroundStatus: String { model.backgroundStatus }
     var running: Bool { activeRun != nil && model.running }
     var stopping: Bool { model.stopping }
@@ -60,8 +61,8 @@ struct ToolPresentation {
         return messages.reversed().lazy.compactMap { self.presentation(for: $0) }.first { $0.approval != nil }
     }
 
-    func open() { model.selectConversation(sessionID) }
-    func close() { model.leaveConversation(sessionID) }
+    func open() { navigationModel.selectConversation(sessionID) }
+    func close() { navigationModel.leaveConversation(sessionID) }
     var awaitingTaskConfirmation: Bool { session?.entry?.state == .pendingConfirmation }
     func dismissPreparedTask() {
         do { try model.sessions.dismissPreparedTask(in: sessionID) }
@@ -83,7 +84,7 @@ struct ToolPresentation {
     }
 
     @discardableResult func dispatch(_ intent: AgentUIIntent) -> Bool {
-        guard model.selectedConversationID == sessionID else { return false }
+        guard navigationModel.selectedConversationID == sessionID else { return false }
         switch intent {
         case .send(let id, let text, let consent):
             guard id == sessionID else { return false }

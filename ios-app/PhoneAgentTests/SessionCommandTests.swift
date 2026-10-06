@@ -50,13 +50,13 @@ import AppIntents
         XCTAssertEqual(Set(restored.conversations.compactMap { $0.entry?.commandID }).count, 2)
         XCTAssertNil(restored.activeRun)
     }
-    func testBusyOpenDefersWithoutCancellingOrSelectingAnotherRun() throws {
+    func testBusyOpenAllowsNavigationWithoutCancellingAnotherRun() throws {
         let store = ConversationStore(inMemory: true), runner = CommandMockRunner()
         runner.currentRun = RunIdentity(conversationID: UUID(), runID: UUID())
         runner.commandBusy = true; runner.commandStatus = .running
         let service = SessionCommandService(sessions: store, runner: runner)
         let id = try store.prepare(SessionCommand(.prepare("稍后任务")), task: "稍后任务")
-        XCTAssertEqual(try service.perform(SessionCommand(.open, sessionID: id)), .deferred)
+        XCTAssertEqual(try service.perform(SessionCommand(.open, sessionID: id)), .open(id))
         XCTAssertNotNil(runner.currentRun)
         XCTAssertTrue(runner.cancellations.isEmpty)
         XCTAssertEqual(service.pendingRoute, id)

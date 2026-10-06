@@ -4,18 +4,21 @@ import MarkdownUI
 struct ConversationView: View {
     @State private var browsingModels = false
     @StateObject private var presentation: AgentPresentationAdapter
-    let openSettings: () -> Void
-    let openDevice: () -> Void
     let openProviders: () -> Void
-    init(model: AgentViewModel, conversationID: UUID, openSettings: @escaping () -> Void, openDevice: @escaping () -> Void, openProviders: @escaping () -> Void) {
+    init(model: AgentViewModel, conversationID: UUID, openProviders: @escaping () -> Void) {
         _presentation = StateObject(wrappedValue: AgentPresentationAdapter(model: model, sessionID: conversationID))
-        self.openSettings = openSettings; self.openDevice = openDevice; self.openProviders = openProviders
+        self.openProviders = openProviders
     }
     @State private var draft = ""
     @State private var choosingModel = false
     @State private var customModel = ""
     @State private var followLatest = true
+    @State private var userScrolling = false
+    @State private var lastMessageVisible = false
     @State private var focused = false
+    @State private var scrollPosition = ScrollPosition()
+    @State private var deferredViewportShift: CGFloat = 0
+    @State private var viewportDiagnostic = ""
     @State private var importingAttachments = false
     @State private var sendingAttachments = false
     @State private var attachmentFailure: String?
@@ -31,26 +34,17 @@ struct ConversationView: View {
         Group {
             if let session {
                 VStack(spacing: 0) {
-                    HStack(spacing: 8) {
-                        Circle().fill(session.mode == .demo ? .teal : .blue).frame(width: 6, height: 6)
-                        if session.mode == .demo { Text("历史演示 · 合成屏幕") }
-                        else { modelPicker }
-                        Spacer()
-                        Text(session.phase.label).foregroundStyle(session.phase == .awaitingApproval ? .orange : .secondary)
-                    }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20).padding(.vertical, 10)
                     if let navigation = presentation.activityNavigation {
                         Text(navigation.notice).font(.caption).foregroundStyle(.secondary)
                             .padding(.horizontal, 20).padding(.bottom, 8).accessibilityIdentifier("activityNavigationNotice")
                     }
-                    if running { Text(presentation.backgroundStatus).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20).accessibilityIdentifier("backgroundRunStatus") }
-                    Divider()
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 12) {
                                 if presentation.awaitingTaskConfirmation {
                                     VStack(alignment: .leading, spacing: 12) {
                                         Label("Siri · 待确认", systemImage: "waveform").font(.headline)
-                                        Text("任务已保存，尚未开始。请核对或编辑下方识别文本，再点“确认开始”。确认后会发送给当前模型，并授权 ESP32 执行本次任务内的普通点击和拖动。")
+                                        Text("请核对或编辑下方文本，再点“确认开始”。")
                                             .foregroundStyle(.secondary)
                                         Text(session.draft).textSelection(.enabled).accessibilityIdentifier("siriRecognizedTask")
                                         Button("取消这份草稿", role: .cancel) {
@@ -61,40 +55,70 @@ struct ConversationView: View {
                                 } else if session.messages.isEmpty { welcome(session.mode) }
                                 ForEach(session.messages) { message in
                                     messageView(message).id(message.id)
+                                        .onScrollVisibilityChange(threshold: 0.01) { visible in
+                                            guard message.id == session.messages.last?.id else { return }
+                                            lastMessageVisible = visible
+                                            if userScrolling { followLatest = visible }
+                                        }
                                 }
                                 if running && presentation.pendingApproval == nil { HStack(spacing: 8) { ProgressView().controlSize(.small); Text(presentation.status).font(.caption).foregroundStyle(.secondary) } }
                                 Color.clear.frame(height: 1).id("latest")
                             }.padding(.horizontal, 20).padding(.vertical, 12).frame(maxWidth: 780).frame(maxWidth: .infinity)
                         }
                         .accessibilityIdentifier("conversationMessages")
+                        .accessibilityValue(viewportDiagnostic)
                         .scrollDismissesKeyboard(.interactively)
-                        .simultaneousGesture(DragGesture().onChanged { _ in followLatest = false })
-                        .onChange(of: session.messages) { _, _ in if followLatest { proxy.scrollTo("latest", anchor: .bottom) } }
-                        .onChange(of: presentation.approvalID) { _, _ in if followLatest { proxy.scrollTo("latest", anchor: .bottom) } }
-                        .onAppear { if presentation.activityNavigation == nil { proxy.scrollTo("latest", anchor: .bottom) } }
+                        .simultaneousGesture(TapGesture().onEnded { focused = false })
+                        .scrollEdgeEffectStyle(.soft, for: .bottom)
+                        .defaultScrollAnchor(.bottom, for: .initialOffset)
+                        .scrollPosition($scrollPosition, anchor: .top)
+                        .onScrollPhaseChange { old, phase, context in
+                            userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+                            if phase == .idle && (old == .tracking || old == .interacting || old == .decelerating) {
+                                followLatest = lastMessageVisible || session.messages.isEmpty
+                                if deferredViewportShift != 0 {
+                                    let geometry = context.geometry
+                                    scrollPosition.scrollTo(y: max(0, geometry.contentOffset.y + geometry.contentInsets.top + deferredViewportShift))
+                                    deferredViewportShift = 0
+                                }
+                            }
+                        }
+                        .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { old, new in
+                            let shift = old.containerSize.height - new.containerSize.height
+                            if ProcessInfo.processInfo.arguments.contains("--ui-test-composer-history") {
+                                viewportDiagnostic = "offset=\(new.contentOffset.y) height=\(new.containerSize.height) bottomInset=\(new.contentInsets.bottom) topInset=\(new.contentInsets.top) shift=\(shift)"
+                            }
+                            if shift != 0 {
+                                if userScrolling {
+                                    deferredViewportShift += shift
+                                } else if followLatest {
+                                    proxy.scrollTo("latest", anchor: .bottom)
+                                } else {
+                                    scrollPosition.scrollTo(y: max(0, old.contentOffset.y + new.contentInsets.top + shift))
+                                }
+                            } else if followLatest && !userScrolling && old.contentSize != new.contentSize {
+                                proxy.scrollTo("latest", anchor: .bottom)
+                            }
+                        }
+                        .onChange(of: session.messages) { _, _ in if followLatest && !userScrolling { proxy.scrollTo("latest", anchor: .bottom) } }
+                        .onChange(of: presentation.approvalID) { _, _ in if followLatest && !userScrolling { proxy.scrollTo("latest", anchor: .bottom) } }
+                        .task {
+                            guard presentation.activityNavigation == nil else { return }
+                            followLatest = true
+                            await Task.yield()
+                            proxy.scrollTo("latest", anchor: .bottom)
+                        }
                         .task(id: presentation.activityNavigation?.id) {
                             guard let navigation = presentation.activityNavigation, let target = navigation.messageID else { return }
                             followLatest = false
                             await Task.yield()
                             proxy.scrollTo(target, anchor: .center)
                         }
-                        .overlay(alignment: .bottomTrailing) {
-                            if !followLatest {
-                                Button { followLatest = true; withAnimation { proxy.scrollTo("latest", anchor: .bottom) } } label: { Image(systemName: "arrow.down").padding(12).background(.regularMaterial, in: Circle()) }
-                                    .padding().accessibilityLabel("滚动到最新消息")
-                            }
-                        }
+
                     }
                 }
-                .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+                .safeAreaBar(edge: .bottom, spacing: 0) { composer }
                 .navigationTitle(session.title).navigationBarTitleDisplayMode(.inline)
-                 .toolbar {
-                    ToolbarItemGroup(placement: .topBarTrailing) {
-                        Button(action: openDevice) { Image(systemName: "iphone.gen3.radiowaves.left.and.right") }
-                            .accessibilityLabel("设备控制").accessibilityIdentifier("deviceControls")
-                        Button(action: openSettings) { Image(systemName: "gearshape") }.accessibilityLabel("设置")
-                    }
-                }
                 .alert("选择模型", isPresented: $choosingModel) {
                     TextField("模型 ID", text: $customModel).textInputAutocapitalization(.never).autocorrectionDisabled()
                     Button("使用") { presentation.selectModel(customModel.trimmingCharacters(in: .whitespacesAndNewlines)) }
@@ -135,7 +159,7 @@ struct ConversationView: View {
             Button("管理服务商", action: openProviders)
         } label: {
             Label(presentation.modelName, systemImage: "chevron.down").lineLimit(1)
-        }.disabled(running || presentation.stopping).accessibilityIdentifier("conversationModelPicker")
+        }.menuOrder(.fixed).disabled(running || presentation.stopping).accessibilityIdentifier("conversationModelPicker")
     }
     private func welcome(_ mode: RunMode) -> some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -214,34 +238,52 @@ struct ConversationView: View {
                 Text("发送后将图片及文本内容交给当前模型。支持单帧图片 ≤20 MiB、UTF-8 TXT/MD/JSON/CSV ≤256 KiB；暂不支持 PDF/Office。图片按最长边 2048 像素发送，原图保留本机。")
                     .font(.caption2).foregroundStyle(.secondary)
             }
-            if session?.mode == .live && !running {
-                Text("发送即开始任务，并授权 ESP32 自动执行任务内的普通点击和拖动；你可随时停止。")
-                    .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("taskInputAuthorizationHelp")
-            }
-            HStack(alignment: .bottom, spacing: 12) {
-                AttachmentPicker(presentation: presentation, busy: $importingAttachments, failure: $attachmentFailure, cancellation: $importCancellation)
-                    .disabled(sendingAttachments)
-                ZStack(alignment: .topLeading) {
-                    if draft.isEmpty {
-                        Text("随心输入").foregroundStyle(.tertiary).padding(.vertical, 10)
-                            .allowsHitTesting(false).accessibilityHidden(true)
-                    }
-                    MessageInput(text: $draft, focused: $focused, disabled: running || presentation.stopping || sendingAttachments, onSubmit: send)
+            VStack(spacing: 0) {
+                HStack(alignment: .center, spacing: 4) {
+                    if !focused { attachmentButton }
+                    messageField
+                    if !focused { sendButton }
                 }
-                if running {
-                    Button { if let run = presentation.activeRun { presentation.dispatch(.stop(run: run)) } } label: { Image(systemName: "stop.fill").font(.body.bold()).frame(width: 38, height: 38).background(Color(uiColor: .label), in: Circle()).foregroundStyle(Color(uiColor: .systemBackground)) }
-                        .accessibilityLabel("停止执行").accessibilityIdentifier("stopRun")
-                } else if presentation.awaitingTaskConfirmation {
-                    Button("确认开始") { sendConfirmedTask() }
-                        .buttonStyle(.borderedProminent).disabled(!canSend)
-                        .accessibilityIdentifier("confirmSiriTask")
-                } else {
-                    Button { send() } label: { Image(systemName: "arrow.up").font(.body.bold()).frame(width: 38, height: 38).background(.blue, in: Circle()).foregroundStyle(.white) }
-                        .disabled(!canSend)
-                        .accessibilityLabel("发送").accessibilityIdentifier("sendMessage")
+                .padding(.leading, focused ? 10 : 4)
+                .padding(.trailing, focused ? 10 : 9)
+                if focused {
+                    HStack(spacing: 8) {
+                        attachmentButton
+                        Spacer(minLength: 0)
+                        if session?.mode != .demo { modelPicker.font(.caption).foregroundStyle(.secondary) }
+                        sendButton
+                    }.padding(.leading, 4).padding(.trailing, 8)
                 }
-            }.padding(.horizontal, 15).padding(.vertical, 6).background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24))
+            }.padding(.vertical, 6)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24))
         }.padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 8)
+    }
+    private var attachmentButton: some View {
+        AttachmentPicker(presentation: presentation, busy: $importingAttachments, failure: $attachmentFailure, cancellation: $importCancellation)
+            .disabled(sendingAttachments)
+    }
+    private var messageField: some View {
+        ZStack(alignment: .topLeading) {
+            if draft.isEmpty {
+                Text("随心输入").foregroundStyle(.tertiary).padding(.vertical, 10)
+                    .allowsHitTesting(false).accessibilityHidden(true)
+            }
+            MessageInput(text: $draft, focused: $focused, disabled: running || presentation.stopping || sendingAttachments, onSubmit: send)
+        }
+    }
+    @ViewBuilder private var sendButton: some View {
+        if running {
+            Button { if let run = presentation.activeRun { presentation.dispatch(.stop(run: run)) } } label: { Image(systemName: "stop.fill").font(.body.bold()).frame(width: 38, height: 38).background(Color(uiColor: .label), in: Circle()).foregroundStyle(Color(uiColor: .systemBackground)) }
+                .accessibilityLabel("停止执行").accessibilityIdentifier("stopRun")
+        } else if presentation.awaitingTaskConfirmation {
+            Button("确认开始") { sendConfirmedTask() }
+                .buttonStyle(.borderedProminent).disabled(!canSend)
+                .accessibilityIdentifier("confirmSiriTask")
+        } else {
+            Button { send() } label: { Image(systemName: "arrow.up").font(.body.bold()).frame(width: 38, height: 38).background(.blue, in: Circle()).foregroundStyle(.white) }
+                .disabled(!canSend)
+                .accessibilityLabel("发送").accessibilityIdentifier("sendMessage")
+        }
     }
     @ViewBuilder private func toolPreview(_ item: ToolPresentation) -> some View {
         if !item.attachments.isEmpty, item.approval == nil {

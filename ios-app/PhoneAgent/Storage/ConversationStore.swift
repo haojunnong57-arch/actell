@@ -6,7 +6,8 @@ import Combine
 /// credentials or resumable tool queues.
 @MainActor final class ConversationStore: ObservableObject {
     @Published private(set) var conversations: [AgentConversation] = []
-    @Published private(set) var activeRun: RunIdentity?
+    @Published private(set) var activeRuns: [UUID: RunIdentity] = [:]
+    var activeRun: RunIdentity? { activeRuns.values.first }
     @Published private(set) var warning: String?
     private let file: URL?
     private var canWrite = true
@@ -120,27 +121,27 @@ import Combine
         conversations[index].draft = String(text.prefix(2_000)); scheduleSave()
     }
     func addDraftAttachment(_ attachment: StoredAttachment, in id: UUID) {
-        guard attachment.conversationID == id, activeRun?.conversationID != id, let index = index(id) else { return }
+        guard attachment.conversationID == id, activeRuns[id] == nil, let index = index(id) else { return }
         var references = conversations[index].draftAttachments ?? []
         guard !references.contains(where: { $0.id == attachment.id }) else { return }
         references.append(attachment); conversations[index].draftAttachments = references; saveNow()
     }
     func removeDraftAttachment(_ attachmentID: UUID, in id: UUID) {
-        guard activeRun?.conversationID != id, let index = index(id) else { return }
+        guard activeRuns[id] == nil, let index = index(id) else { return }
         conversations[index].draftAttachments?.removeAll { $0.id == attachmentID }; saveNow()
     }
     func delete(_ id: UUID) {
-        guard activeRun?.conversationID != id else { return }
+        guard activeRuns[id] == nil else { return }
         conversations.removeAll { $0.id == id }; saveNow()
     }
     func clear() {
-        guard activeRun == nil else { return }
+        guard activeRuns.isEmpty else { return }
         conversations = []; saveNow()
     }
     func begin(in id: UUID, query: String, attachments: [StoredAttachment] = []) -> RunIdentity? {
-        guard activeRun == nil, let index = index(id) else { return nil }
+        guard activeRuns[id] == nil, let index = index(id) else { return nil }
         let identity = RunIdentity(conversationID: id, runID: UUID())
-        activeRun = identity
+        activeRuns[id] = identity
         if conversations[index].messages.isEmpty { conversations[index].title = String(query.prefix(48)) }
         conversations[index].phase = .running; conversations[index].draft = ""
         if conversations[index].entry?.state == .pendingConfirmation {
@@ -154,7 +155,7 @@ import Combine
         touch(index); saveNow()
         return identity
     }
-    func accepts(_ identity: RunIdentity) -> Bool { activeRun == identity }
+    func accepts(_ identity: RunIdentity) -> Bool { activeRuns[identity.conversationID] == identity }
     func beginAssistantTurn(_ identity: RunIdentity) {
         guard accepts(identity), let index = index(identity.conversationID) else { return }
         conversations[index].messages.append(ChatMessage(runID: identity.runID, role: .assistant, text: "", state: .streaming))
@@ -220,7 +221,7 @@ import Combine
         addNotice(checkpoint.message, in: checkpoint.conversationID)
     }
     func selectProvider(_ providerID: UUID?, model: String?, in id: UUID) {
-        guard let index = index(id), activeRun?.conversationID != id else { return }
+        guard let index = index(id), activeRuns[id] == nil else { return }
         conversations[index].providerID = providerID
         conversations[index].modelID = model
         touch(index); saveNow()
@@ -237,7 +238,7 @@ import Combine
         if !summary.isEmpty {
             conversations[index].messages.append(ChatMessage(runID: identity.runID, role: .notice, text: String(summary.prefix(1_000)), state: phase == .blocked ? .failed : .complete))
         }
-        activeRun = nil; touch(index); saveNow()
+        activeRuns.removeValue(forKey: identity.conversationID); touch(index); saveNow()
     }
     /// Only public text from this conversation is used as context. Historical
     /// tools/images are never re-enqueued or used to authorize new input.

@@ -401,7 +401,7 @@ final class ScreenUSBPermitTests: XCTestCase {
         XCTAssertNil(model.approval)
         XCTAssertNil(model.activitySnapshot?.state.approvalID)
         guard case .prepared(let later) = try service.perform(SessionCommand(.prepare("下一条草稿"))) else { return XCTFail() }
-        XCTAssertEqual(try service.perform(SessionCommand(.open, sessionID: later)), .deferred)
+        XCTAssertEqual(try service.perform(SessionCommand(.open, sessionID: later)), .open(later))
         XCTAssertEqual(model.currentRun, run)
         let link = AgentActivityRoute(sessionID: run.conversationID, runID: run.runID).url
         XCTAssertTrue(model.openActivityURL(link))
@@ -419,7 +419,7 @@ final class ScreenUSBPermitTests: XCTestCase {
         model.approve(true)
         let repeated = await transport.inputs; XCTAssertEqual(repeated.count, 1)
     }
-    func testSiriScopedStopRevokesBackgroundApprovalAndManualDebugExitStillStops() async throws {
+    func testSiriScopedStopRevokesApprovalAndDebugExitPreservesRun() async throws {
         let source = try SyntheticCapture(), transport = GuardedUSBFixture()
         let model = try model(source, transport: transport)
         let service = SessionCommandService(sessions: model.sessions, runner: model)
@@ -439,10 +439,12 @@ final class ScreenUSBPermitTests: XCTestCase {
         another.start()
         let newRun = try XCTUnwrap(another.currentRun)
         XCTAssertTrue(another.openActivityURL(AgentActivityRoute(sessionID: newRun.conversationID, runID: newRun.runID, approvalID: nil).url))
-        another.enterControlDebug() // A prior link cannot exempt a future manual exit.
+        another.enterControlDebug()
         another.leaveControlDebug()
+        XCTAssertTrue(another.running)
+        another.stop()
         try await waitUntil { !another.running && !another.stopping }
-        XCTAssertEqual(another.activeRecord?.phase, .interrupted)
+        XCTAssertEqual(another.activeRecord?.phase, .stopped)
     }
     func testCaptureLossBeforeEnqueueStopsInputEvenWhenFramesChange() async throws {
         let source = try SyntheticCapture(), transport = GuardedUSBFixture(delay: 500_000_000)

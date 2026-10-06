@@ -23,7 +23,7 @@ struct DeviceControlsView: View {
             Section {
                 Label(capture.status, systemImage: "rectangle.inset.filled.and.person.filled")
                 Button("授权全屏采集") { capture.present() }
-                    .disabled(capture.active || capture.busy || !capture.isSupported || model.running || model.stopping)
+                    .disabled(capture.active || capture.busy || !capture.isSupported || model.hasBusySessions)
                     .accessibilityIdentifier("startScreenCapture")
                 Button("停止采集", role: .destructive) { model.stopCapture() }
                     .disabled(!capture.active && !capture.busy).accessibilityIdentifier("stopScreenCapture")
@@ -41,7 +41,7 @@ struct DeviceControlsView: View {
                     Button("断开 USB", role: .destructive) { model.disconnect() }.accessibilityIdentifier("disconnectUSB")
                 } else {
                     Button("连接 USB NCM") { model.connectUSB() }
-                        .disabled(model.running || model.stopping).accessibilityIdentifier("connectUSBNCM")
+                        .disabled(model.hasBusySessions).accessibilityIdentifier("connectUSBNCM")
                 }
             } header: { Text("USB NCM") } footer: {
                 Text("点击和拖动需要 USB HID，截图无需连接 ESP32。任务结束后连接保持；断开会停止当前输入。USB 以太网地址 192.168.7.2，掩码 255.255.255.0，路由器与 DNS 留空。")

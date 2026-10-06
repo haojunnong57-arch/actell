@@ -1,22 +1,32 @@
 import Foundation
 import BackgroundTasks
+import UIKit
 
 @available(iOS 27.0, *)
 @MainActor final class ContinuedProcessingScheduler: RunBackgroundScheduler {
+    private var leases: [String: ExecutionTransitionLease] = [:]
     private var submissions: [String: Task<Void, Never>] = [:]
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void) throws {
         try submit(identifier: identifier, launched: launched, failed: {})
     }
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void,
                 failed: @escaping @MainActor () -> Void) throws {
+        let transition = ExecutionTransitionLease()
+        transition.begin()
+        leases[identifier] = transition
         // The permitted Info.plist prefix is a wildcard, but both registration
         // and submission use this same concrete, unique per-segment identifier.
         guard BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: .main, launchHandler: { task in
             MainActor.assumeIsolated {
                 guard let continued = task as? BGContinuedProcessingTask else { task.setTaskCompleted(success: false); return }
-                launched(ContinuedProcessingLease(task: continued))
+                transition.upgrade(to: ContinuedProcessingLease(task: continued))
+                if transition.valid { launched(transition) }
             }
-        }) else { throw AppError.unavailable("后台片段 ID 注册失败") }
+        }) else {
+            transition.complete(success: false); leases.removeValue(forKey: identifier)
+            throw AppError.unavailable("后台片段 ID 注册失败")
+        }
+        if transition.valid { launched(transition) }
         submissions[identifier] = Task { [weak self] in
             defer { self?.submissions.removeValue(forKey: identifier) }
             do {
@@ -26,7 +36,7 @@ import BackgroundTasks
                 // Re-cancel after acceptance so an ended run leaves no request.
                 if Task.isCancelled { BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier) }
             }
-            catch { if !Task.isCancelled { failed() } }
+            catch { if !Task.isCancelled && !transition.valid { failed() } }
         }
     }
     private nonisolated static func submitRequest(identifier: String) async throws {
@@ -38,6 +48,7 @@ import BackgroundTasks
         try await BGTaskScheduler.shared.submitTaskRequest(request)
     }
     func cancel(identifier: String) {
+        leases.removeValue(forKey: identifier)?.complete(success: false)
         submissions.removeValue(forKey: identifier)?.cancel()
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
     }
@@ -75,5 +86,51 @@ import BackgroundTasks
             task.progress.completedUnitCount = task.progress.totalUnitCount
         }
         task.setTaskCompleted(success: success)
+    }
+}
+
+/// A real finite UIKit grant covers the scheduler handoff. The same lease
+/// upgrades to continued processing without losing the coordinator's expiry fence.
+@MainActor final class ExecutionTransitionLease: RunBackgroundLease {
+    private var token: UIBackgroundTaskIdentifier = .invalid
+    private var continued: (any RunBackgroundLease)?
+    private var completed = false
+    private var progress: (Int, String)?
+    var expirationHandler: (() -> Void)?
+    var valid: Bool { !completed && (token != .invalid || continued != nil) }
+    func begin() {
+        guard !completed, token == .invalid else { return }
+        token = UIApplication.shared.beginBackgroundTask(withName: "PhoneAgent execution") { [weak self] in
+            Task { @MainActor in self?.expireTransition() }
+        }
+    }
+    func upgrade(to lease: any RunBackgroundLease) {
+        guard !completed, continued == nil else { lease.complete(success: false); return }
+        continued = lease
+        lease.expirationHandler = { [weak self] in self?.expire() }
+        endTransition()
+        if let progress { lease.report(completed: progress.0, subtitle: progress.1) }
+    }
+    func expireTransition() {
+        guard token != .invalid, continued == nil else { return }
+        expire()
+    }
+    func expire() {
+        guard !completed else { return }
+        expirationHandler?()
+        complete(success: false)
+    }
+    private func endTransition() {
+        guard token != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(token); token = .invalid
+    }
+    func report(completed: Int, subtitle: String) {
+        guard !self.completed else { return }
+        progress = (completed, subtitle); continued?.report(completed: completed, subtitle: subtitle)
+    }
+    func complete(success: Bool) {
+        guard !completed else { return }
+        completed = true; expirationHandler = nil
+        endTransition(); continued?.complete(success: success); continued = nil
     }
 }

@@ -243,10 +243,10 @@ final class USBInputPermit: @unchecked Sendable {
 }
 
 @MainActor enum RunLifecycleFactory {
-    static func make(persistent: Bool, scheduler: any RunBackgroundScheduler) -> RunLifecycleCoordinator {
+    static func make(persistent: Bool, scheduler: any RunBackgroundScheduler, directory: URL? = nil) -> RunLifecycleCoordinator {
         let storage: any RunCheckpointStorage
         if persistent {
-            do { storage = try RunCheckpointStore() }
+            do { storage = try RunCheckpointStore(directory: directory) }
             catch { storage = UnavailableCheckpointStore() }
         } else { storage = MemoryRunCheckpointStore() }
         return RunLifecycleCoordinator(scheduler: scheduler, storage: storage)

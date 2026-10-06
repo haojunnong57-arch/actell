@@ -16,7 +16,11 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     private var generation = UUID()
     private(set) var controlSessionID = UUID()
     private var agentOwner: UUID?
-    var agentReserved: Bool { agentOwner != nil }
+    private var connectionUsers: Set<UUID> = []
+    private var agentRuns: Set<UUID> = []
+    private var agentQueue: [UUID] = []
+    private var isBackground = false
+    var agentReserved: Bool { !agentRuns.isEmpty || agentOwner != nil }
     private var registeredBackgroundTask = false
     private var mediaStarted = false
     private var job: Task<Void, Never>?
@@ -118,7 +122,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     }
     func cancel() {
         stopHeartbeat()
-        generation = UUID(); controlSessionID = UUID(); agentOwner = nil
+        generation = UUID(); controlSessionID = UUID(); agentOwner = nil; agentRuns.removeAll(); agentQueue.removeAll()
         job?.cancel(); pairing.close(); service?.stop(); service = nil
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.taskID)
         if pairingActive { finishPairing(success: false) }
@@ -126,18 +130,20 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         message = "已停止；已保存的身份会保留"
     }
     func background() {
+        isBackground = true
         // The continued task intentionally keeps pairing alive while Settings is open.
-        if !pairingActive {
+        if !pairingActive && !agentReserved && connectionUsers.isEmpty {
             cancel()
             message = "App 已进入后台，控制会话已关闭；配对身份保留。回到前台可重新验证 ESP32 连接"
         }
     }
     func resume() {
+        isBackground = false
         hasRecord = store.exists
         if hasRecord, !pairingActive, !running, !ready { verify() }
     }
     func verify() {
-        guard !running, agentOwner == nil, store.exists else { return }
+        guard !running, !agentReserved, store.exists else { return }
         let previousMaintenance = heartbeatTask
         stopHeartbeat()
         generation = UUID(); controlSessionID = UUID(); let epoch = generation
@@ -184,7 +190,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         self.message = "已发送屏幕中心点击，请观察手机确认实际效果"
     } }
     private func operation(capturing: Bool = false, _ action: @escaping @MainActor () async throws -> Void) {
-        guard ready, !running, agentOwner == nil else { return }
+        guard ready, !running, !agentReserved else { return }
         generation = UUID(); let epoch = generation
         running = true; self.capturing = capturing
         job = Task { @MainActor in
@@ -217,8 +223,18 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     /// A task pins one authenticated session. Reconnect never silently substitutes
     /// another generation; diagnostics and task traffic share the operation gate.
     func agentOperation<T>(owner: UUID, session: UUID, action: (NativeDeveloperServices) async throws -> T) async throws -> T {
-        guard ready, controlSessionID == session else { throw NCMControlError.unavailable("ESP32 控制未连接，请在设置 → USB 连接 → ESP32 控制中连接") }
-        guard !running, agentOwner == nil || agentOwner == owner else { throw NCMControlError.unavailable("ESP32 控制正忙，请等待当前操作完成") }
+        guard ready, controlSessionID == session else { throw NCMControlError.unavailable("ESP32 控制未连接，请在设置 → 手机操控 → ESP32 控制中连接") }
+        if agentOwner != owner {
+            if !agentQueue.contains(owner) { agentQueue.append(owner) }
+            defer { agentQueue.removeAll { $0 == owner } }
+            while running || agentOwner != nil || agentQueue.first != owner {
+                try Task.checkCancellation()
+                guard ready, controlSessionID == session, agentRuns.contains(owner) else { throw NCMControlError.stopped }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+        }
+        try Task.checkCancellation()
+        guard ready, controlSessionID == session, agentRuns.contains(owner) else { throw NCMControlError.stopped }
         agentOwner = owner
         running = true
         defer { if controlSessionID == session { running = false } }
@@ -244,7 +260,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
             }
             message = failure(error) + "；请重新连接 ESP32"; lastFailure = message
             stopHeartbeat(); ready = false; mediaStarted = false; backend.close()
-            controlSessionID = UUID(); agentOwner = nil; running = false
+            invalidateAgentSession(); running = false
             throw NCMControlError.unavailable(message)
         }
     }
@@ -255,11 +271,32 @@ enum NCMControlError: Error { case unavailable(String), stopped }
             mediaStarted = true
         }
     }
+    private func invalidateAgentSession() {
+        controlSessionID = UUID(); agentOwner = nil
+        agentRuns.removeAll(); agentQueue.removeAll()
+    }
+    func retainConnection(owner: UUID) { connectionUsers.insert(owner) }
+    func releaseConnection(owner: UUID) {
+        connectionUsers.remove(owner)
+        if isBackground && !pairingActive && !agentReserved && connectionUsers.isEmpty { cancel() }
+    }
+    func registerAgent(owner: UUID, session: UUID) {
+        guard ready, controlSessionID == session else { return }
+        agentRuns.insert(owner)
+    }
     func releaseAgent(owner: UUID, session: UUID) {
-        guard agentOwner == owner, controlSessionID == session else { return }
+        guard controlSessionID == session else { return }
+        agentRuns.remove(owner); agentQueue.removeAll { $0 == owner }
+        guard agentOwner == owner else {
+            if isBackground && !pairingActive && !agentReserved && connectionUsers.isEmpty { cancel() }
+            return
+        }
         // Cancellation during an operation revokes transport; normal completion
         // only releases ownership, retaining the foreground control connection.
-        if running { cancel() } else { agentOwner = nil }
+        if running { cancel() } else {
+            agentOwner = nil
+            if isBackground && !pairingActive && !agentReserved && connectionUsers.isEmpty { cancel() }
+        }
     }
     private func stopHeartbeat() {
         heartbeatEpoch = UUID(); heartbeatTask?.cancel(); heartbeatTask = nil; maintenanceBusy = false
@@ -281,7 +318,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
                 } catch {
                     guard self.heartbeatEpoch == epoch else { return }
                     self.maintenanceBusy = false; self.ready = false; self.mediaStarted = false
-                    self.backend.close(); self.controlSessionID = UUID(); self.agentOwner = nil
+                    self.backend.close(); self.invalidateAgentSession()
                     self.message = "前台连接保活失败：" + self.failure(error) + "；请重新连接 ESP32"
                     self.lastFailure = self.message
                     return

@@ -150,30 +150,53 @@ import XCTest
         XCTAssertFalse(session.messages.contains { $0.role == .notice })
         XCTAssertEqual(session.messages.filter { $0.role == .assistant }.map(\.text), ["我会查看屏幕。"])
     }
-    func testRapidSwitchAndStaleApprovalCannotExecuteInNewConversation() async throws {
+    func testConcurrentSessionsKeepApprovalsAndCancelIndependently() async throws {
         let store = ConversationStore(inMemory: true)
         let model = AgentViewModel(sessions: store, loadPersistentState: false)
-        defer { model.stop() }
         let a = model.createConversation(mode: .demo)
-        XCTAssertTrue(model.send("A", in: a))
-        XCTAssertFalse(model.send("重复 A", in: a))
-        try await waitUntil { model.approval(in: a) != nil }
-        let oldApproval = try XCTUnwrap(model.approval(in: a))
+        let first = AgentPresentationAdapter(model: model, sessionID: a)
+        XCTAssertTrue(first.dispatch(.send(sessionID: a, text: "A", cloudConsent: false)))
+        try await waitUntil { first.pendingApproval != nil }
+        let approvalA = try XCTUnwrap(first.pendingApproval)
+        first.close()
+        XCTAssertTrue(first.running)
+        XCTAssertNotNil(first.pendingApproval)
         let b = model.createConversation(mode: .demo)
-        XCTAssertFalse(model.send("清理期间不能发送", in: b))
-        model.approve(true, approvalID: oldApproval.id, conversationID: a)
-        try await waitUntil { !model.stopping }
-        XCTAssertEqual(store.conversation(a)?.phase, .interrupted)
-        XCTAssertTrue(model.send("B", in: b))
-        try await waitUntil { model.approval(in: b) != nil }
-        let current = try XCTUnwrap(model.approval(in: b))
-        model.approve(true, approvalID: oldApproval.id, conversationID: a)
-        XCTAssertEqual(model.approval(in: b)?.id, current.id)
-        model.approve(false, approvalID: current.id, conversationID: b)
-        try await waitUntil { !model.stopping }
-        XCTAssertFalse(store.conversations.flatMap(\.messages).contains { $0.tool?.name == "tap" && $0.tool?.state == .succeeded })
-        XCTAssertEqual(store.conversation(a)?.messages.filter { $0.role == .user }.count, 1)
-        XCTAssertEqual(store.conversation(b)?.messages.first?.text, "B")
+        let second = AgentPresentationAdapter(model: model, sessionID: b)
+        XCTAssertTrue(second.dispatch(.send(sessionID: b, text: "B", cloudConsent: false)))
+        try await waitUntil { second.pendingApproval != nil }
+        let approvalB = try XCTUnwrap(second.pendingApproval)
+        XCTAssertEqual(store.activeRuns.count, 2)
+        XCTAssertNotEqual(approvalA.image?.id, approvalB.image?.id)
+        XCTAssertFalse(first.dispatch(.approve(step: approvalA.identity, approvalID: approvalA.approval!.id)))
+        XCTAssertTrue(second.dispatch(.stop(run: approvalB.identity.run)))
+        try await waitUntil { !second.stopping }
+        XCTAssertTrue(first.running)
+        XCTAssertEqual(first.pendingApproval?.approval?.id, approvalA.approval?.id)
+        XCTAssertEqual(store.activeRuns.count, 1)
+        first.open()
+        XCTAssertFalse(first.dispatch(.stop(run: approvalB.identity.run)))
+        XCTAssertTrue(first.dispatch(.approve(step: approvalA.identity, approvalID: approvalA.approval!.id)))
+        try await waitUntil { !first.running && !first.stopping }
+        XCTAssertEqual(store.conversation(a)?.phase, .completed)
+        XCTAssertEqual(store.conversation(b)?.phase, .stopped)
+        XCTAssertEqual(store.conversation(a)?.messages.compactMap(\.tool).filter { $0.name == "tap" && $0.state == .succeeded }.count, 1)
+        XCTAssertFalse(store.conversation(b)?.messages.compactMap(\.tool).contains { $0.name == "tap" && $0.state == .succeeded } ?? true)
+    }
+    func testParallelStoreCallbacksRemainScopedAfterOneRunEnds() throws {
+        let store = ConversationStore(inMemory: true)
+        let a = store.create(mode: .demo), b = store.create(mode: .demo)
+        let first = try XCTUnwrap(store.begin(in: a, query: "A"))
+        let second = try XCTUnwrap(store.begin(in: b, query: "B"))
+        store.beginAssistantTurn(first); store.beginAssistantTurn(second)
+        store.appendText("first", identity: first); store.appendText("second", identity: second)
+        store.finish(first, phase: .stopped, summary: "")
+        store.appendText("late", identity: first)
+        store.appendText(" continues", identity: second)
+        XCTAssertEqual(store.activeRuns[b], second)
+        XCTAssertNil(store.activeRuns[a])
+        XCTAssertEqual(store.conversation(b)?.messages.last?.text, "second continues")
+        XCTAssertFalse(store.conversation(a)?.messages.contains { $0.text.contains("late") } ?? true)
     }
     func testBackgroundCancellationFencesLateEvents() async throws {
         let store = ConversationStore(inMemory: true)

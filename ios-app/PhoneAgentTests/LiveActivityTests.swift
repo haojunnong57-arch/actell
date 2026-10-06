@@ -178,8 +178,12 @@ import Combine
         model.stop(); try await waitUntil { !model.stopping }
         let other = model.createConversation(mode: .demo)
         XCTAssertTrue(model.send("other session", in: other))
-        XCTAssertFalse(model.openActivityURL(route.url))
+        XCTAssertTrue(model.openActivityURL(route.url))
         XCTAssertEqual(model.selectedConversationID, other)
+        XCTAssertTrue(model.isRunning(in: other))
+        let otherRun = try XCTUnwrap(model.executionModel(for: other).ownedRun)
+        XCTAssertTrue(model.stop(run: otherRun))
+        try await waitUntil { !model.executionModel(for: other).stopping }
     }
     func testBackgroundStopsAndClearsAllActionAuthority() async throws {
         let model = try await pendingDemo()

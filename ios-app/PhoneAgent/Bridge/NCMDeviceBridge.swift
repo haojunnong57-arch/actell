@@ -10,7 +10,7 @@ enum DeviceControlRoute: Sendable {
     var modelContext: String {
         switch self {
         case .ncmDeveloper:
-            return "Screenshots and touch input use the authenticated ESP32 NCM developer connection. PhoneAgent must stay in the foreground; backgrounding or reconnecting invalidates this run."
+            return "Screenshots and touch input use the authenticated ESP32 NCM developer connection. Background execution uses system-granted execution time; reconnecting invalidates this run."
         case .localCaptureUSB:
             return "Screenshots use this App's authorized ScreenCaptureKit capture, independently of USB. Touch input uses the retained USB HID route. Follow the tools' actual foreground/background capabilities."
         }
@@ -25,7 +25,16 @@ enum DeviceControlRoute: Sendable {
     func agentCapture(owner: UUID, session: UUID) async throws -> Data
     func agentTap(owner: UUID, session: UUID, x: UInt16, y: UInt16, validate: () throws -> Void) async throws
     func agentDrag(owner: UUID, session: UUID, fromX: UInt16, fromY: UInt16, toX: UInt16, toY: UInt16, durationMS: UInt16, validate: () throws -> Void) async throws
+    func retainConnection(owner: UUID)
+    func releaseConnection(owner: UUID)
+    func registerAgent(owner: UUID, session: UUID)
     func releaseAgent(owner: UUID, session: UUID)
+}
+
+extension NCMControlConnection {
+    func retainConnection(owner: UUID) {}
+    func releaseConnection(owner: UUID) {}
+    func registerAgent(owner: UUID, session: UUID) {}
 }
 
 extension PairingFlow: NCMControlConnection {
@@ -64,24 +73,40 @@ private final class NCMRunFence: @unchecked Sendable {
 /// Images and approval are bound to this run and authenticated generation.
 @MainActor final class NCMDeviceBridge: DeviceBridge {
     private let flow: any NCMControlConnection
-    private let session: UUID
+    private var session: UUID?
     private let owner = UUID()
     private nonisolated let fence = NCMRunFence()
     private var imageID: String?
     private var approvedImageID: String?
     private var taskAuthorized = false
     init(flow: any NCMControlConnection = PairingFlow.shared) throws {
-        guard flow.ready, !flow.running, !flow.agentReserved else {
-            throw AppError.unavailable("请先在设置 → USB 连接 → ESP32 控制中完成配对并连接")
-        }
-        self.flow = flow; session = flow.controlSessionID
+        self.flow = flow
+        flow.retainConnection(owner: owner)
     }
+    // Scheduling capability is independent of connection readiness; transport
+    // failures are reported by tools, never used to pause ordinary chat.
+    func supportsBackgroundExecution(tool: String) async -> Bool { (try? fence.check()) != nil }
     private func check() throws {
         try fence.check()
-        guard flow.ready, flow.controlSessionID == session else { throw AppError.stopped }
+        guard flow.ready else {
+            throw AppError.unavailable("手机操控未连接，请在设置 → 手机操控 → ESP32 控制中连接")
+        }
+        if let session {
+            guard flow.controlSessionID == session else {
+                throw AppError.unavailable("手机操控连接已改变，请重新发起操控任务")
+            }
+        } else {
+            session = flow.controlSessionID
+            flow.registerAgent(owner: owner, session: flow.controlSessionID)
+        }
+    }
+    private func requireSession() throws -> UUID {
+        try check()
+        guard let session else { throw AppError.stopped }
+        return session
     }
     func approvalContext(imageID: String) async throws -> String {
-        try check()
+        let session = try requireSession()
         guard self.imageID == imageID else { throw AppError.invalid("请先获取新的截图") }
         return "ncm:\(session.uuidString):\(owner.uuidString)"
     }
@@ -96,6 +121,7 @@ private final class NCMRunFence: @unchecked Sendable {
     func screenshot() async throws -> FrameImage {
         try check()
         imageID = nil; approvedImageID = nil
+        let session = try requireSession()
         let png = try await perform { try await flow.agentCapture(owner: owner, session: session) }
         try check()
         guard let source = CGImageSourceCreateWithData(png as CFData, nil),
@@ -117,12 +143,14 @@ private final class NCMRunFence: @unchecked Sendable {
     }
     func tap(x: Int, y: Int, imageID: String) async throws {
         try consumeImage(imageID, coordinates: [x, y])
+        let session = try requireSession()
         try await perform { try await flow.agentTap(owner: owner, session: session, x: UInt16(x), y: UInt16(y), validate: { try self.check() }) }
     }
 
     func drag(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMS: Int, imageID: String) async throws {
         guard (100...2000).contains(durationMS) else { throw AppError.invalid("拖动时长需为 100–2000 毫秒") }
         try consumeImage(imageID, coordinates: [fromX, fromY, toX, toY])
+        let session = try requireSession()
         try await perform { try await flow.agentDrag(owner: owner, session: session, fromX: UInt16(fromX), fromY: UInt16(fromY), toX: UInt16(toX), toY: UInt16(toY), durationMS: UInt16(durationMS), validate: { try self.check() }) }
     }
     private func perform<T>(_ action: () async throws -> T) async throws -> T {
@@ -138,10 +166,14 @@ private final class NCMRunFence: @unchecked Sendable {
 
     nonisolated func cancelTransport() {
         fence.cancel()
-        Task { @MainActor in self.flow.releaseAgent(owner: self.owner, session: self.session) }
+        Task { @MainActor in
+            if let session = self.session { self.flow.releaseAgent(owner: self.owner, session: session) }
+            self.flow.releaseConnection(owner: self.owner)
+        }
     }
     func stop() async {
         fence.cancel(); imageID = nil; approvedImageID = nil; taskAuthorized = false
-        flow.releaseAgent(owner: owner, session: session)
+        if let session { flow.releaseAgent(owner: owner, session: session) }
+        flow.releaseConnection(owner: owner)
     }
 }
