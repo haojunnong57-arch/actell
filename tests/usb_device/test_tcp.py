@@ -56,6 +56,13 @@ class TCPContract(unittest.TestCase):
         self.send('5 TAP 2 10 20'); self.assertEqual(self.read_ack(),'5 received'); self.assertEqual(self.read_ack(),'5 executed')
         self.send('6 STOP 2'); self.assertEqual(self.read_ack(),'6 executed')
         self.send('7 PING'); self.assertEqual(self.read_ack(),'7 executed')
+    def test_consecutive_stop_id2_id3_preserve_both_terminal_results(self):
+        # Original audit was two STOP commands (IDs 2 and 3), repeated five
+        # times, not five STOP commands with only three successful receipts.
+        self.send('1 PING'); self.assertEqual(self.read_ack(), '1 executed')
+        self.sock.sendall(b'2 STOP 1\n3 STOP 1\n')
+        self.assertCountEqual([self.read_ack(), self.read_ack()], ['2 executed', '3 cancelled'])
+        self.send('4 PING'); self.assertEqual(self.read_ack(), '4 executed')
     def stop_with_pipelined_commands(self, tail, expected):
         self.send('1 PING'); self.assertEqual(self.read_ack(), '1 executed')
         self.send('2 DRAG 1 0 0 65535 65535 2000'); self.assertEqual(self.read_ack(), '2 received')

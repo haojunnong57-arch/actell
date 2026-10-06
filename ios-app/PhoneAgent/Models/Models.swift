@@ -50,10 +50,9 @@ struct Approval: Identifiable, Sendable {
 }
 enum InputAuthorizationMode: String, Codable, Sendable { case perAction, task }
 struct AgentLimits: Sendable {
-    let maxTurns = 12
-    let maxActions = 16
-    let maxReportedTokens = 20_000
-    let maxOutputTokens = 1_024
+    // SwiftAgentKit's loop uses a non-optional Int. No product turn budget.
+    let maxTurns = Int.max
+    let maxOutputTokens: Int? = nil
 }
 enum AppError: LocalizedError, Equatable {
     case invalid(String), unavailable(String), protocolViolation(String), stopped, timeout, unknownOutcome
@@ -66,7 +65,7 @@ enum AppError: LocalizedError, Equatable {
         }
     }
 }
-struct ProviderSettings: Codable {
+struct ProviderSettings: Codable, Equatable, Sendable {
     var baseURL = "https://api.openai.com/v1"
     var model = ""
     func validatedURL() throws -> URL {

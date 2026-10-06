@@ -1,8 +1,9 @@
 import Foundation
 import Combine
 
-/// UI history contains public text and bounded tool receipts, never screenshots,
-/// raw tool arguments, model reasoning, credentials, or resumable tool queues.
+/// UI history contains public text, resource references, bounded tool receipts
+/// and explicit readable provider reasoning; no image bytes, opaque reasoning,
+/// credentials or resumable tool queues.
 @MainActor final class ConversationStore: ObservableObject {
     @Published private(set) var conversations: [AgentConversation] = []
     @Published private(set) var activeRun: RunIdentity?
@@ -55,6 +56,25 @@ import Combine
     }
 
     func conversation(_ id: UUID) -> AgentConversation? { conversations.first { $0.id == id } }
+    var referencedAttachments: [StoredAttachment] {
+        conversations.flatMap { ($0.draftAttachments ?? []) + $0.messages.flatMap { $0.attachments ?? [] } }
+    }
+    func attach(_ attachment: StoredAttachment, to messageID: UUID, in conversationID: UUID) {
+        guard attachment.conversationID == conversationID, let index = index(conversationID),
+              let message = conversations[index].messages.firstIndex(where: { $0.id == messageID }) else { return }
+        var references = conversations[index].messages[message].attachments ?? []
+        if let sourceURL = attachment.sourceURL {
+            // A retry may return new bytes after the previous original was lost.
+            // Keep one current binding per source so readers cannot pick a stale ID.
+            references.removeAll { $0.sourceURL == sourceURL }
+        } else if references.contains(where: { $0.id == attachment.id && $0.sourceURL == nil }) { return }
+        references.append(attachment); conversations[index].messages[message].attachments = references
+        saveNow()
+    }
+    @discardableResult func attach(_ attachment: StoredAttachment, toTool callID: String, identity: RunIdentity) -> Bool {
+        guard accepts(identity), let message = conversation(identity.conversationID)?.messages.last(where: { $0.runID == identity.runID && $0.tool?.callID == callID }) else { return false }
+        attach(attachment, to: message.id, in: identity.conversationID); return true
+    }
     @discardableResult func create(mode: RunMode) -> UUID {
         let conversation = AgentConversation(mode: mode)
         conversations.insert(conversation, at: 0); saveNow()
@@ -99,6 +119,16 @@ import Combine
         guard let index = index(id) else { return }
         conversations[index].draft = String(text.prefix(2_000)); scheduleSave()
     }
+    func addDraftAttachment(_ attachment: StoredAttachment, in id: UUID) {
+        guard attachment.conversationID == id, activeRun?.conversationID != id, let index = index(id) else { return }
+        var references = conversations[index].draftAttachments ?? []
+        guard !references.contains(where: { $0.id == attachment.id }) else { return }
+        references.append(attachment); conversations[index].draftAttachments = references; saveNow()
+    }
+    func removeDraftAttachment(_ attachmentID: UUID, in id: UUID) {
+        guard activeRun?.conversationID != id, let index = index(id) else { return }
+        conversations[index].draftAttachments?.removeAll { $0.id == attachmentID }; saveNow()
+    }
     func delete(_ id: UUID) {
         guard activeRun?.conversationID != id else { return }
         conversations.removeAll { $0.id == id }; saveNow()
@@ -107,7 +137,7 @@ import Combine
         guard activeRun == nil else { return }
         conversations = []; saveNow()
     }
-    func begin(in id: UUID, query: String) -> RunIdentity? {
+    func begin(in id: UUID, query: String, attachments: [StoredAttachment] = []) -> RunIdentity? {
         guard activeRun == nil, let index = index(id) else { return nil }
         let identity = RunIdentity(conversationID: id, runID: UUID())
         activeRun = identity
@@ -119,7 +149,8 @@ import Combine
             conversations[index].entry?.runID = identity.runID
             conversations[index].entry?.updatedAt = Date()
         }
-        conversations[index].messages.append(ChatMessage(runID: identity.runID, role: .user, text: query))
+        conversations[index].messages.append(ChatMessage(runID: identity.runID, role: .user, text: query, attachments: attachments.isEmpty ? nil : attachments))
+        conversations[index].draftAttachments = nil
         touch(index); saveNow()
         return identity
     }
@@ -135,17 +166,30 @@ import Combine
         conversations[index].messages[message].text = String((conversations[index].messages[message].text + text).prefix(16_000))
         touch(index); scheduleSave()
     }
-    func completeAssistantTurn(_ text: String, identity: RunIdentity) {
+    func appendReasoning(_ text: String, identity: RunIdentity) {
+        guard !text.isEmpty, accepts(identity), let index = index(identity.conversationID),
+              let message = conversations[index].messages.lastIndex(where: { $0.runID == identity.runID && $0.role == .assistant && $0.state == .streaming }) else { return }
+        if conversations[index].messages[message].reasoning == nil {
+            conversations[index].messages[message].reasoning = ReasoningMessage(text: "")
+        }
+        conversations[index].messages[message].reasoning?.text += text
+        touch(index); scheduleSave()
+    }
+    func completeAssistantTurn(_ text: String, reasoning: String? = nil, identity: RunIdentity) {
         guard accepts(identity), let index = index(identity.conversationID),
               let message = conversations[index].messages.lastIndex(where: { $0.runID == identity.runID && $0.role == .assistant && $0.state == .streaming }) else { return }
-        if text.isEmpty { conversations[index].messages.remove(at: message) }
+        if let reasoning, !reasoning.isEmpty {
+            conversations[index].messages[message].reasoning = ReasoningMessage(text: reasoning, state: .complete)
+        }
+        if text.isEmpty && conversations[index].messages[message].reasoning == nil { conversations[index].messages.remove(at: message) }
         else {
             conversations[index].messages[message].text = String(text.prefix(16_000))
             conversations[index].messages[message].state = .complete
+            conversations[index].messages[message].reasoning?.state = .complete
         }
         touch(index); saveNow()
     }
-    func updateTool(callID: String, name: String, state: ToolStepState, detail: String = "", result: String = "", arguments: String? = nil, identity: RunIdentity) {
+    func updateTool(callID: String, name: String, state: ToolStepState, detail: String = "", result: String = "", arguments: String? = nil, skillName: String? = nil, identity: RunIdentity) {
         guard accepts(identity), let index = index(identity.conversationID) else { return }
         if let message = conversations[index].messages.firstIndex(where: { $0.runID == identity.runID && $0.tool?.callID == callID }) {
             let previous = conversations[index].messages[message].tool?.state
@@ -159,12 +203,26 @@ import Combine
             if !detail.isEmpty { conversations[index].messages[message].tool?.detail = String(detail.prefix(500)) }
             if !result.isEmpty { conversations[index].messages[message].tool?.result = String(result.prefix(1_000)) }
             if let arguments { conversations[index].messages[message].tool?.arguments = String(arguments.prefix(4_000)) }
+            if let skillName { conversations[index].messages[message].tool?.skillName = String(skillName.prefix(80)) }
         } else {
-            let tool = ToolStep(callID: callID, name: name, state: state, detail: String(detail.prefix(500)), result: String(result.prefix(1_000)), arguments: arguments.map { String($0.prefix(4_000)) })
+            let tool = ToolStep(callID: callID, name: name, state: state, detail: String(detail.prefix(500)), result: String(result.prefix(1_000)), arguments: arguments.map { String($0.prefix(4_000)) }, skillName: skillName.map { String($0.prefix(80)) })
             conversations[index].messages.append(ChatMessage(runID: identity.runID, role: .tool, text: "", tool: tool))
         }
         if state == .awaitingApproval { conversations[index].phase = .awaitingApproval }
         else if [.approved, .executing, .succeeded, .failed].contains(state) { conversations[index].phase = .running }
+        touch(index); saveNow()
+    }
+    func addRecoveryNotice(_ checkpoint: RunCheckpoint) {
+        guard !checkpoint.message.isEmpty, let index = index(checkpoint.conversationID),
+              conversations[index].recoveryNotices?[checkpoint.recoveryKey] != checkpoint.message else { return }
+        if conversations[index].recoveryNotices == nil { conversations[index].recoveryNotices = [:] }
+        conversations[index].recoveryNotices?[checkpoint.recoveryKey] = checkpoint.message
+        addNotice(checkpoint.message, in: checkpoint.conversationID)
+    }
+    func selectProvider(_ providerID: UUID?, model: String?, in id: UUID) {
+        guard let index = index(id), activeRun?.conversationID != id else { return }
+        conversations[index].providerID = providerID
+        conversations[index].modelID = model
         touch(index); saveNow()
     }
     func addNotice(_ text: String, in id: UUID) {
@@ -175,7 +233,7 @@ import Combine
     func finish(_ identity: RunIdentity, phase: RunPhase, summary: String) {
         guard accepts(identity), let index = index(identity.conversationID) else { return }
         conversations[index].phase = phase
-        closePendingMessages(at: index)
+        closePendingMessages(at: index, state: phase == .blocked ? .failed : .interrupted)
         if !summary.isEmpty {
             conversations[index].messages.append(ChatMessage(runID: identity.runID, role: .notice, text: String(summary.prefix(1_000)), state: phase == .blocked ? .failed : .complete))
         }
@@ -184,16 +242,27 @@ import Combine
     /// Only public text from this conversation is used as context. Historical
     /// tools/images are never re-enqueued or used to authorize new input.
     func history(in id: UUID) -> [ChatMessage] {
-        Array((conversation(id)?.messages ?? []).filter { ($0.role == .user || $0.role == .assistant) && $0.state == .complete }.suffix(16))
+        Array((conversation(id)?.messages ?? []).filter { ($0.role == .user || $0.role == .assistant) && $0.state == .complete && !$0.text.isEmpty }.suffix(16)).map {
+            var message = $0; message.reasoning = nil; return message
+        }
     }
     private func index(_ id: UUID) -> Int? { conversations.firstIndex { $0.id == id } }
     private func touch(_ index: Int) {
         conversations[index].updatedAt = Date()
-        if conversations[index].messages.count > 200 { conversations[index].messages.removeFirst(conversations[index].messages.count - 200) }
+        // Keep durable image/file references until the user deletes their history.
+        // The normal 200-message trim must not orphan historical originals.
+        var excess = conversations[index].messages.count - 200
+        if excess > 0 {
+            conversations[index].messages.removeAll { message in
+                guard excess > 0, message.attachments?.isEmpty != false else { return false }
+                excess -= 1; return true
+            }
+        }
     }
-    private func closePendingMessages(at index: Int) {
+    private func closePendingMessages(at index: Int, state terminalState: MessageState = .interrupted) {
         for message in conversations[index].messages.indices {
-            if conversations[index].messages[message].state == .streaming { conversations[index].messages[message].state = .interrupted }
+            if conversations[index].messages[message].state == .streaming { conversations[index].messages[message].state = terminalState }
+            if conversations[index].messages[message].reasoning?.state == .streaming { conversations[index].messages[message].reasoning?.state = terminalState }
             if let state = conversations[index].messages[message].tool?.state, !state.isTerminal {
                 conversations[index].messages[message].tool?.state = .cancelled
             }

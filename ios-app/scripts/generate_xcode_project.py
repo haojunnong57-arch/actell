@@ -3,6 +3,7 @@
 from pathlib import Path
 import hashlib
 import json
+import os
 
 ROOT = Path(__file__).resolve().parents[1]
 objects = {}
@@ -54,10 +55,12 @@ def generate():
     for name, extension, product_type in [("PhoneAgent", "app", "application"), ("PhoneAgentTests", "xctest", "bundle.unit-test"), ("PhoneAgentUITests", "xctest", "bundle.ui-testing"), ("PhoneAgentLiveActivity", "appex", "app-extension")]:
         sources, children = [], []
         paths = list((ROOT / name).rglob("*.swift"))
+        if os.environ.get("INCLUDE_ARCHIVED_TESTS") == "1" and name in ("PhoneAgentTests", "PhoneAgentUITests"):
+            paths += list((ROOT.parent / "archives/tests" / name).glob("*.swift"))
         if name in ("PhoneAgent", "PhoneAgentLiveActivity"):
             paths += list((ROOT / "Shared").rglob("*.swift"))
         for path in sorted(paths):
-            relative = path.relative_to(ROOT).as_posix()
+            relative = Path(os.path.relpath(path, ROOT)).as_posix()
             ref = add((name if relative.startswith("Shared/") else "") + relative, "PBXFileReference", lastKnownFileType="sourcecode.swift", path=relative, sourceTree="SOURCE_ROOT")
             children.append(ref)
             sources.append(add((name if relative.startswith("Shared/") else "") + relative + "Build", "PBXBuildFile", fileRef=ref))
@@ -69,7 +72,7 @@ def generate():
                 sources.append(add(relative + "Build", "PBXBuildFile", fileRef=ref))
         resources = []
         for path in sorted((ROOT / name).rglob("*.xcstrings")):
-            relative = path.relative_to(ROOT).as_posix()
+            relative = Path(os.path.relpath(path, ROOT)).as_posix()
             ref = add(relative, "PBXFileReference", lastKnownFileType="text.json.xcstrings", path=relative, sourceTree="SOURCE_ROOT")
             children.append(ref)
             resources.append(add(relative + "Build", "PBXBuildFile", fileRef=ref))
@@ -106,6 +109,7 @@ def generate():
         dependencies = []
         if name == "PhoneAgent":
             settings.update(INFOPLIST_FILE="PhoneAgent/Info.plist", INFOPLIST_KEY_CFBundleDisplayName="PhoneAgent",
+                            INFOPLIST_KEY_NSSupportsLiveActivities="YES",
                             INFOPLIST_KEY_NSLocalNetworkUsageDescription="Connect to your explicitly paired development bridge while this app is open.",
                             INFOPLIST_KEY_UIApplicationSceneManifest_Generation="YES",
                             INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents="YES",

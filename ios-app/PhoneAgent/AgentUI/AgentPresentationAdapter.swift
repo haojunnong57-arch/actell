@@ -16,6 +16,7 @@ struct ToolPresentation {
     let tool: ToolStep
     let approval: Approval?
     let image: FrameImage?
+    let attachments: [StoredAttachment]
 }
 
 @MainActor final class AgentPresentationAdapter: ObservableObject {
@@ -37,7 +38,22 @@ struct ToolPresentation {
     var stopping: Bool { model.stopping }
     var status: String { running ? model.status : session?.phase.label ?? "" }
     var warning: String? { model.errorMessage ?? model.sessions.warning }
-    var modelName: String { model.settings.model.isEmpty ? "真实模型 · 尚未配置" : model.settings.model }
+    var providers: [ProviderProfile] { model.providers.profiles }
+    var providerID: UUID? { model.selectedProvider(in: sessionID)?.id }
+    var selectedModel: String { model.selectedModel(in: sessionID) }
+    var availableModels: [String] { model.selectedProvider(in: sessionID)?.availableModels ?? [] }
+    var selectedProvider: ProviderProfile? { model.selectedProvider(in: sessionID) }
+    var attachments: AttachmentStore { model.attachments }
+    func importAttachment(data: Data, name: String) async throws { try await model.importDraftAttachment(data: data, name: name, in: sessionID) }
+    func importAttachment(file: URL) async throws { try await model.importDraftAttachment(file: file, in: sessionID) }
+    func removeAttachment(_ id: UUID) { model.sessions.removeDraftAttachment(id, in: sessionID) }
+    func sendDraft(_ text: String) async throws -> Bool { try await model.sendDraft(text, in: sessionID, cloudConsent: true) }
+    func cacheImage(_ url: URL, messageID: UUID) async throws -> StoredAttachment {
+        try await model.cacheMessageImage(url, messageID: messageID, conversationID: sessionID)
+    }
+    var modelName: String { selectedModel.isEmpty ? "选择服务商和模型" : selectedModel }
+    func selectProvider(_ id: UUID) { model.selectProvider(id, in: sessionID) }
+    func selectModel(_ name: String) { model.selectModel(name, in: sessionID) }
     var approvalID: UUID? { model.approval(in: sessionID)?.id }
     var pendingApproval: ToolPresentation? {
         guard let messages = session?.messages else { return nil }
@@ -63,7 +79,7 @@ struct ToolPresentation {
         if let frame, frame.step == step { image = frame.image }
         else if let frame, frame.step.run == step.run, approval?.imageID == frame.image.id { image = frame.image }
         else { image = nil }
-        return ToolPresentation(identity: step, tool: tool, approval: approval, image: image)
+        return ToolPresentation(identity: step, tool: tool, approval: approval, image: image, attachments: message.attachments ?? [])
     }
 
     @discardableResult func dispatch(_ intent: AgentUIIntent) -> Bool {
@@ -89,18 +105,23 @@ struct ToolPresentation {
 /// runtime/progress consumer is involved. Approval/transport callbacks carry
 /// the same run token and update the same step in ConversationStore.
 @MainActor enum AgentEventProjection {
-    static func record(_ event: AgentEvent, run: RunIdentity, frame: PresentedFrame?, in store: ConversationStore) {
+    static func record(_ event: AgentEvent, run: RunIdentity, frame: PresentedFrame?, in store: ConversationStore, skillNames: [String: String] = [:]) {
         guard store.accepts(run) else { return }
+        func skillName(_ call: AgentToolCall) -> String? {
+            guard call.name == "load_skill", let id = call.parameters["id"]?.value as? String else { return nil }
+            return skillNames[id.uppercased()]
+        }
         switch event {
         case .llmCallStarted: store.beginAssistantTurn(run)
         case .streamChunk(let text): store.appendText(text, identity: run)
-        case .llmCallCompleted(_, let response): store.completeAssistantTurn(response.text, identity: run)
+        case .reasoningChunk(let text): store.appendReasoning(text, identity: run)
+        case .llmCallCompleted(_, let response): store.completeAssistantTurn(response.text, reasoning: response.reasoning, identity: run)
         case .toolCallsReceived(let calls):
             for call in calls {
-                store.updateTool(callID: call.id, name: call.name, state: .requested, arguments: arguments(for: call), identity: run)
+                store.updateTool(callID: call.id, name: call.name, state: .requested, arguments: arguments(for: call), skillName: skillName(call), identity: run)
             }
         case .toolExecutionStarted(let call):
-            store.updateTool(callID: call.id, name: call.name, state: .running, arguments: arguments(for: call), identity: run)
+            store.updateTool(callID: call.id, name: call.name, state: .running, arguments: arguments(for: call), skillName: skillName(call), identity: run)
         case .toolExecutionFinished(let call, let result):
             let receipt: String
             if result.isError { receipt = String(result.result.prefix(1_000)) }
@@ -108,15 +129,17 @@ struct ToolPresentation {
                 switch call.name {
                 case "screenshot":
                     let image = frame.flatMap { $0.step == StepIdentity(run: run, stepID: call.id) ? $0.image : nil }
-                    receipt = image.map { "已取得 \($0.width) × \($0.height) 截图；图像仅在内存中保留" } ?? "截图已返回"
+                    receipt = image.map { "已取得 \($0.width) × \($0.height) 截图" } ?? "截图已返回"
                 case "tap", "drag": receipt = "已确认送达；可见效果需要下一张截图核对"
                 case "wait": receipt = "等待结束，需要重新查看屏幕"
                 case "finish": receipt = String(result.result.prefix(1_000))
+                case "list_skills", "search_skills": receipt = "已返回当前启用技能的名称与摘要；正文按需读取"
+                case "load_skill": receipt = "已读取技能文档：" + (skillName(call) ?? "技能") + " / " + ((call.parameters["resource"]?.value as? String) ?? "SKILL.md")
                 default: receipt = "工具已返回"
                 }
             }
-            store.updateTool(callID: call.id, name: call.name, state: result.isError ? .failed : .succeeded, result: receipt, arguments: arguments(for: call), identity: run)
-        default: break // Internal reasoning and unrelated framework events stay out of UI/history.
+            store.updateTool(callID: call.id, name: call.name, state: result.isError ? .failed : .succeeded, result: receipt, arguments: arguments(for: call), skillName: skillName(call), identity: run)
+        default: break // Unrelated framework events stay out of UI/history.
         }
     }
 
@@ -128,6 +151,9 @@ struct ToolPresentation {
         case "drag": allowed = ["from_x", "from_y", "to_x", "to_y", "duration_ms", "purpose"]
         case "wait": allowed = ["duration_ms"]
         case "finish": allowed = ["summary"]
+        case "list_skills": allowed = []
+        case "search_skills": allowed = ["query"]
+        case "load_skill": allowed = ["id", "revision", "resource", "offset"]
         default: return "未注册工具；不展示原始参数"
         }
         var values: [String: Any] = [:]

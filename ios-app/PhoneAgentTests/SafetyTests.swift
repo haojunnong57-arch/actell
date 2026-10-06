@@ -112,7 +112,7 @@ final class SafetyTests: XCTestCase {
         _ = try await c.execute(name: "screenshot", parameters: [:], callID: "s")
         let p: [String: Any] = ["x": 100, "y": 100, "purpose": "test"]
         _ = try await c.execute(name: "tap", parameters: p, callID: "t1")
-        do { _ = try await c.execute(name: "tap", parameters: p, callID: "t2"); XCTFail("Old image must fail") } catch {}
+        do { _ = try await c.execute(name: "tap", parameters: ["x": 100, "y": 100, "purpose": "test"], callID: "t2"); XCTFail("Old image must fail") } catch {}
         let count = await bridge.taps; XCTAssertEqual(count, 1)
     }
     func testStopFencesLaterTools() async throws {
@@ -122,9 +122,10 @@ final class SafetyTests: XCTestCase {
         do { _ = try await c.execute(name: "screenshot", parameters: [:], callID: "s"); XCTFail("Stopped session must fail") } catch {}
         let value = await bridge.stopped; XCTAssertTrue(value)
     }
-    func testFinishRequiresFreshObservation() async throws {
+    func testLegacyFinishCanEndWithoutAnExtraObservation() async throws {
         let c = ActionCoordinator(bridge: SpyBridge(), limits: AgentLimits(), approve: { _ in true }, onImage: { _, _ in }, onReceipt: { _ in })
-        do { _ = try await c.execute(name: "finish", parameters: ["summary": "done"], callID: "f"); XCTFail("No image means no finish") } catch {}
+        _ = try await c.execute(name: "finish", parameters: ["summary": "done"], callID: "f")
+        let summary = await c.finishSummary; XCTAssertEqual(summary, "done")
     }
     func testBooleansCannotBecomePixelCoordinates() async throws {
         let bridge = SpyBridge()
@@ -148,6 +149,6 @@ final class SafetyTests: XCTestCase {
         XCTAssertEqual(messages.map { $0["role"] as? String }, ["assistant", "tool", "user"])
         XCTAssertTrue(messages[1]["content"] is String)
         XCTAssertTrue(messages[2]["content"] is [[String: Any]])
-        XCTAssertEqual(object["parallel_tool_calls"] as? Bool, false)
+        XCTAssertEqual(object["parallel_tool_calls"] as? Bool, true)
     }
 }

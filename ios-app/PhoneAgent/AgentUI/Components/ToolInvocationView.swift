@@ -37,7 +37,7 @@ struct ToolInvocationView<Preview: View>: View {
 
     private var toolHeader: some View {
         HStack(spacing: 8) {
-            Image(systemName: "wrench.and.screwdriver")
+            Image(systemName: configuration.tool.symbol)
                 .font(.body).imageScale(.small).foregroundStyle(.secondary).accessibilityHidden(true)
             Text(configuration.tool.title)
                 .font(.body).fontWeight(.regular).foregroundStyle(.secondary)

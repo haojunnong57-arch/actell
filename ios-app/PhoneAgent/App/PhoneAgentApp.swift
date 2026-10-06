@@ -8,6 +8,7 @@ import SwiftUI
     var body: some Scene {
         WindowGroup {
             ContentView(model: model, statusPiP: statusPiP, commands: PhoneAgentRuntime.shared.commands)
+                .preferredColorScheme(testColorScheme)
                 .onChange(of: AgentStatusSnapshot.make(mode: model.mode, phase: model.activeRecord?.phase, running: model.running, awaitingApproval: model.approval != nil), initial: true) { _, snapshot in
                     statusPiP.update(snapshot)
                 }
@@ -35,5 +36,13 @@ import SwiftUI
                     model.setProtectedDataAvailable(true)
                 }
         }
+    }
+    private var testColorScheme: ColorScheme? {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--ui-testing"), arguments.contains("--ui-test-dark") { return .dark }
+        if arguments.contains("--ui-testing"), arguments.contains("--ui-test-light") { return .light }
+        #endif
+        return nil
     }
 }

@@ -22,9 +22,10 @@ final class ModelStreamTests: XCTestCase {
     }
     func testRealTextDeltasAndFragmentedToolAssembly() throws {
         var decoder = ModelStreamDecoder()
-        let chunks = try decoder.consume(line: line(["content": "你好", "reasoning_content": "private reasoning"]), request: request, encoder: encoder)
-        XCTAssertEqual(chunks.count, 1)
-        if case .text(let text) = chunks.first { XCTAssertEqual(text, "你好") } else { XCTFail("Expected public text") }
+        let chunks = try decoder.consume(line: line(["content": "你好", "reasoning_content": "provider supplied reasoning"]), request: request, encoder: encoder)
+        XCTAssertEqual(chunks.count, 2)
+        if case .reasoning(let text) = chunks.first { XCTAssertEqual(text, "provider supplied reasoning") } else { XCTFail("Expected separate provider reasoning") }
+        if case .text(let text) = chunks.last { XCTAssertEqual(text, "你好") } else { XCTFail("Expected public text") }
         let first: [String: Any] = ["tool_calls": [["index": 0, "id": "call-1", "type": "function", "function": ["name": "tap", "arguments": "{\"x\":"]]]]
         let next: [String: Any] = ["tool_calls": [["index": 0, "function": ["arguments": "12}"]]]]
         XCTAssertTrue(try decoder.consume(line: line(first), request: request, encoder: encoder).isEmpty)
@@ -45,11 +46,24 @@ final class ModelStreamTests: XCTestCase {
         _ = try missing.consume(line: line([:], finish: "tool_calls"), request: request, encoder: encoder)
         XCTAssertThrowsError(try missing.finish())
     }
-    func testMultipleToolCallsAreRejectedBeforeExecution() throws {
+    func testMultipleToolCallsStayBufferedUntilValidatedAndRetainOrder() throws {
         var decoder = ModelStreamDecoder()
         let calls = (0...1).map { index in ["index": index, "id": "call-\(index)", "function": ["name": "tap", "arguments": "{}"]] as [String: Any] }
         _ = try decoder.consume(line: line(["tool_calls": calls]), request: request, encoder: encoder)
-        XCTAssertThrowsError(try decoder.consume(line: line([:], finish: "tool_calls"), request: request, encoder: encoder))
+        XCTAssertTrue(try decoder.consume(line: line([:], finish: "tool_calls"), request: request, encoder: encoder).isEmpty)
+        let released = try decoder.finish().compactMap { chunk -> String? in
+            if case .toolCall(let call) = chunk { return call.id }; return nil
+        }
+        XCTAssertEqual(released, ["call-0", "call-1"])
+    }
+    func testDuplicateOrReusedIDsAndMalformedBatchNeverReleaseAnyCalls() throws {
+        for arguments in ["{}", "{"] {
+            var decoder = ModelStreamDecoder()
+            let calls = (0...1).map { index in ["index": index, "id": "same", "function": ["name": "tap", "arguments": arguments]] as [String: Any] }
+            XCTAssertTrue(try decoder.consume(line: line(["tool_calls": calls], finish: "tool_calls"), request: request, encoder: encoder).isEmpty)
+            XCTAssertThrowsError(try decoder.finish())
+        }
+        XCTAssertThrowsError(try ModelStreamDecoder.validate([.init(id: "old", name: "screenshot", arguments: "{}")], previousCallIDs: ["old"]))
     }
     func testStreamingRequestUsesActualStreamFlag() throws {
         let provider = try PrivateVisionProvider(settings: ProviderSettings(baseURL: "https://invalid.invalid/v1", model: "fixture"), apiKey: "synthetic-test-only", limits: AgentLimits())
@@ -57,6 +71,24 @@ final class ModelStreamTests: XCTestCase {
         let body = try XCTUnwrap(provider.prepareRequest(request, stream: true).httpBody)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertEqual(json["stream"] as? Bool, true)
-        XCTAssertEqual(json["parallel_tool_calls"] as? Bool, false)
+        XCTAssertEqual(json["parallel_tool_calls"] as? Bool, true)
+    }
+    func testNonStreamingBatchPreservesIDsAndRejectsMissingOrRepeatedIdentity() throws {
+        let provider = try PrivateVisionProvider(settings: ProviderSettings(baseURL: "https://invalid.invalid/v1", model: "fixture"), apiKey: "synthetic", limits: AgentLimits())
+        defer { provider.cancel() }
+        func data(_ ids: [String?]) throws -> Data {
+            let calls = ids.map { id -> [String: Any] in
+                var value: [String: Any] = ["type": "function", "function": ["name": "screenshot", "arguments": "{}"]]
+                if let id { value["id"] = id }; return value
+            }
+            return try JSONSerialization.data(withJSONObject: ["id": "fixture", "choices": [["message": ["role": "assistant", "content": "", "tool_calls": calls], "finish_reason": "tool_calls"]]])
+        }
+        XCTAssertEqual(try provider.parseResponse(data(["first", "second"]), request: request).toolCalls.map(\.id), ["first", "second"])
+        for ids in [["same", "same"], ["first", nil], ["", "second"]] as [[String?]] {
+            XCTAssertThrowsError(try provider.parseResponse(data(ids), request: request))
+        }
+        var decoder = ModelStreamDecoder()
+        _ = try decoder.consume(line: line(["tool_calls": [["index": 0, "function": ["name": "screenshot", "arguments": "{}"]]]], finish: "tool_calls"), request: request, encoder: encoder)
+        XCTAssertThrowsError(try decoder.finish())
     }
 }

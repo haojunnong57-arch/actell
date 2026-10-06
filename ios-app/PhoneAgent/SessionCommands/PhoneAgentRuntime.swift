@@ -25,6 +25,24 @@ import Foundation
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--ui-testing") || ProcessInfo.processInfo.environment["PHONEAGENT_ISOLATED_TESTS"] == "1" {
             let arguments = ProcessInfo.processInfo.arguments
+            if arguments.contains("--ui-test-reasoning-seed") || arguments.contains("--ui-test-reasoning-restore") {
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneAgentReasoningUITest", isDirectory: true)
+                if arguments.contains("--ui-test-reasoning-seed") { try? FileManager.default.removeItem(at: directory) }
+                let sessions = ConversationStore(directory: directory)
+                if sessions.conversations.isEmpty { sessions.create(mode: .live) }
+                let outcome = arguments.contains("--ui-test-reasoning-paused") ? "paused" : (arguments.contains("--ui-test-reasoning-failed") ? "failed" : "completed")
+                return AgentViewModel(sessions: sessions, loadPersistentState: false,
+                    runServices: AgentRunServices(provider: ReasoningFixtureProvider(outcome: outcome), bridge: UnavailableBridge()))
+            }
+            if arguments.contains("--ui-test-images-seed") || arguments.contains("--ui-test-images-restore") {
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneAgentImageUITest", isDirectory: true)
+                if arguments.contains("--ui-test-images-seed") { try? FileManager.default.removeItem(at: directory) }
+                let sessions = ConversationStore(directory: directory)
+                if sessions.conversations.isEmpty { sessions.create(mode: .demo) }
+                return AgentViewModel(sessions: sessions, loadPersistentState: false,
+                    runServices: AgentRunServices(provider: DemoProvider(), bridge: DemoBridge()),
+                    attachments: AttachmentStore(directory: directory.appendingPathComponent("assets")))
+            }
             if arguments.contains("--ui-test-siri-seed") || arguments.contains("--ui-test-siri-restore") {
                 let directory = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneAgentSiriUITest", isDirectory: true)
                 if arguments.contains("--ui-test-siri-seed") { try? FileManager.default.removeItem(at: directory) }
@@ -36,6 +54,27 @@ import Foundation
                     runServices: AgentRunServices(provider: DemoProvider(), bridge: DemoBridge()))
             }
             let sessions = ConversationStore(inMemory: true)
+            if arguments.contains("--ui-test-skill-tools") {
+                sessions.create(mode: .live)
+                return AgentViewModel(sessions: sessions, loadPersistentState: false,
+                    runServices: AgentRunServices(provider: SkillFixtureProvider(), bridge: UnavailableBridge()))
+            }
+            if arguments.contains("--ui-test-attachments") {
+                let id = sessions.create(mode: .demo)
+                let model = AgentViewModel(sessions: sessions, loadPersistentState: false)
+                model.selectConversation(id)
+                Task { @MainActor in
+                    let frame = try? await DemoBridge().screenshot()
+                    if let frame { try? await model.importDraftAttachment(data: frame.png, name: "synthetic.png", in: id) }
+                    try? await model.importDraftAttachment(data: Data("Synthetic file contents".utf8), name: "synthetic.md", in: id)
+                }
+                return model
+            }
+            if arguments.contains("--ui-test-model-catalog") {
+                let model = AgentViewModel(sessions: sessions, loadPersistentState: false)
+                try? model.providers.save(ProviderProfile(name: "Catalog Fixture", settings: .init(baseURL: "https://catalog-fixture.invalid/v1", model: "")))
+                return model
+            }
             if ProcessInfo.processInfo.arguments.contains("--ui-testing"),
                ProcessInfo.processInfo.arguments.contains("--ui-test-tool-error") {
                 sessions.create(mode: .live)

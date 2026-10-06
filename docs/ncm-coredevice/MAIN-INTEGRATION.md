@@ -80,3 +80,9 @@ ESP32 控制页面简化后的签名真机构建通过，源码检查无空圈�
 - 已就绪时持续显示“已连接”；截图进度只放在“获取截图”按钮，服务控制按钮保持位置，忙碌期间禁用重新连接。仅实际配对/连接时在连接状态旁显示进度。
 - 共用界面目录改为 `ios-app/PhoneAgent/ESP32Control`，文件及类型为 `ESP32ControlSettingsView`，同步主 App、Probe、工程引用、生成脚本和说明；不改底层实际 S3 芯片/固件标识。
 - 主 App 签名真机构建与独立 Probe 无签名真机构建通过；新版主 App 已成功安装到当前 iPhone。状态显示实机视觉效果待用户复核。
+
+## feature/project-todos 合并验证
+
+保留 NCM 默认截图/输入与 ESP32 设置子页面，整合新增服务商、附件、技能、可读思考展示及串行多工具调用；导航栏设备入口复用 ESP32 控制页面，旧 SCK/PA3 控制保留在已有路由分支。旧 ControlDebugView 按新版导航移除，底层旧链路保留。工程从双方源码清单重建，包含 NCM Rust 构建阶段和核心测试。
+
+2026-10-06：独立模拟器完整核心测试 237 项通过；PA3 C 协议及停止释放检查通过，USB TCP 回环 25 项通过；最终无签名 iPhoneOS 构建通过。结果目录 `.build/validation/core.iOoDa5/Tests.xcresult`，构建日志 `.build/merge-device-build.log`。本次没有刷写、安装或真实设备动作，不能代替 NCM 真机闭环验收。冲突已处理，merge 提交由用户继续完成。

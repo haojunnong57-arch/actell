@@ -54,6 +54,12 @@ struct RunCheckpoint: Codable, Equatable {
 @MainActor protocol RunCheckpointStorage {
     func load() throws -> RunCheckpoint?
     func save(_ checkpoint: RunCheckpoint) throws
+    func loadRecoveries() throws -> [RunCheckpoint]
+    func saveRecoveries(_ checkpoints: [RunCheckpoint]) throws
+}
+extension RunCheckpointStorage {
+    func loadRecoveries() throws -> [RunCheckpoint] { try load().map { [$0] } ?? [] }
+    func saveRecoveries(_ checkpoints: [RunCheckpoint]) throws {}
 }
 @MainActor final class RunCheckpointStore: RunCheckpointStorage {
     private let file: URL
@@ -65,13 +71,24 @@ struct RunCheckpoint: Codable, Equatable {
         try excludedRoot.setResourceValues(attributes)
         file = root.appendingPathComponent("run-checkpoint-v1.json")
     }
-    func load() throws -> RunCheckpoint? {
-        // Preserve the old SCK-only journal when upgrading. Recovery never
-        // restores execution, and the old file is retained for inspection.
-        let legacy = file.deletingLastPathComponent().appendingPathComponent("usb-run-checkpoint-v1.json")
-        let source = FileManager.default.fileExists(atPath: file.path) ? file : legacy
-        guard FileManager.default.fileExists(atPath: source.path) else { return nil }
-        return try JSONDecoder().decode(RunCheckpoint.self, from: Data(contentsOf: source))
+    func load() throws -> RunCheckpoint? { try loadRecoveries().first }
+    func loadRecoveries() throws -> [RunCheckpoint] {
+        let root = file.deletingLastPathComponent()
+        var values: [RunCheckpoint] = []
+        for source in [file, root.appendingPathComponent("usb-run-checkpoint-v1.json")] {
+            if FileManager.default.fileExists(atPath: source.path) {
+                values.append(try JSONDecoder().decode(RunCheckpoint.self, from: Data(contentsOf: source)))
+            }
+        }
+        let archive = root.appendingPathComponent("run-recovery-v1.json")
+        if FileManager.default.fileExists(atPath: archive.path) {
+            values += try JSONDecoder().decode([RunCheckpoint].self, from: Data(contentsOf: archive))
+        }
+        return values
+    }
+    func saveRecoveries(_ checkpoints: [RunCheckpoint]) throws {
+        let archive = file.deletingLastPathComponent().appendingPathComponent("run-recovery-v1.json")
+        try JSONEncoder().encode(checkpoints).write(to: archive, options: [.atomic, .completeFileProtection])
     }
     func save(_ checkpoint: RunCheckpoint) throws {
         // This route stops on lock. The journal excludes text, screenshots and secrets.
@@ -90,6 +107,7 @@ struct RunCheckpoint: Codable, Equatable {
 /// between a durable dispatching transition and returning dispatch permission.
 @MainActor final class RunLifecycleCoordinator: ObservableObject {
     @Published private(set) var checkpoint: RunCheckpoint?
+    private(set) var recoveries: [RunCheckpoint] = []
     @Published private(set) var backgroundStatus = "后台需有效采集资格或系统实际授予的有限片段"
     private(set) var foreground = true
     private(set) var hasLease = false
@@ -99,7 +117,7 @@ struct RunCheckpoint: Codable, Equatable {
     private let storage: any RunCheckpointStorage
     private let identifierPrefix: String
     private let now: () -> Date
-    private let inactivityTimeout: TimeInterval
+    private let inactivityTimeout: TimeInterval?
     private var lastActivity = Date()
     private var lease: (any RunBackgroundLease)?
     private var activeToolBackgroundCapable = true
@@ -109,30 +127,24 @@ struct RunCheckpoint: Codable, Equatable {
 
     init(scheduler: any RunBackgroundScheduler, storage: any RunCheckpointStorage,
          identifierPrefix: String = (Bundle.main.bundleIdentifier ?? "com.ja1chen.PhoneAgent") + ".backgroundRun",
-         inactivityTimeout: TimeInterval = 60, now: @escaping () -> Date = Date.init) {
+         inactivityTimeout: TimeInterval? = nil, now: @escaping () -> Date = Date.init) {
         self.scheduler = scheduler; self.storage = storage; self.identifierPrefix = identifierPrefix
-        self.inactivityTimeout = max(1, inactivityTimeout); self.now = now
+        self.inactivityTimeout = inactivityTimeout.map { max(1, $0) }; self.now = now
         do {
-            checkpoint = try storage.load()
-            if var saved = checkpoint {
-                // Process death loses every lease/continuation. Recovery is a
-                // review checkpoint, never an executable queue of old actions.
-                for i in saved.tools.indices where saved.tools[i].delivery == .dispatching { saved.tools[i].delivery = .outcomeUnknown }
-                if saved.phase == .running { saved.phase = .paused }
-                if let id = saved.segmentID, id.hasPrefix(identifierPrefix + ".") { scheduler.cancel(identifier: id) }
-                saved.segmentID = nil
-                if saved.phase == .paused || saved.phase == .waitingApproval {
-                    if saved.tools.contains(where: { $0.delivery == .outcomeUnknown }) {
-                        saved.message = "上次有已发送动作结果未知；请先核对设备，旧动作不会重放"
-                    } else if saved.phase == .waitingApproval {
-                        saved.message = "上次有待批准动作；原审批不能直接恢复，请重新获取截图"
-                    } else {
-                        saved.message = "上次执行已挂起；请核对设备并重新获取截图，旧动作不会重放"
-                    }
-                    backgroundStatus = saved.message
-                }
-                checkpoint = saved; try storage.save(saved)
+            let originals = try storage.loadRecoveries()
+            // Cancel every recovered system request before clearing its identifier.
+            for id in Set(originals.compactMap(\.segmentID)) where id.hasPrefix(identifierPrefix + ".") {
+                scheduler.cancel(identifier: id)
             }
+            recoveries = RunCheckpoint.mergedRecoveries(originals).map { $0.recovered() }
+            // Save the complete recovery set BEFORE rewriting the active journal.
+            // A new run may overwrite that journal, never the old unknown actions.
+            try storage.saveRecoveries(recoveries)
+            checkpoint = recoveries.first
+            if let saved = checkpoint { try storage.save(saved) }
+            let pending = recoveries.filter { !$0.message.isEmpty }
+            if !pending.isEmpty { backgroundStatus = pending.map(\.message).joined(separator: "\n") }
+
         } catch { storageHealthy = false; backgroundStatus = "检查点无法读写；原文件保留，执行已禁用" }
     }
 
@@ -144,13 +156,13 @@ struct RunCheckpoint: Codable, Equatable {
         guard storageHealthy else { throw AppError.unavailable("检查点保存失败") }
         lastActivity = now()
         watchdog?.cancel()
-        watchdog = Task { [weak self] in
+        if inactivityTimeout != nil { watchdog = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
                 guard let self else { return }
                 self.checkInactivity()
             }
-        }
+        } }
     }
     private func requestSegment() {
         guard foreground, checkpoint?.phase == .running else { return }
@@ -274,7 +286,7 @@ struct RunCheckpoint: Codable, Equatable {
         }
     }
     func checkInactivity() {
-        guard checkpoint?.phase == .running, now().timeIntervalSince(lastActivity) >= inactivityTimeout else { return }
+        guard let inactivityTimeout, checkpoint?.phase == .running, now().timeIntervalSince(lastActivity) >= inactivityTimeout else { return }
         pause("超过 \(Int(inactivityTimeout)) 秒未收到有效响应；已暂停，请检查网络后手动继续")
     }
     func pause(generation: UUID, message: String) {
@@ -321,4 +333,44 @@ struct RunCheckpoint: Codable, Equatable {
         do { try persist() } catch { pause("检查点保存失败；已暂停，未允许继续发送"); throw error }
     }
     private func saveOrPause() { do { try persistOrPause() } catch {} }
+}
+
+// Recovery is evidence only. It can never restore a lease or an approval.
+extension RunCheckpoint {
+    var recoveryKey: String { "\(conversationID)/\(runID)/\(generation)" }
+    func recovered() -> RunCheckpoint {
+        var saved = self
+        for i in saved.tools.indices where saved.tools[i].delivery == .dispatching {
+            saved.tools[i].delivery = .outcomeUnknown
+        }
+        if saved.phase == .running { saved.phase = .paused }
+        saved.segmentID = nil; saved.pendingApproval = nil
+        if saved.tools.contains(where: { $0.delivery == .outcomeUnknown }) {
+            saved.message = "上次有已发送动作结果未知；请先核对设备，旧动作不会重放"
+        } else if saved.phase == .waitingApproval {
+            saved.message = "上次有待批准动作；原审批不能直接恢复，请重新获取截图"
+        } else if saved.phase == .paused {
+            saved.message = "上次执行已挂起；请核对设备并重新获取截图，旧动作不会重放"
+        } else { saved.message = "" }
+        return saved
+    }
+    static func mergedRecoveries(_ values: [RunCheckpoint]) -> [RunCheckpoint] {
+        var merged: [RunCheckpoint] = []
+        for value in values {
+            guard let index = merged.firstIndex(where: { $0.recoveryKey == value.recoveryKey }) else {
+                merged.append(value); continue
+            }
+            for tool in value.tools {
+                if let i = merged[index].tools.firstIndex(where: { $0.callID == tool.callID && $0.argumentDigest == tool.argumentDigest }) {
+                    // Any unresolved dispatch in either journal remains unknown.
+                    if [.dispatching, .outcomeUnknown].contains(tool.delivery) {
+                        merged[index].tools[i].delivery = .outcomeUnknown
+                    }
+                } else { merged[index].tools.append(tool) }
+            }
+            if [.running, .paused, .waitingApproval].contains(value.phase),
+               [.completed, .stopped].contains(merged[index].phase) { merged[index].phase = .paused }
+        }
+        return merged
+    }
 }

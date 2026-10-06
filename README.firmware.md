@@ -41,10 +41,10 @@ v0.2 的 raw USBmux、实际 ESP-IDF bulk Host、ZLP、描述符选择、QueryTy
 - App TCP28765 通道及其认证/消息协议仍是未来接口，不在本固件实现中
 
 详细接口和证据：
-[USB](docs/usb-transport.md)、[TLS 测试与策略](tests/test_tls_README.md)、
-[CDTunnel](docs/cdtunnel-transport.md)、[lwIP](docs/lwip-tunnel.md)、
-[RemoteXPC](docs/remotexpc-session.md)、[RSD](docs/rsd-discovery.md)、
-[组合与操作](docs/network-operations.md)、[zlib](docs/zlib-compressor.md)。
+[USB](archives/history/docs/usb-transport.md)、[TLS 测试与策略](tests/test_tls_README.md)、
+[CDTunnel](archives/history/docs/cdtunnel-transport.md)、[lwIP](archives/history/docs/lwip-tunnel.md)、
+[RemoteXPC](archives/history/docs/remotexpc-session.md)、[RSD](archives/history/docs/rsd-discovery.md)、
+[组合与操作](archives/history/docs/network-operations.md)、[zlib](archives/history/docs/zlib-compressor.md)。
 
 ## 复现测试
 
@@ -61,7 +61,7 @@ PYTHON="$PWD/.venv/bin/python" ./tools/test_all.sh
 SANITIZE=thread ./tools/test_lwip.sh
 ```
 
-完整输出见 [test-results.txt](docs/test-results.txt)，各套件边界见 [validation.md](docs/validation.md)。
+完整输出见 [test-results.txt](archives/history/docs/test-results.txt)，各套件边界见 [validation.md](archives/history/docs/validation.md)。
 LSan 在当前执行器 ptrace 下不可用；ASan/UBSan 与显式分配计数/池恢复检查另行通过。
 
 ## 编译与默认程序
@@ -80,7 +80,7 @@ USB 探测默认关闭；即使启用，默认也仅运行 QueryType。
 
 候选配置为 WROOM-1-N16R8：16 MB Quad/DIO Flash、8 MB Octal PSRAM 80 MHz。
 WROOM-2、N16R8V 等不同 Flash/电压变体不能直接套用。板型、VBUS、USB-C CC 和端口接线须先确认。
-不会烧写 eFuse。编译大小和资源边界见 [验证](docs/validation.md)与[内存预算](docs/memory-budget.md)。
+不会烧写 eFuse。编译大小和资源边界见 [验证](archives/history/docs/validation.md)与[内存预算](archives/history/docs/memory-budget.md)。
 
 ## 许可证与隐私
 
