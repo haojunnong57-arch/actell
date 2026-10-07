@@ -2,6 +2,17 @@
 // serialized by tail; no Activity reference is exposed to another owner.
 @preconcurrency import ActivityKit
 import Foundation
+import OSLog
+
+/// Request return, system content change and widget evaluation are separate
+/// events. None of them alone acknowledges pixels displayed in the island.
+@MainActor private enum AgentActivityTrace {
+    private static let logger = Logger(subsystem: "com.ja1chen.PhoneAgent", category: "ActivityLifecycle")
+    static func record(_ event: String) {
+        logger.info("\(event, privacy: .public)")
+        BackgroundExecutionTrace.record(event)
+    }
+}
 
 struct AgentActivitySnapshot: Equatable {
     let attributes: AgentActivityAttributes
@@ -13,42 +24,91 @@ struct AgentActivitySnapshot: Equatable {
     }
 }
 
+@MainActor protocol AgentActivityHandle: AnyObject {
+    var isActive: Bool { get }
+    func update(_ content: ActivityContent<AgentActivityAttributes.ContentState>, alert: AlertConfiguration?) async
+    func end(_ content: ActivityContent<AgentActivityAttributes.ContentState>, dismissAt: Date) async
+}
+
+@MainActor private final class SystemAgentActivity: AgentActivityHandle {
+    let activity: Activity<AgentActivityAttributes>
+    private var serial = 0
+    private var contentObservation: Task<Void, Never>?
+    private var stateObservation: Task<Void, Never>?
+    init(_ activity: Activity<AgentActivityAttributes>) {
+        self.activity = activity
+        AgentActivityTrace.record("activity.handle id=\(activity.id) run=\(activity.attributes.runID)")
+        contentObservation = Task { [weak self, activity] in
+            for await content in activity.contentUpdates {
+                guard self != nil else { return }
+                AgentActivityTrace.record("activity.contentObserved id=\(activity.id) run=\(activity.attributes.runID) phase=\(content.state.phase) operation=\(content.state.operation?.rawValue ?? "none") tools=\(content.state.completedTools) contentTime=\(content.state.updatedAt.timeIntervalSince1970)")
+            }
+        }
+        stateObservation = Task { [weak self, activity] in
+            for await state in activity.activityStateUpdates {
+                guard self != nil else { return }
+                AgentActivityTrace.record("activity.stateObserved id=\(activity.id) run=\(activity.attributes.runID) state=\(state)")
+            }
+        }
+    }
+    deinit { contentObservation?.cancel(); stateObservation?.cancel() }
+    var isActive: Bool { activity.activityState == .active || activity.activityState == .stale }
+    func update(_ content: ActivityContent<AgentActivityAttributes.ContentState>, alert: AlertConfiguration?) async {
+        serial += 1
+        let write = serial
+        AgentActivityTrace.record("activity.writeBegin id=\(activity.id) run=\(activity.attributes.runID) serial=\(write) method=update phase=\(content.state.phase) operation=\(content.state.operation?.rawValue ?? "none") tools=\(content.state.completedTools) alert=\(alert != nil) contentTime=\(content.state.updatedAt.timeIntervalSince1970)")
+        await activity.update(content, alertConfiguration: alert)
+        AgentActivityTrace.record("activity.systemUpdateReturned id=\(activity.id) run=\(activity.attributes.runID) serial=\(write) requested=\(content.state.phase) observed=\(activity.content.state.phase) state=\(activity.activityState)")
+    }
+    func end(_ content: ActivityContent<AgentActivityAttributes.ContentState>, dismissAt: Date) async {
+        serial += 1
+        let write = serial
+        AgentActivityTrace.record("activity.writeBegin id=\(activity.id) run=\(activity.attributes.runID) serial=\(write) method=end phase=\(content.state.phase) contentTime=\(content.state.updatedAt.timeIntervalSince1970)")
+        await activity.end(content, dismissalPolicy: .after(dismissAt))
+        AgentActivityTrace.record("activity.systemEndReturned id=\(activity.id) run=\(activity.attributes.runID) serial=\(write) requested=\(content.state.phase) observed=\(activity.content.state.phase) state=\(activity.activityState)")
+    }
+}
+
 /// Single FIFO owns ActivityKit writes, including launch reconciliation. Neither
 /// suspension nor a Live Activity grants the executor background time.
 @MainActor final class AgentLiveActivityController: ObservableObject {
     @Published private(set) var notice: String?
     private var foreground = true
     private let enabled: Bool
-    private var activities: [UUID: Activity<AgentActivityAttributes>] = [:]
+    private var activities: [UUID: any AgentActivityHandle] = [:]
+    private let createActivity: ((AgentActivitySnapshot) throws -> any AgentActivityHandle)?
+    private var terminalPresented: Set<UUID> = []
     private var tail: Task<Void, Never>?
     private var latest: [UUID: AgentActivitySnapshot] = [:]
 
-    init(enabled: Bool = true) {
+    init(enabled: Bool = true, createActivity: ((AgentActivitySnapshot) throws -> any AgentActivityHandle)? = nil) {
         self.enabled = enabled
+        self.createActivity = createActivity
         BackgroundExecutionTrace.record("activity.init enabled=\(enabled)")
-        guard enabled else { return }
+        guard enabled, createActivity == nil else { return }
         // A new process has no resumable continuation. Never adopt an old run.
         let orphans = Activity<AgentActivityAttributes>.activities
         tail = Task {
             for orphan in orphans {
                 var state = orphan.content.state
-                state.phase = .interrupted; state.approvalID = nil; state.operation = nil; state.updatedAt = Date()
+                if !state.phase.isTerminal { state.phase = .interrupted }
+                state.approvalID = nil; state.operation = nil; state.updatedAt = Date()
                 await orphan.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(300)))
-                BackgroundExecutionTrace.record("activity.recovered phase=interrupted")
+                BackgroundExecutionTrace.record("activity.recovered phase=\(state.phase)")
             }
         }
     }
 
     #if DEBUG
     var activeCountForProbe: Int {
-        activities.values.filter { $0.activityState == .active || $0.activityState == .stale }.count
+        activities.values.filter(\.isActive).count
     }
     #endif
 
     func setForeground(_ active: Bool) {
+        if foreground != active { AgentActivityTrace.record("activity.scene foreground=\(active)") }
         foreground = active
-        // Leave a truthful interrupted card on the island while away. On
-        // return, end it; the executor is already cancelled in either case.
+        // Returning to the App acknowledges the terminal presentation.
         if active { for snapshot in latest.values where snapshot.state.phase.isTerminal { submit(snapshot) } }
     }
 
@@ -66,44 +126,67 @@ struct AgentActivitySnapshot: Equatable {
         }
     }
 
+    /// Keep the caller's execution capability until its queued update returns.
+    func waitForPendingUpdates() async {
+        await tail?.value
+    }
+
     private func apply(_ snapshot: AgentActivitySnapshot) async {
         let run = snapshot.attributes.runID
         if snapshot.state.phase.isTerminal {
+            AgentActivityTrace.record("activity.terminalRequested run=\(run) phase=\(snapshot.state.phase) foreground=\(foreground) active=\(activities[run]?.isActive == true)")
             if let current = activities[run] {
-                if !foreground, snapshot.state.phase == .interrupted {
-                    // One final update, no heartbeat or background task. Ending
-                    // here would immediately remove the useful return-to-app
-                    // island. The user/system can dismiss it; foreground or the
-                    // next process launch ends it without resuming execution.
-                    await current.update(ActivityContent(state: snapshot.state, staleDate: nil))
+                if !foreground, snapshot.state.phase != .stopped {
+                    // end(.after) only retains the Lock Screen card. Keep the
+                    // terminal island until foreground or the next run instead.
+                    let alert = snapshot.state.phase == .completed && !terminalPresented.contains(run)
+                        ? AlertConfiguration(title: "任务已完成", body: "点击查看任务结果", sound: .default) : nil
+                    await current.update(ActivityContent(state: snapshot.state, staleDate: nil, relevanceScore: 100), alert: alert)
+                    terminalPresented.insert(run)
+                    BackgroundExecutionTrace.record("activity.terminalUpdateReturned phase=\(snapshot.state.phase) alertRequested=\(alert != nil)")
                 } else {
-                    await current.end(ActivityContent(state: snapshot.state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(300)))
+                    await current.end(ActivityContent(state: snapshot.state, staleDate: nil), dismissAt: Date().addingTimeInterval(300))
                     BackgroundExecutionTrace.record("activity.ended phase=\(snapshot.state.phase) foreground=\(foreground)")
                     activities.removeValue(forKey: run)
                     latest.removeValue(forKey: run)
+                    terminalPresented.remove(run)
                 }
-            } else { latest.removeValue(forKey: run) }
+            } else {
+                BackgroundExecutionTrace.record("activity.terminalSkipped phase=\(snapshot.state.phase) reason=noActivity")
+                latest.removeValue(forKey: run)
+            }
             return
         }
         // Suppress queued obsolete updates and never start after cancellation.
         guard latest[run] == snapshot else { return }
+        if activities[run] == nil {
+            for previous in Array(latest.values) where previous.attributes.runID != run && previous.state.phase.isTerminal {
+                let previousRun = previous.attributes.runID
+                if let activity = activities.removeValue(forKey: previousRun) {
+                    await activity.end(ActivityContent(state: previous.state, staleDate: nil), dismissAt: Date().addingTimeInterval(300))
+                }
+                latest.removeValue(forKey: previousRun); terminalPresented.remove(previousRun)
+            }
+        }
         let content = ActivityContent(state: snapshot.state, staleDate: snapshot.staleDate, relevanceScore: 100)
         if let activity = activities[run] {
-            guard activity.activityState == .active || activity.activityState == .stale else {
-                BackgroundExecutionTrace.record("activity.skipped state=\(activity.activityState)")
+            guard activity.isActive else {
+                BackgroundExecutionTrace.record("activity.skipped inactive=true")
                 return
             }
-            await activity.update(content)
-            BackgroundExecutionTrace.record("activity.updated phase=\(snapshot.state.phase) tools=\(snapshot.state.completedTools) state=\(activity.activityState)")
+            await activity.update(content, alert: nil)
+            BackgroundExecutionTrace.record("activity.updated phase=\(snapshot.state.phase) tools=\(snapshot.state.completedTools) active=\(activity.isActive)")
         } else {
-            guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            guard createActivity != nil || ActivityAuthorizationInfo().areActivitiesEnabled else {
                 BackgroundExecutionTrace.record("activity.denied authorization=false")
                 notice = "实时活动未开启；仍可在 App 内查看与确认"; return
             }
             do {
-                let activity = try Activity.request(attributes: snapshot.attributes, content: content, pushType: nil)
+                let activity: any AgentActivityHandle
+                if let createActivity { activity = try createActivity(snapshot) }
+                else { activity = SystemAgentActivity(try Activity.request(attributes: snapshot.attributes, content: content, pushType: nil)) }
                 activities[run] = activity
-                BackgroundExecutionTrace.record("activity.created foreground=\(foreground) state=\(activity.activityState)")
+                BackgroundExecutionTrace.record("activity.created foreground=\(foreground) active=\(activity.isActive)")
                 notice = nil
             } catch {
                 // Record system error metadata only, never task text or credentials.

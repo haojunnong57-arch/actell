@@ -4,8 +4,15 @@ import AppIntents
 
 @MainActor private final class CommandMockRunner: SessionCommandRunning {
     var currentRun: RunIdentity?
+    var commandCanStart = true
+    var commandStartError: String?
     var commandBusy = false
     var commandStatus: SessionPublicStatus = .idle
+    var starts: [UUID] = []
+    var startHandler: ((String, UUID) -> Bool)?
+    func startCommandTask(_ task: String, in sessionID: UUID) -> Bool {
+        starts.append(sessionID); return startHandler?(task, sessionID) ?? false
+    }
     var cancellations: [RunIdentity] = []
     func cancelCommandRun(_ identity: RunIdentity) -> Bool {
         guard currentRun == identity else { return false }
@@ -20,6 +27,80 @@ import AppIntents
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return url
+    }
+    func testRejectedStartReportsItsSpecificReason() throws {
+        let store = ConversationStore(inMemory: true), runner = CommandMockRunner()
+        runner.commandStartError = "设备连接操作尚未结束，请稍后重试"
+        let service = SessionCommandService(sessions: store, runner: runner)
+        XCTAssertThrowsError(try service.perform(SessionCommand(.execute("任务")))) {
+            XCTAssertEqual($0.localizedDescription, runner.commandStartError)
+        }
+    }
+    func testSendWhileInactiveReportsForegroundReasonWithoutStarting() {
+        let store = ConversationStore(inMemory: true)
+        let model = AgentViewModel(sessions: store, loadPersistentState: false)
+        let id = model.createConversation(mode: .live)
+        model.setForeground(false)
+        XCTAssertFalse(model.send("任务", in: id, cloudConsent: true))
+        XCTAssertEqual(model.errorMessage, "执言尚未进入前台，任务未开始")
+        XCTAssertNil(model.currentRun)
+    }
+    func testDirectExecuteInitializesDefaultProviderWithoutOpeningConversation() async throws {
+        let store = ConversationStore(inMemory: true), providers = ProviderStore(defaults: nil)
+        let profile = ProviderProfile(name: "Siri default", settings: .init(baseURL: "https://example.com/v1", model: "test-model"))
+        try providers.save(profile)
+        let model = AgentViewModel(sessions: store, loadPersistentState: false,
+            runServices: AgentRunServices(provider: DemoProvider(), bridge: DemoBridge()), providers: providers)
+        let service = SessionCommandService(sessions: store, runner: model)
+        model.setForeground(false)
+        XCTAssertEqual(try service.perform(SessionCommand(.execute("查看屏幕"))), .deferred)
+        XCTAssertNil(model.currentRun)
+        model.setForeground(true)
+        service.resumePendingExecutions()
+        let session = try XCTUnwrap(store.conversations.first)
+        XCTAssertEqual(session.providerID, profile.id)
+        XCTAssertEqual(session.modelID, "test-model")
+        XCTAssertEqual(session.entry?.state, .submitted)
+        let run = try XCTUnwrap(model.currentRun)
+        XCTAssertTrue(model.stop(run: run))
+        try await waitUntil { !model.stopping }
+    }
+    func testInactiveHandoffStartsOnlyOnceWhenActiveAndDoesNotSurviveRelaunch() throws {
+        let store = ConversationStore(inMemory: true), runner = CommandMockRunner()
+        runner.commandCanStart = false
+        runner.startHandler = { text, id in store.begin(in: id, query: text) != nil }
+        let service = SessionCommandService(sessions: store, runner: runner)
+        let command = SessionCommand(.execute("前台就绪后执行"))
+        XCTAssertEqual(try service.perform(command), .deferred)
+        service.resumePendingExecutions()
+        XCTAssertTrue(runner.starts.isEmpty)
+        runner.commandCanStart = true
+        SessionCommandService(sessions: store, runner: runner).resumePendingExecutions()
+        XCTAssertTrue(runner.starts.isEmpty)
+        service.resumePendingExecutions()
+        service.resumePendingExecutions()
+        XCTAssertEqual(runner.starts.count, 1)
+        XCTAssertEqual(store.conversations.first?.entry?.state, .submitted)
+    }
+    func testDirectExecuteStartsOnceAndDoesNotReplayAfterRestore() throws {
+        let folder = try directory(), store = ConversationStore(directory: folder)
+        let runner = CommandMockRunner(), command = SessionCommand(.execute("立即执行"))
+        runner.startHandler = { text, id in store.begin(in: id, query: text) != nil }
+        let service = SessionCommandService(sessions: store, runner: runner)
+        guard case .started(let id) = try service.perform(command) else { return XCTFail() }
+        XCTAssertEqual(store.conversation(id)?.entry?.state, .submitted)
+        XCTAssertNil(service.pendingRoute)
+        XCTAssertEqual(try service.perform(command), .started(id))
+        let restored = SessionCommandService(sessions: ConversationStore(directory: folder), runner: runner)
+        XCTAssertEqual(try restored.perform(command), .started(id))
+        XCTAssertEqual(runner.starts, [id])
+    }
+    func testDirectExecuteFailureDoesNotReportStarted() throws {
+        let store = ConversationStore(inMemory: true), runner = CommandMockRunner()
+        let service = SessionCommandService(sessions: store, runner: runner)
+        XCTAssertThrowsError(try service.perform(SessionCommand(.execute("任务"))))
+        XCTAssertNil(store.activeRun)
+        XCTAssertEqual(store.conversations.first?.entry?.state, .pendingConfirmation)
     }
     func testPrepareValidatesBeforeSavingAndDoesNotRun() throws {
         let store = ConversationStore(inMemory: true), runner = CommandMockRunner()
@@ -135,7 +216,9 @@ import AppIntents
         }
     }
     func testAuthenticationAndForegroundPolicy() {
-        XCTAssertEqual(PrepareAgentTaskIntent.authenticationPolicy, .requiresLocalDeviceAuthentication)
+        // Siri hands execution to the foreground App; starting still requires
+        // an active scene and available protected data.
+        XCTAssertEqual(PrepareAgentTaskIntent.authenticationPolicy, .alwaysAllowed)
         XCTAssertEqual(AgentTaskStatusIntent.authenticationPolicy, .requiresLocalDeviceAuthentication)
         XCTAssertEqual(StopAgentTaskIntent.authenticationPolicy, .requiresLocalDeviceAuthentication)
         if #available(iOS 26.0, *) {

@@ -1,5 +1,6 @@
 import XCTest
 import Combine
+import ActivityKit
 @testable import PhoneAgent
 
 @MainActor final class ApprovalRecordTests: XCTestCase {
@@ -113,6 +114,90 @@ import Combine
 }
 
 @MainActor final class LiveActivityTests: XCTestCase {
+    private func snapshot(_ phase: AgentActivityAttributes.Phase, run: UUID) -> AgentActivitySnapshot {
+        .init(attributes: .init(sessionID: UUID(), runID: run, isDemo: true),
+              state: .init(phase: phase, completedTools: 3, updatedAt: Date()), staleDate: Date().addingTimeInterval(30))
+    }
+    func testBackgroundCompletionAlertsOnceAndRemainsUntilForeground() async throws {
+        let handle = RecordingActivityHandle()
+        var created = 0
+        let controller = AgentLiveActivityController(createActivity: { _ in created += 1; return handle })
+        let run = UUID()
+        controller.submit(snapshot(.working, run: run))
+        try await waitUntil { created == 1 }
+        controller.setForeground(false)
+        let completed = snapshot(.completed, run: run)
+        controller.submit(completed); controller.submit(completed)
+        try await waitUntil { handle.updates.count == 2 }
+        XCTAssertEqual(handle.alerts, 1)
+        XCTAssertEqual(handle.updates.last, .completed)
+        XCTAssertTrue(handle.ended.isEmpty, "Ending immediately would hide the completion island")
+        controller.setForeground(true)
+        try await waitUntil { handle.ended.count == 1 }
+        XCTAssertEqual(handle.ended, [.completed])
+        XCTAssertEqual(handle.alerts, 1)
+    }
+    func testNextRunDismissesCompletedIslandWithoutEndingAnotherActiveRun() async throws {
+        var handles: [UUID: RecordingActivityHandle] = [:]
+        let controller = AgentLiveActivityController(createActivity: { snapshot in
+            let handle = RecordingActivityHandle(); handles[snapshot.attributes.runID] = handle; return handle
+        })
+        let a = UUID(), b = UUID(), c = UUID()
+        controller.submit(snapshot(.working, run: a))
+        try await waitUntil { handles[a] != nil }
+        controller.submit(snapshot(.working, run: b))
+        try await waitUntil { handles[b] != nil }
+        controller.setForeground(false)
+        controller.submit(snapshot(.completed, run: a))
+        try await waitUntil { handles[a]?.alerts == 1 }
+        controller.submit(snapshot(.thinking, run: b))
+        try await waitUntil { handles[b]?.updates.last == .thinking }
+        XCTAssertTrue(handles[a]?.ended.isEmpty == true)
+        controller.submit(snapshot(.working, run: c))
+        try await waitUntil { handles[c] != nil }
+        XCTAssertEqual(handles[a]?.ended, [.completed])
+        XCTAssertTrue(handles[b]?.ended.isEmpty == true)
+    }
+    func testRunKeepsExecutionUntilCompletionActivityUpdateReturns() async throws {
+        let handle = RecordingActivityHandle()
+        handle.holdCompletion = true
+        let activities = AgentLiveActivityController(createActivity: { _ in handle })
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+                                   sharedActivities: activities)
+        defer { handle.releaseCompletion(); model.stop() }
+        let id = model.createConversation(mode: .demo)
+        XCTAssertTrue(model.send("completion ordering", in: id))
+        try await waitUntil { model.approval != nil }
+        activities.setForeground(false)
+        model.approve(true)
+        try await waitUntil { handle.completionPending }
+        XCTAssertTrue(model.running, "Media playback must remain owned while ActivityKit is still updating")
+        XCTAssertEqual(model.lifecycle.checkpoint?.phase, .running, "Do not release the execution lease before the completion update")
+        handle.releaseCompletion()
+        try await waitUntil { !model.running }
+        XCTAssertEqual(model.activitySnapshot?.state.phase, .completed)
+        XCTAssertEqual(handle.alerts, 1)
+        XCTAssertTrue(handle.ended.isEmpty)
+    }
+    func testStopWhileCompletionUpdateWaitsCannotRestoreCompletedRun() async throws {
+        let handle = RecordingActivityHandle()
+        handle.holdCompletion = true
+        let activities = AgentLiveActivityController(createActivity: { _ in handle })
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+                                   sharedActivities: activities)
+        defer { handle.releaseCompletion(); model.stop() }
+        let id = model.createConversation(mode: .demo)
+        XCTAssertTrue(model.send("stop during completion", in: id))
+        try await waitUntil { model.approval != nil }
+        activities.setForeground(false)
+        model.approve(true)
+        try await waitUntil { handle.completionPending }
+        model.stop()
+        handle.releaseCompletion()
+        try await waitUntil { !model.stopping && handle.ended.last == .stopped }
+        XCTAssertEqual(model.activitySnapshot?.state.phase, .stopped)
+        XCTAssertEqual(model.sessions.conversation(id)?.phase, .stopped)
+    }
     private func waitUntil(_ condition: @escaping () -> Bool) async throws {
         for _ in 0..<200 {
             if condition() { return }
@@ -251,6 +336,29 @@ import Combine
         XCTAssertEqual(denied.activitySnapshot?.state.phase, .blocked)
         XCTAssertEqual(stopped.activitySnapshot?.state.phase, .stopped)
         try await waitUntil { !denied.stopping && !stopped.stopping }
+    }
+}
+
+@MainActor private final class RecordingActivityHandle: AgentActivityHandle {
+    var isActive = true
+    var updates: [AgentActivityAttributes.Phase] = []
+    var ended: [AgentActivityAttributes.Phase] = []
+    var alerts = 0
+    var holdCompletion = false
+    private var completion: CheckedContinuation<Void, Never>?
+    var completionPending: Bool { completion != nil }
+    func releaseCompletion() {
+        let pending = completion; completion = nil; holdCompletion = false
+        pending?.resume()
+    }
+    func update(_ content: ActivityContent<AgentActivityAttributes.ContentState>, alert: AlertConfiguration?) async {
+        updates.append(content.state.phase); if alert != nil { alerts += 1 }
+        if content.state.phase == .completed, holdCompletion {
+            await withCheckedContinuation { completion = $0 }
+        }
+    }
+    func end(_ content: ActivityContent<AgentActivityAttributes.ContentState>, dismissAt: Date) async {
+        ended.append(content.state.phase); isActive = false
     }
 }
 

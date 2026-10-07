@@ -62,6 +62,24 @@ import XCTest
         XCTAssertEqual(toggle.frame.minY, headerY, accuracy: 12)
         capture("tool-result-internal-scroll")
     }
+    func testReasoningHeaderWhitespaceAndArrowCollapseWithOneTap() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-disclosure-scroll"]
+        app.launch(); app.staticTexts["新会话"].firstMatch.tap()
+        let header = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "思考")).firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 5))
+        let content = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "reasoningContent-")).firstMatch
+        for x in [0.5, 0.95, 0.5, 0.95, 0.5, 0.95] {
+            // Tap the empty middle and the chevron, rather than only the text.
+            header.coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.5)).tap()
+            XCTAssertTrue(content.waitForExistence(timeout: 2))
+            header.coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.5)).tap()
+            let collapsed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: content)
+            XCTAssertEqual(XCTWaiter.wait(for: [collapsed], timeout: 2), .completed)
+        }
+        capture("reasoning-single-tap-collapse")
+    }
     func testDeviceControlsAndSettingsDoNotStartAnything() {
         let app = launch()
         XCTAssertFalse(app.buttons["openProviders"].exists)

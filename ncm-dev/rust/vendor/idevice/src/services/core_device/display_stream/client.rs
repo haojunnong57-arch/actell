@@ -69,6 +69,16 @@ impl<R: ReadWrite> DisplayServiceClient<R> {
             .await
     }
 
+    /// Stop only the named receiver stream tokens. Use a fresh service
+    /// connection: the stop must be its sole reply-bearing request.
+    pub async fn stop_media_stream_identifiers(&mut self, identifiers: &[u32]) -> Result<plist::Value, IdeviceError> {
+        let input = scoped_stop_input(identifiers)?;
+        self.inner.invoke_inner(
+            obf!("com.apple.coredevice.feature.stopmediastream"), Some(input),
+            Some(obf!("com.apple.coredevice.action.mediastreamstop").into()),
+        ).await
+    }
+
     /// Invoke `startvideooutput` with a built `MediaStreamStartParameters` XPC
     /// dictionary (see [`build_start_video_parameters`]).
     pub async fn start_video_output(
@@ -98,6 +108,29 @@ impl<R: ReadWrite> DisplayServiceClient<R> {
                 Some(params),
             )
             .await
+    }
+}
+
+fn scoped_stop_input(identifiers: &[u32]) -> Result<XpcDictionary, IdeviceError> {
+    if identifiers.is_empty() {
+        return Err(crate::core_device::CoreDeviceError::MalformedField("stop identifiers").into());
+    }
+    let mut input = XpcDictionary::new();
+    input.insert("stopAll".into(), XPCObject::Bool(false));
+    input.insert("identifiers".into(), XPCObject::Array(identifiers.iter().map(|id| XPCObject::UInt64(u64::from(*id))).collect()));
+    Ok(input)
+}
+
+#[cfg(test)]
+mod scoped_stop_tests {
+    use super::*;
+    #[test]
+    fn stop_request_names_only_owned_tokens_without_signed_conversion() {
+        let input = scoped_stop_input(&[7, u32::MAX]).unwrap();
+        assert!(matches!(input.get("stopAll"), Some(XPCObject::Bool(false))));
+        let Some(XPCObject::Array(ids)) = input.get("identifiers") else { panic!("missing identifiers") };
+        assert!(matches!(ids.as_slice(), [XPCObject::UInt64(7), XPCObject::UInt64(4_294_967_295)]));
+        assert!(scoped_stop_input(&[]).is_err());
     }
 }
 

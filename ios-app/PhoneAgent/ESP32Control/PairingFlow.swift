@@ -238,7 +238,13 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         running = true; self.capturing = capturing
         beginOperationLease(epoch: epoch)
         job = Task { @MainActor in
-            defer { if generation == epoch { finishOperationLease(); running = false; self.capturing = false; job = nil } }
+            defer {
+                if generation == epoch {
+                    running = false; self.capturing = false; job = nil
+                    finishControlMediaIfIdle()
+                    if !mediaLifetime.stopping { finishOperationLease() }
+                }
+            }
             do {
                 // User requests queue behind an in-flight keepalive; the UI only
                 // becomes busy after a user operation, never for maintenance.
@@ -370,12 +376,14 @@ enum NCMControlError: Error { case unavailable(String), stopped }
                     guard self.controlSessionID == session else { throw CancellationError() }
                 }
                 guard self.controlSessionID == session, self.ready else { throw CancellationError() }
+                BackgroundExecutionTrace.record("control.mediaStopRequested scoped=true")
                 try await self.backend.stopTouchMedia()
             }, completed: { [weak self] success in
                 guard let self, self.controlSessionID == session else { return }
                 self.running = false; self.mediaStarted = false
+                self.finishOperationLease()
                 if success {
-                    BackgroundExecutionTrace.record("control.mediaReleased connectionRetained=true")
+                    BackgroundExecutionTrace.record("control.mediaReleased peerConfirmed=true connectionRetained=true")
                     self.message = "屏幕控制已结束"
                 } else {
                     self.cancel()

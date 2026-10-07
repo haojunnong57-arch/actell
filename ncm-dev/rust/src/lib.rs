@@ -314,12 +314,14 @@ impl Session {
     }
     /// Release only this controller's media/HID streams and decoder bytes.
     /// No global stopAll; retained authentication can serve the next task.
-    pub fn stop_touch_media(&mut self) -> Result<(), Error> {
+    pub async fn stop_touch_media(&mut self) -> Result<(), Error> {
         self.check()?;
-        self.media.take();
+        let result = if let Some(media) = self.media.take() {
+            media.stop(&mut self.adapter, &mut self.handshake).await
+        } else { Ok(()) };
         self.indigo.take();
         self.video.reset();
-        Ok(())
+        result
     }
     /// No replay on timeout/uncertain release. A negotiated screen session must belong to
     /// this same authenticated generation; result never claims a visible tap.
@@ -705,9 +707,9 @@ mod tests {
         let result =
             tokio::time::timeout(Duration::from_secs(2), session.start_touch_media()).await;
         assert!(!matches!(result, Ok(Ok(()))));
-        assert!(session.stop_touch_media().is_ok());
+        assert!(session.stop_touch_media().await.is_ok());
         assert!(
-            session.stop_touch_media().is_ok(),
+            session.stop_touch_media().await.is_ok(),
             "owned media release is idempotent"
         );
         assert!(session.media.is_none());

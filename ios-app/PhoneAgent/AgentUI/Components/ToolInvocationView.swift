@@ -37,7 +37,7 @@ struct ToolInvocationView<Preview: View>: View {
             case .succeeded, .failed, .denied, .cancelled, .interrupted, .outcomeUnknown: resultView
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tool-invocation-\(configuration.tool.state.rawValue)-\(configuration.tool.name)")

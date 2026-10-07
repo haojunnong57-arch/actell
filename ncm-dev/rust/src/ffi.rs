@@ -478,6 +478,7 @@ async fn execute(session: &mut Session, r: Request, permissions: u32) -> Event {
             .map(|_| Event::ok(r.id, 2, Vec::new())),
         11 => session
             .stop_touch_media()
+            .await
             .map(|_| Event::ok(r.id, 2, Vec::new())),
         2 => session
             .screenshot()

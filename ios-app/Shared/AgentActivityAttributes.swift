@@ -96,7 +96,7 @@ struct AgentActivityAttributes: ActivityAttributes {
             case .awaitingApproval: return "等待确认"
             case .approved: return "已收到批准"
             case .executing: return "正在发送动作"
-            case .completed: return "本轮已结束"
+            case .completed: return "任务已完成"
             case .stopped: return "已停止"
             case .interrupted: return "已中断"
             case .blocked: return "需要查看"
@@ -120,7 +120,7 @@ struct AgentActivityAttributes: ActivityAttributes {
             case .executing: return "发送不代表成功，请核对设备结果"
             case .interrupted: return "返回 App 查看记录；不会自动重试"
             case .stopped: return "如动作已发出，请核对设备"
-            case .completed: return "请回到 App 核对结果"
+            case .completed: return ""
             case .blocked: return "回到 App 查看原因"
             default: return "任务执行中；采集或连接失效时停止"
             }

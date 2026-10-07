@@ -86,7 +86,7 @@ import UIKit
     func report(completed: Int, subtitle: String) {
         guard !self.completed else { return }
         task.progress.completedUnitCount = Int64(completed)
-        task.updateTitle("Phone Agent 正在处理任务", subtitle: subtitle)
+        task.updateTitle("\(AppIdentity.displayName) 正在处理任务", subtitle: subtitle)
     }
     func complete(success: Bool) {
         guard !completed else { return }; completed = true

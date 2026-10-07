@@ -109,6 +109,7 @@ impl Drop for Drains {
 }
 pub(crate) struct Media {
     _video: DisplayServiceClient<Stream>,
+    stop_identifier: u32,
     hid: UniversalHidServiceClient<Stream>,
     _drains: Drains,
     healthy: Arc<AtomicBool>,
@@ -321,10 +322,19 @@ impl Media {
         .await?;
         Ok(Self {
             _video: video,
+            stop_identifier: receiver_ssrc,
             hid,
             _drains: drains,
             healthy,
         })
+    }
+    pub async fn stop(self, adapter: &mut AdapterHandle, handshake: &mut RsdHandshake) -> Result<(), Error> {
+        // Dropping local sockets does not clear the peer's remote-observation
+        // assertion. Never reuse the start connection for this stop request.
+        let mut stop = bounded(Stage::Media, DisplayServiceClient::connect_rsd(adapter, handshake)).await?;
+        let reply = bounded(Stage::Media, stop.stop_media_stream_identifiers(&[self.stop_identifier])).await?;
+        if stop_confirmed(&reply, self.stop_identifier) { Ok(()) }
+        else { Err(error(Stage::Media, Cause::Protocol)) }
     }
     pub async fn drag(
         &mut self,
@@ -400,6 +410,18 @@ impl Media {
         .await
         .map_err(|_| error(Stage::Input, Cause::DeliveryUncertain))
     }
+}
+
+fn stop_confirmed(reply: &plist::Value, identifier: u32) -> bool {
+    let Some(sessions) = reply.as_dictionary()
+        .and_then(|d| d.get("serverInfo")).and_then(plist::Value::as_dictionary)
+        .and_then(|d| d.get("sessions")).and_then(plist::Value::as_array) else { return false };
+    sessions.iter().all(|session| {
+        session.as_dictionary().and_then(|d| d.get("connection")).and_then(plist::Value::as_dictionary)
+            .and_then(|d| d.get("streamConfig")).and_then(plist::Value::as_dictionary)
+            .and_then(|d| d.get("RemoteSSRC")).and_then(plist::Value::as_unsigned_integer)
+            .and_then(|id| u32::try_from(id).ok()).is_some_and(|id| id != identifier)
+    })
 }
 /// Admission is bound to the authenticated answer, not an assumed UDP source port.
 fn parse_video_packet(
@@ -554,6 +576,23 @@ fn extract_answer(value: &plist::Value) -> Result<&[u8], Error> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stop_requires_peer_confirmation_and_does_not_confuse_other_streams() {
+        fn response(ids: &[u32]) -> plist::Value {
+            let sessions = ids.iter().map(|id| {
+                let mut config = plist::Dictionary::new(); config.insert("RemoteSSRC".into(), (*id).into());
+                let mut connection = plist::Dictionary::new(); connection.insert("streamConfig".into(), config.into());
+                let mut session = plist::Dictionary::new(); session.insert("connection".into(), connection.into());
+                session.into()
+            }).collect();
+            let mut server = plist::Dictionary::new(); server.insert("sessions".into(), plist::Value::Array(sessions));
+            let mut reply = plist::Dictionary::new(); reply.insert("serverInfo".into(), server.into()); reply.into()
+        }
+        assert!(!super::stop_confirmed(&response(&[7,9]),7));
+        assert!(super::stop_confirmed(&response(&[9]),7));
+        assert!(super::stop_confirmed(&response(&[]),7));
+        assert!(!super::stop_confirmed(&plist::Value::Dictionary(Default::default()),7));
+    }
     #[test]
     fn geometry_selects_exact_display_and_rejects_stale_or_ambiguous_data() {
         use plist::Value as V;

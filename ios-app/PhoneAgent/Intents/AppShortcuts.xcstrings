@@ -1,19 +1,19 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "Create a task with ${applicationName}": {
+    "Execute a task with ${applicationName}": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Create a task with ${applicationName}"
+            "value": "Execute a task with ${applicationName}"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "用${applicationName}创建任务"
+            "value": "用${applicationName}执行任务"
           }
         }
       }
@@ -48,6 +48,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "停止${applicationName}当前任务"
+          }
+        }
+      }
+    },
+    "Execute a task in ${applicationName}": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Execute a task in ${applicationName}"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在${applicationName}执行任务"
           }
         }
       }

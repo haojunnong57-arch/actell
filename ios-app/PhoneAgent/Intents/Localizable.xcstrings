@@ -4,19 +4,19 @@
     "---\nname: 示例技能\ndescription: 说明适用场景\nversion: 1\n---\n# 操作指南\n这里写任务相关的参考内容。" : {
 
     },
-    "A task draft is waiting for your confirmation in PhoneAgent. It has not started." : {
+    "A task draft is waiting for your confirmation in Zhiyan. It has not started." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A task draft is waiting for your confirmation in PhoneAgent. It has not started."
+            "value" : "A task draft is waiting for your confirmation in Zhiyan. It has not started."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "有任务草稿等待你在 PhoneAgent 中确认，尚未开始。"
+            "value" : "有任务草稿等待你在执言中确认，尚未开始。"
           }
         }
       }
@@ -38,19 +38,19 @@
         }
       }
     },
-    "A task is waiting for your approval in PhoneAgent." : {
+    "A task is waiting for your approval in Zhiyan." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A task is waiting for your approval in PhoneAgent."
+            "value" : "A task is waiting for your approval in Zhiyan."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "有任务等待你在 PhoneAgent 中批准动作。"
+            "value" : "有任务等待你在执言中批准动作。"
           }
         }
       }
@@ -72,53 +72,19 @@
         }
       }
     },
-    "Create a task" : {
+    "Draft saved. Review it in Zhiyan and tap Confirm and start. If another task is active, this draft will wait." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Create a task"
+            "value" : "Draft saved. Review it in Zhiyan and tap Confirm and start. If another task is active, this draft will wait."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "创建任务"
-          }
-        }
-      }
-    },
-    "Create a task: ${task}" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Create a task: ${task}"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "创建任务：${task}"
-          }
-        }
-      }
-    },
-    "Draft saved. Review it in PhoneAgent and tap Confirm and start. If another task is active, this draft will wait." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Draft saved. Review it in PhoneAgent and tap Confirm and start. If another task is active, this draft will wait."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "草稿已保存。请在 PhoneAgent 核对后点击“确认开始”。如有任务正在运行，草稿会等待。"
+            "value" : "草稿已保存。请在执言核对后点击“确认开始”。如有任务正在运行，草稿会等待。"
           }
         }
       }
@@ -142,6 +108,40 @@
     },
     "ESP32 控制" : {
 
+    },
+    "Execute a task" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Execute a task"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "执行任务"
+          }
+        }
+      }
+    },
+    "Execute a task: ${task}" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Execute a task: ${task}"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "执行任务：${task}"
+          }
+        }
+      }
     },
     "No matching task is currently running." : {
       "extractionState" : "manual",
@@ -177,6 +177,17 @@
         }
       }
     },
+    "Open Zhiyan and immediately execute the supplied task." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开执言并直接执行传入的任务。"
+          }
+        }
+      }
+    },
     "Read only a general task state, without task text or results." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -194,19 +205,19 @@
         }
       }
     },
-    "Save a task draft and open PhoneAgent for confirmation. This does not start the agent." : {
+    "Save a task draft and open Zhiyan for confirmation. This does not start the agent." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Save a task draft and open PhoneAgent for confirmation. This does not start the agent."
+            "value" : "Save a task draft and open Zhiyan for confirmation. This does not start the agent."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "保存任务草稿并打开 PhoneAgent 等待确认。不会自动启动 Agent。"
+            "value" : "保存任务草稿并打开执言等待确认。不会自动启动 Agent。"
           }
         }
       }
@@ -245,19 +256,19 @@
         }
       }
     },
-    "Stop the current run through PhoneAgent. Actions already sent may have happened." : {
+    "Stop the current run through Zhiyan. Actions already sent may have happened." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Stop the current run through PhoneAgent. Actions already sent may have happened."
+            "value" : "Stop the current run through Zhiyan. Actions already sent may have happened."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "通过 PhoneAgent 停止当前运行。已发出的动作可能已经执行。"
+            "value" : "通过执言停止当前运行。已发出的动作可能已经执行。"
           }
         }
       }
@@ -296,6 +307,28 @@
         }
       }
     },
+    "Task received. It will start when Zhiyan is active." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任务已接收，执言进入前台后自动开始。"
+          }
+        }
+      }
+    },
+    "Task started." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任务已开始。"
+          }
+        }
+      }
+    },
     "Task status" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -330,19 +363,30 @@
         }
       }
     },
-    "The draft could not be saved. Open PhoneAgent and check storage." : {
+    "The draft could not be saved. Open Zhiyan and check storage." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The draft could not be saved. Open PhoneAgent and check storage."
+            "value" : "The draft could not be saved. Open Zhiyan and check storage."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "草稿未能保存，请打开 PhoneAgent 检查存储。"
+            "value" : "草稿未能保存，请打开执言检查存储。"
+          }
+        }
+      }
+    },
+    "The task could not start. Open Zhiyan and check the task and provider settings." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任务未能开始，请打开执言检查任务和服务商设置。"
           }
         }
       }
@@ -384,19 +428,19 @@
     "USB NCM" : {
 
     },
-    "What would you like PhoneAgent to do?" : {
+    "What would you like Zhiyan to do?" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "What would you like PhoneAgent to do?"
+            "value" : "What would you like Zhiyan to do?"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "你想让 PhoneAgent 做什么？"
+            "value" : "你想让执言做什么？"
           }
         }
       }
@@ -435,9 +479,6 @@
 
     },
     "启用" : {
-
-    },
-    "回复已中断" : {
 
     },
     "回复未完成" : {

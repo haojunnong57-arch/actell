@@ -1,6 +1,14 @@
 import ActivityKit
 import SwiftUI
 import WidgetKit
+import OSLog
+
+private let activityLogger = Logger(subsystem: "com.ja1chen.PhoneAgent", category: "ActivityLifecycle")
+
+/// This observes configuration evaluation, not whether the user saw the view.
+private func traceActivityContext(_ context: ActivityViewContext<AgentActivityAttributes>, destination: String) {
+    activityLogger.info("activity.widgetEvaluated destination=\(destination, privacy: .public) id=\(context.activityID, privacy: .public) run=\(context.attributes.runID.uuidString, privacy: .public) phase=\(context.state.phase.rawValue, privacy: .public) operation=\(context.state.operation?.rawValue ?? "none", privacy: .public) tools=\(context.state.completedTools) stale=\(context.isStale) contentTime=\(context.state.updatedAt.timeIntervalSince1970)")
+}
 
 @main struct PhoneAgentLiveActivityBundle: WidgetBundle {
     var body: some Widget { PhoneAgentLiveActivity() }
@@ -9,19 +17,18 @@ import WidgetKit
 struct PhoneAgentLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AgentActivityAttributes.self) { context in
+            let _ = traceActivityContext(context, destination: "card")
             ActivityCard(context: context)
                 .activityBackgroundTint(Color.black)
                 .activitySystemActionForegroundColor(.white)
                 .widgetURL(route(context).url)
         } dynamicIsland: { context in
+            let _ = traceActivityContext(context, destination: "island")
             let stale = context.isStale && !context.state.phase.isTerminal
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Label(context.attributes.isDemo ? "离线演示" : "Phone Agent", systemImage: "sparkles")
+                    Label(context.attributes.isDemo ? "\(AppIdentity.displayName) · 离线演示" : AppIdentity.displayName, systemImage: "sparkles")
                         .font(.caption).foregroundStyle(.secondary)
-                }
-                DynamicIslandExpandedRegion(.trailing) {
-                    Text("已返回 \(context.state.completedTools) 步").font(.caption).monospacedDigit()
                 }
                 DynamicIslandExpandedRegion(.center) {
                     Label(stale ? "查看" : context.state.compactTitle,
@@ -30,10 +37,12 @@ struct PhoneAgentLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(stale ? "状态已过期；执行情况需在 App 核对" : context.state.phase.detail)
-                            .font(.caption).foregroundStyle(.secondary)
+                        if stale || !context.state.phase.detail.isEmpty {
+                            Text(stale ? "状态已过期；执行情况需在 App 核对" : context.state.phase.detail)
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         Link(destination: route(context).url) {
-                            Label(!stale && context.state.phase == .awaitingApproval ? "查看并确认" : "查看记录", systemImage: "arrow.up.forward.app")
+                            Label(!stale && context.state.phase == .awaitingApproval ? "查看并确认" : "查看会话", systemImage: "arrow.up.forward.app")
                                 .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity)
                                 .padding(.vertical, 8).background(.white.opacity(0.12), in: Capsule())
                         }.tint(.white)
@@ -67,18 +76,19 @@ private struct ActivityCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label(context.attributes.isDemo ? "Phone Agent · 离线演示" : "Phone Agent", systemImage: "sparkles")
+                Label(context.attributes.isDemo ? "\(AppIdentity.displayName) · 离线演示" : AppIdentity.displayName, systemImage: "sparkles")
                     .font(.caption).foregroundStyle(.white.opacity(0.7))
                 Spacer()
-                Text("已返回 \(context.state.completedTools) 步").font(.caption).monospacedDigit()
             }
             Label(stale ? "请回到 App" : context.state.title,
                   systemImage: stale ? "exclamationmark.circle" : context.state.symbol)
                 .font(.headline).foregroundStyle(activityTint(context))
-            Text(stale ? "状态已过期；执行情况需在 App 核对" : context.state.phase.detail)
-                .font(.caption).foregroundStyle(.white.opacity(0.7))
+            if stale || !context.state.phase.detail.isEmpty {
+                Text(stale ? "状态已过期；执行情况需在 App 核对" : context.state.phase.detail)
+                    .font(.caption).foregroundStyle(.white.opacity(0.7))
+            }
             Link(destination: route(context).url) {
-                Label(!stale && context.state.phase == .awaitingApproval ? "查看并确认" : "查看记录", systemImage: "arrow.up.forward.app")
+                Label(!stale && context.state.phase == .awaitingApproval ? "查看并确认" : "查看会话", systemImage: "arrow.up.forward.app")
                     .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity)
                     .padding(.vertical, 8).background(.white.opacity(0.12), in: Capsule())
             }.tint(.white)

@@ -106,6 +106,7 @@ struct AgentRunServices {
     var isListening: Bool { listenerTask != nil }
     private var listenerTask: Task<Void, Never>?
     private var listenerGeneration = UUID()
+    var commandCanStart: Bool { foreground && protectedDataAvailable }
     private var foreground = true
     private var healthObserver: UUID?
     private var agent: Agent?
@@ -478,13 +479,27 @@ struct AgentRunServices {
     @discardableResult func send(_ text: String, in conversationID: UUID, cloudConsent: Bool = false, prepared: PreparedAttachments = PreparedAttachments()) -> Bool {
         let worker = executionModel(for: conversationID)
         if worker !== self { return worker.send(text, in: conversationID, cloudConsent: cloudConsent, prepared: prepared) }
-        guard !running, !stopping, !appOwner.clearingAssets, foreground, protectedDataAvailable, listenerTask == nil,
-              primarySessionID == conversationID, let session = sessions.conversation(conversationID) else { return false }
-        guard prepared.references == (session.draftAttachments ?? []) else { return false }
+        func reject(_ reason: String, _ message: String) -> Bool {
+            errorMessage = message
+            usbDiagnostics.record("run.startRejected reason=\(reason) foreground=\(foreground) protectedData=\(protectedDataAvailable)")
+            return false
+        }
+        guard !running else { return reject("running", "此会话已有任务正在执行") }
+        guard !stopping else { return reject("stopping", "此会话的上一任务正在停止，请稍后重试") }
+        guard !appOwner.clearingAssets else { return reject("clearingAssets", "正在清理文件，请稍后重试") }
+        guard foreground else { return reject("notForeground", "执言尚未进入前台，任务未开始") }
+        guard protectedDataAvailable else { return reject("protectedData", "请解锁设备后执行任务") }
+        guard listenerTask == nil else { return reject("listenerBusy", "设备连接操作尚未结束，请稍后重试") }
+        guard primarySessionID == conversationID, let session = sessions.conversation(conversationID) else {
+            return reject("missingSession", "执行会话不可用，请重新发起任务")
+        }
+        guard prepared.references == (session.draftAttachments ?? []) else {
+            return reject("attachmentsChanged", "任务附件已改变，请重新发送")
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let query = trimmed.isEmpty && !prepared.references.isEmpty ? "请查看附件" : trimmed
-        guard !query.isEmpty, query.count <= 2_000 else { return false }
-        guard session.mode == .demo || cloudConsent else { return false }
+        guard !query.isEmpty, query.count <= 2_000 else { return reject("invalidTask", "请输入 1 至 2000 字的任务") }
+        guard session.mode == .demo || cloudConsent else { return reject("cloudConsent", "请确认将任务发送给所选模型服务商") }
         cancelPreview()
         let selectedMode = session.mode, token = UUID()
         var runSettings = ProviderSettings()
@@ -528,7 +543,10 @@ struct AgentRunServices {
             errorMessage = Self.safeError(error); sessions.addNotice(Self.safeError(error), in: conversationID); return false
         }
         let history = sessions.history(in: conversationID)
-        guard let identity = sessions.begin(in: conversationID, query: query, attachments: prepared.references) else { provider?.cancel(); provider = nil; return false }
+        guard let identity = sessions.begin(in: conversationID, query: query, attachments: prepared.references) else {
+            provider?.cancel(); provider = nil
+            return reject("sessionAlreadyActive", "此会话已有运行记录，任务未重复启动")
+        }
         screenExecutionContext = selectedBridge.executionContext
         executionScheduler.configure(context: screenExecutionContext, allowSystemProcessing: allowSystemProcessing)
         do { try lifecycle.begin(identity: identity, generation: token) }
@@ -659,6 +677,11 @@ struct AgentRunServices {
         // capability, so a slow STOP ACK cannot masquerade as an unexpected loss.
         finishingRun = true; stopHealthObservation()
         usbDiagnostics.record("run.close phase=\(phase) hasUSB=\(usbClient != nil) connectionRetained=\(usbConnectionStatus.isReady)")
+        // ActivityKit updates cross an async boundary. Submit the terminal
+        // state while both the execution lease and task media are still owned.
+        publishActivity(phase == .completed ? .completed : .blocked)
+        await liveActivities.waitForPendingUpdates()
+        guard generation == token else { return }
         lifecycle.finish(success: phase == .completed)
         screenExecutionContext?.revoke()
         await coordinator?.stop()
@@ -872,7 +895,6 @@ struct AgentRunServices {
         finishingRun = false
         stopHealthObservation()
         screenExecutionContext?.revoke(); screenExecutionContext = nil; executionScheduler.configure(context: nil, allowSystemProcessing: false)
-        publishActivity(phase == .completed ? .completed : .blocked)
         if let identity = runIdentity { invalidateApprovals(identity) }
         approvalTimeout?.cancel(); approvalTimeout = nil
         if let identity = runIdentity { sessions.finish(identity, phase: phase, summary: phase == .completed || !publishNotice ? "" : result) }

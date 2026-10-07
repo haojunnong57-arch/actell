@@ -18,7 +18,7 @@ struct ReasoningMessageView: View {
                 Spacer(minLength: 8)
             }.foregroundStyle(.secondary)
                 .accessibilityIdentifier("reasoningDisclosure-\(messageID)")
-        }.tint(.secondary).padding(.vertical, 4)
+        }.tint(.secondary).padding(.vertical, 2)
     }
 }
 
@@ -53,5 +53,37 @@ struct ConversationDisclosureGroup<Content: View, Label: View>: View {
                 else { expanded = value }
             }
         )) { content } label: { label }
+        .disclosureGroupStyle(ConversationDisclosureStyle())
+    }
+}
+
+/// The whole header is one button, including the spacer and trailing chevron.
+/// Toggle without a layout animation so the next tap targets the same header.
+private struct ConversationDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { configuration.isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    configuration.label.frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.body.weight(.semibold)).imageScale(.small)
+                        .foregroundStyle(Color.secondary)
+                        .accessibilityHidden(true)
+                }
+                .foregroundStyle(Color.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(configuration.isExpanded ? "已展开" : "已收起")
+            if configuration.isExpanded {
+                // Text selection must not intercept taps above the body.
+                configuration.content.contentShape(Rectangle())
+            }
+        }
     }
 }

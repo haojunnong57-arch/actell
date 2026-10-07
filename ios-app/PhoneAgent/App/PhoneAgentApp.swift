@@ -1,4 +1,5 @@
 import SwiftUI
+import AppIntents
 import Darwin
 
 @main @MainActor struct PhoneAgentApp: App {
@@ -6,7 +7,10 @@ import Darwin
     @StateObject private var statusPiP = StatusPiPController()
     @AppStorage(BackgroundPlaybackMode.defaultsKey) private var backgroundMode = BackgroundPlaybackMode.defaultMode.rawValue
     @Environment(\.scenePhase) private var scenePhase
-    init() { PairingFlow.shared.registerBackgroundTask() }
+    init() {
+        PhoneAgentShortcuts.updateAppShortcutParameters()
+        PairingFlow.shared.registerBackgroundTask()
+    }
     var body: some Scene {
         WindowGroup {
             ContentView(model: model, statusPiP: statusPiP, commands: PhoneAgentRuntime.shared.commands)
@@ -15,6 +19,10 @@ import Darwin
                     if ProcessInfo.processInfo.arguments.contains("--ncm-video-geometry-probe") { NCMVideoGeometryProbeView(statusPiP: statusPiP) }
                     else if ProcessInfo.processInfo.arguments.contains("--ncm-tools-probe") { NCMToolsProbeView(statusPiP: statusPiP) }
                     #endif
+                }
+                .onAppIntentExecution(PrepareAgentTaskIntent.self) { _ in
+                    // SwiftUI receives the scene handoff; perform() alone owns task submission.
+                    model.usbDiagnostics.record("siri.sceneHandoff received=true")
                 }
                 .preferredColorScheme(testColorScheme)
                 // A covered backing layer supplies AVKit without occupying the UI.
@@ -58,6 +66,7 @@ import Darwin
                     else if phase == .active { PairingFlow.shared.resume() }
                     model.setScene(phase == .active ? .active : phase == .background ? .background : .inactive)
                     model.setProtectedDataAvailable(UIApplication.shared.isProtectedDataAvailable)
+                    if phase == .active { PhoneAgentRuntime.shared.commands.resumePendingExecutions() }
                     // Inactive is a transition, not a request to show PiP.
                     if phase == .active { statusPiP.setForeground(true) }
                     else if phase == .background { statusPiP.setForeground(false) }
@@ -76,6 +85,7 @@ import Darwin
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
                     model.setProtectedDataAvailable(true)
+                    PhoneAgentRuntime.shared.commands.resumePendingExecutions()
                 }
         }
     }

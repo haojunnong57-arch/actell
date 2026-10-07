@@ -1,25 +1,35 @@
 import AppIntents
 
-struct PrepareAgentTaskIntent: AppIntent {
-    static let title: LocalizedStringResource = "Create a task"
-    static let description = IntentDescription("Save a task draft and open PhoneAgent for confirmation. This does not start the agent.")
-    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
+struct PrepareAgentTaskIntent: AppIntent, TargetContentProvidingIntent {
+    var contentIdentifier: String { "execute-task" }
+    static let title: LocalizedStringResource = "Execute a task"
+    static let description = IntentDescription("Open Zhiyan and immediately execute the supplied task.")
+    static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
     static var openAppWhenRun: Bool { true } // iOS 17–25
     @available(iOS 26.0, *) static var supportedModes: IntentModes { .foreground(.immediate) }
     @available(iOS 27.0, *) static var allowedExecutionTargets: IntentExecutionTargets { .main }
 
-    @Parameter(title: "Task", requestValueDialog: "What would you like PhoneAgent to do?")
+    @Parameter(title: "Task", requestValueDialog: "What would you like Zhiyan to do?")
     var task: String
 
-    static var parameterSummary: some ParameterSummary { Summary("Create a task: \(\.$task)") }
+    static var parameterSummary: some ParameterSummary { Summary("Execute a task: \(\.$task)") }
 
-    @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
+    @MainActor func perform() async throws -> some IntentResult {
         try Task.checkCancellation()
         let service = PhoneAgentRuntime.shared.commands
-        _ = try service.perform(SessionCommand(.prepare(task)))
-        // No await between cancellation validation and atomic persistence. A
-        // cancellation after this point may leave a draft, never a running task.
-        return .result(dialog: "Draft saved. Review it in PhoneAgent and tap Confirm and start. If another task is active, this draft will wait.")
+        PhoneAgentRuntime.shared.model.usbDiagnostics.record("siri.execute received=true ready=\(PhoneAgentRuntime.shared.model.commandCanStart)")
+        let command = SessionCommand(.execute(task))
+        do {
+            _ = try service.perform(command)
+        } catch {
+            let model = PhoneAgentRuntime.shared.model
+            model.errorMessage = error.localizedDescription
+            model.usbDiagnostics.record("siri.execute failed=\(error.localizedDescription)")
+            if let session = service.sessions.conversations.first(where: { $0.entry?.commandID == command.commandID }) {
+                service.sessions.addNotice(error.localizedDescription, in: session.id)
+            }
+        }
+        return .result()
     }
 }
 
@@ -40,7 +50,7 @@ struct AgentTaskStatusIntent: AppIntent {
 
 struct StopAgentTaskIntent: AppIntent {
     static let title: LocalizedStringResource = "Stop the current task"
-    static let description = IntentDescription("Stop the current run through PhoneAgent. Actions already sent may have happened.")
+    static let description = IntentDescription("Stop the current run through Zhiyan. Actions already sent may have happened.")
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
     @available(iOS 26.0, *) static var supportedModes: IntentModes { .background }
     @available(iOS 27.0, *) static var allowedExecutionTargets: IntentExecutionTargets { .main }
@@ -57,8 +67,8 @@ struct StopAgentTaskIntent: AppIntent {
 
 struct PhoneAgentShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
-        AppShortcut(intent: PrepareAgentTaskIntent(), phrases: ["Create a task with \(.applicationName)"],
-                    shortTitle: "Create a task", systemImageName: "square.and.pencil")
+        AppShortcut(intent: PrepareAgentTaskIntent(), phrases: ["Execute a task with \(.applicationName)", "Execute a task in \(.applicationName)"],
+                    shortTitle: "Execute a task", systemImageName: "square.and.pencil")
         AppShortcut(intent: AgentTaskStatusIntent(), phrases: ["Check task status in \(.applicationName)"],
                     shortTitle: "Task status", systemImageName: "checklist")
         AppShortcut(intent: StopAgentTaskIntent(), phrases: ["Stop the current task in \(.applicationName)"],
