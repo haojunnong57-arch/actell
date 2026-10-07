@@ -44,6 +44,7 @@ targets:
         OTHER_LDFLAGS: ['$(inherited)', '-lphoneagent_ncm_backend', '-framework', 'Security', '-framework', 'SystemConfiguration']
         'LIBRARY_SEARCH_PATHS[sdk=iphoneos*]': ['$(inherited)', '$(SRCROOT)/../.build/ncm-rust/aarch64-apple-ios/release']
         'LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]': ['$(inherited)', '$(SRCROOT)/../.build/ncm-rust/aarch64-apple-ios-sim/release']
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.ja1chen.PhoneAgent
         INFOPLIST_FILE: PhoneAgent/Info.plist
         GENERATE_INFOPLIST_FILE: YES

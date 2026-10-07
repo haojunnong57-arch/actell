@@ -71,6 +71,11 @@ def generate():
                 children.append(ref)
                 sources.append(add(relative + "Build", "PBXBuildFile", fileRef=ref))
         resources = []
+        for path in sorted((ROOT / name).glob("*.xcassets")):
+            relative = Path(os.path.relpath(path, ROOT)).as_posix()
+            ref = add(relative, "PBXFileReference", lastKnownFileType="folder.assetcatalog", path=relative, sourceTree="SOURCE_ROOT")
+            children.append(ref)
+            resources.append(add(relative + "Build", "PBXBuildFile", fileRef=ref))
         for path in sorted((ROOT / name).rglob("*.xcstrings")):
             relative = Path(os.path.relpath(path, ROOT)).as_posix()
             ref = add(relative, "PBXFileReference", lastKnownFileType="text.json.xcstrings", path=relative, sourceTree="SOURCE_ROOT")
@@ -111,7 +116,7 @@ def generate():
                         LD_RUNPATH_SEARCH_PATHS=["$(inherited)", "@executable_path/Frameworks"])
         dependencies = []
         if name == "PhoneAgent":
-            settings.update(INFOPLIST_FILE="PhoneAgent/Info.plist", INFOPLIST_KEY_CFBundleDisplayName="执言",
+            settings.update(ASSETCATALOG_COMPILER_APPICON_NAME="AppIcon", INFOPLIST_FILE="PhoneAgent/Info.plist", INFOPLIST_KEY_CFBundleDisplayName="执言",
                             INFOPLIST_KEY_NSSupportsLiveActivities="YES",
                             INFOPLIST_KEY_NSLocalNetworkUsageDescription="Connect to your explicitly paired development bridge while this app is open.",
                             INFOPLIST_KEY_UIApplicationSceneManifest_Generation="YES",
