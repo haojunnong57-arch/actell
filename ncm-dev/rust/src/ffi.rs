@@ -563,6 +563,32 @@ pub unsafe extern "C" fn ncm_backend_video_get_status(
         0
     })
 }
+/// # Safety
+/// `status` must be writable. Counters only, never packet bytes or credentials.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ncm_backend_video_get_snapshot(
+    handle: u64,
+    status: *mut crate::video::VideoSnapshot,
+) -> i32 {
+    protect(|| {
+        if status.is_null() {
+            return INVALID;
+        }
+        let Some(entry) = get(handle) else {
+            return CLOSED;
+        };
+        if !entry.screen_allowed {
+            return NOT_READY;
+        }
+        if entry.done.load(Ordering::SeqCst) {
+            return CLOSED;
+        }
+        unsafe {
+            *status = entry.video.snapshot();
+        }
+        0
+    })
+}
 /// Request one fresh keyframe on the already authorized video channel.
 #[unsafe(no_mangle)]
 pub extern "C" fn ncm_backend_video_refresh(handle: u64) -> i32 {
@@ -895,7 +921,11 @@ fn fixture_identity() -> ExistingIdentity {
 // Public synthetic sample only; this export never exists in device archives.
 #[cfg(feature = "offline-fixtures")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ncm_test_start_video_burst(sample: Bytes, handle: *mut u64) -> i32 {
+pub unsafe extern "C" fn ncm_test_start_video_burst(
+    sample: Bytes,
+    continuous: u32,
+    handle: *mut u64,
+) -> i32 {
     protect(|| {
         let Ok(data) = (unsafe { bytes(&sample, 4096) }) else {
             return INVALID;
@@ -944,7 +974,7 @@ pub unsafe extern "C" fn ncm_test_start_video_burst(sample: Bytes, handle: *mut 
             is_sync: true,
             bytes: fields[3].clone(),
         };
-        unsafe { start_media_fixture(handle, Some((unit, params))) }
+        unsafe { start_media_fixture(handle, Some((unit, params)), continuous != 0) }
     })
 }
 
@@ -954,7 +984,7 @@ pub unsafe extern "C" fn ncm_test_start_video_burst(sample: Bytes, handle: *mut 
 /// handle must be writable; no network or credentials are accessed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ncm_test_start_media_failure(handle: *mut u64) -> i32 {
-    unsafe { start_media_fixture(handle, None) }
+    unsafe { start_media_fixture(handle, None, false) }
 }
 #[cfg(feature = "offline-fixtures")]
 unsafe fn start_media_fixture(
@@ -963,6 +993,7 @@ unsafe fn start_media_fixture(
         idevice::core_device::display_stream::HevcAccessUnit,
         idevice::core_device::display_stream::HevcParameterSets,
     )>,
+    continuous: bool,
 ) -> i32 {
     protect(|| {
         if handle.is_null() {
@@ -1026,10 +1057,16 @@ unsafe fn start_media_fixture(
                                 inter.is_sync = false;
                                 let media_entry = entry.clone();
                                 fixture_media = Some(tokio::spawn(async move {
+                                    let began = tokio::time::Instant::now();
                                     loop {
                                         tokio::time::sleep(std::time::Duration::from_millis(40))
                                             .await;
-                                        media_entry.video.push(inter.clone(), params.clone());
+                                        if continuous {
+                                            media_entry.video.push(inter.clone(), params.clone());
+                                        } else if began.elapsed() < std::time::Duration::from_secs(3) {
+                                            // Healthy idle peer: progress reports, no new pictures.
+                                            media_entry.video.sender_report(true);
+                                        }
                                     }
                                 }));
                                 Event::ok(request.id, 2, Vec::new())
@@ -1168,6 +1205,8 @@ mod tests {
             NOT_READY
         );
         assert_eq!(ncm_backend_video_refresh(id), NOT_READY);
+        let mut snapshot = crate::video::VideoSnapshot::default();
+        assert_eq!(unsafe { ncm_backend_video_get_snapshot(id, &mut snapshot) }, NOT_READY);
         let mut status = crate::video::VideoStatus::default();
         assert_eq!(
             unsafe { ncm_backend_video_get_status(id, &mut status) },
@@ -1271,6 +1310,11 @@ mod tests {
         let mut status = crate::video::VideoStatus::default();
         assert_eq!(unsafe { ncm_backend_video_get_status(id, &mut status) }, 0);
         assert_eq!(status.datagrams, 0);
+        let mut snapshot = crate::video::VideoSnapshot::default();
+        assert_eq!(unsafe { ncm_backend_video_get_snapshot(id, &mut snapshot) }, 0);
+        assert_eq!(snapshot.serial, 0);
+        assert_eq!(unsafe { ncm_backend_video_get_snapshot(id, std::ptr::null_mut()) }, INVALID);
+        assert_eq!(unsafe { ncm_backend_video_get_snapshot(u64::MAX, &mut snapshot) }, CLOSED);
         assert_eq!(
             unsafe { ncm_backend_video_get_status(id, std::ptr::null_mut()) },
             INVALID

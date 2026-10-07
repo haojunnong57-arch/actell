@@ -124,26 +124,14 @@ struct ToolPresentation {
         case .toolExecutionStarted(let call):
             store.updateTool(callID: call.id, name: call.name, state: .running, arguments: arguments(for: call), skillName: skillName(call), identity: run)
         case .toolExecutionFinished(let call, let result):
-            let receipt: String
-            if result.isError { receipt = String(result.result.prefix(1_000)) }
-            else {
-                switch call.name {
-                case "screenshot":
-                    let image = frame.flatMap { $0.step == StepIdentity(run: run, stepID: call.id) ? $0.image : nil }
-                    receipt = image.map { "已取得 \($0.width) × \($0.height) 截图" } ?? "截图已返回"
-                case "tap", "drag": receipt = "已确认送达；可见效果需要下一张截图核对"
-                case "wait": receipt = "等待结束，需要重新查看屏幕"
-                case "finish": receipt = String(result.result.prefix(1_000))
-                case "load_skill": receipt = "已读取技能文档：" + (skillName(call) ?? "技能") + " / " + ((call.parameters["resource"]?.value as? String) ?? "SKILL.md")
-                default: receipt = "工具已返回"
-                }
-            }
-            store.updateTool(callID: call.id, name: call.name, state: result.isError ? .failed : .succeeded, result: receipt, arguments: arguments(for: call), skillName: skillName(call), identity: run)
+            store.updateTool(callID: call.id, name: call.name, state: result.isError ? .failed : .succeeded,
+                result: result.result, arguments: arguments(for: call), skillName: skillName(call), identity: run)
         default: break // Unrelated framework events stay out of UI/history.
         }
     }
 
-    static func arguments(for call: AgentToolCall) -> String {
+    static func arguments(for call: AgentToolCall) -> String? {
+        guard !call.parameters.isEmpty else { return nil }
         let allowed: [String]
         switch call.name {
         case "screenshot": allowed = []
@@ -163,6 +151,6 @@ struct ToolPresentation {
         }
         guard let data = try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys, .prettyPrinted]),
               let text = String(data: data, encoding: .utf8) else { return "参数无法展示" }
-        return text
+        return ToolStep.nonemptyArguments(text)
     }
 }

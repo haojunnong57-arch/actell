@@ -11,7 +11,7 @@ import SwiftUI
             ContentView(model: model, statusPiP: statusPiP, commands: PhoneAgentRuntime.shared.commands)
                 .overlay {
                     #if DEBUG
-                    if ProcessInfo.processInfo.arguments.contains("--ncm-video-geometry-probe") { NCMVideoGeometryProbeView() }
+                    if ProcessInfo.processInfo.arguments.contains("--ncm-video-geometry-probe") { NCMVideoGeometryProbeView(statusPiP: statusPiP) }
                     else if ProcessInfo.processInfo.arguments.contains("--ncm-tools-probe") { NCMToolsProbeView(statusPiP: statusPiP) }
                     #endif
                 }
@@ -23,6 +23,7 @@ import SwiftUI
                         .allowsHitTesting(false).accessibilityHidden(true)
                 }
                 .task {
+                    PairingFlow.shared.restoreConnection()
                     statusPiP.setBackgroundMode(BackgroundPlaybackMode(rawValue: backgroundMode) ?? .defaultMode)
                     statusPiP.observeTasks(in: model)
                     #if DEBUG
@@ -84,6 +85,7 @@ import SwiftUI
 #if DEBUG
 /// Explicit read-only screenshot probe. Raw media is saved only for this launch flag.
 private struct NCMVideoGeometryProbeView: View {
+    let statusPiP: StatusPiPController
     @State private var status = "视频截图诊断"
     var body: some View {
         VStack(spacing: 20) { Text("视频截图诊断").font(.title); Text(status) }
@@ -100,7 +102,14 @@ private struct NCMVideoGeometryProbeView: View {
             NSLog("NCM video probe %@", value)
         }
         let flow = PairingFlow.shared
-        record("started")
+        let backgroundProbe = ProcessInfo.processInfo.arguments.contains("--ncm-video-background-probe")
+        let repeatedProbe = backgroundProbe || ProcessInfo.processInfo.arguments.contains("--ncm-video-repeat-probe")
+        if backgroundProbe {
+            statusPiP.setBackgroundMode(.audio)
+            statusPiP.setControlProbeRunning(true)
+        }
+        defer { if backgroundProbe { statusPiP.setControlProbeRunning(false) } }
+        record("started backgroundProbe=\(backgroundProbe)")
         if !flow.ready && !flow.running { flow.verify() }
         let deadline = ContinuousClock.now.advanced(by: .seconds(120))
         while !flow.ready && flow.running && ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(100)) }
@@ -108,15 +117,25 @@ private struct NCMVideoGeometryProbeView: View {
         var bridge: NCMDeviceBridge?
         do {
             let control = try NCMDeviceBridge(flow: flow); bridge = control
-            for index in 0..<3 {
+            for index in 0..<(repeatedProbe ? 7 : 3) {
                 let frame = try await control.screenshot()
                 try frame.png.write(to: directory.appending(path: "ncm-video-probe-\(index).jpg"))
                 if let keyframe = await flow.videoDiagnosticKeyframe() {
                     try keyframe.write(to: directory.appending(path: "ncm-video-probe.hevc"))
                 }
-                record("screenshot \(index) \(frame.width)x\(frame.height)")
-                status = "已截图 \(index+1)/3：\(frame.width) × \(frame.height)"
-                try await Task.sleep(for: .milliseconds(1200))
+                record("screenshot \(index) \(frame.width)x\(frame.height) appState=\(UIApplication.shared.applicationState.rawValue)")
+                status = "已截图 \(index+1)/\(repeatedProbe ? 7 : 3)：\(frame.width) × \(frame.height)"
+                if backgroundProbe && index == 0 {
+                    try await Task.sleep(for: .seconds(3))
+                    UIApplication.shared.perform(NSSelectorFromString("suspend"))
+                }
+                if backgroundProbe && ProcessInfo.processInfo.arguments.contains("--ncm-static-screen-probe") && (index == 1 || index == 5) {
+                    let context = try await control.systemActionContext()
+                    try await control.authorizeSystemAction(authorizationID: context, taskScoped: false)
+                    try await control.systemAction(name: "launch_app", text: index == 1 ? "com.apple.calculator" : "com.apple.Preferences", arguments: [], imageID: context)
+                    record("visible change receiverState=\(UIApplication.shared.applicationState.rawValue)")
+                }
+                try await Task.sleep(for: .milliseconds(repeatedProbe ? 6000 : 1200))
             }
             record("completed")
         } catch { record("failed \(String(describing: error))"); status = "诊断未完成" }

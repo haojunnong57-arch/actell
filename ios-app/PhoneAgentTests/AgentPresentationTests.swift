@@ -3,6 +3,22 @@ import SwiftAgentKit
 @testable import PhoneAgent
 
 @MainActor final class AgentPresentationTests: XCTestCase {
+    func testLongToolResultsSurviveProjectionUpdateAndHistoryRestore() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ConversationStore(directory: directory), id = store.create(mode: .live)
+        let run = try XCTUnwrap(store.begin(in: id, query: "long result"))
+        let call = AgentToolCall(id: "apps", name: "list_apps", parameters: [:])
+        let text = String(repeating: "完整结果\n", count: 2_000) + "RESULT_END"
+        AgentEventProjection.record(.toolCallsReceived([call]), run: run, frame: nil, in: store)
+        AgentEventProjection.record(.toolExecutionFinished(call: call, result: .success(toolCallId: call.id, toolName: call.name, result: text)), run: run, frame: nil, in: store)
+        XCTAssertEqual(store.conversation(id)?.messages.last?.tool?.result, text)
+        store.updateTool(callID: "new", name: "load_skill", state: .succeeded, result: text, identity: run)
+        store.finish(run, phase: .completed, summary: "")
+        store.saveNow()
+        let restored = ConversationStore(directory: directory)
+        XCTAssertEqual(restored.conversation(id)?.messages.compactMap(\.tool).map(\.result), [text, text])
+    }
     private func waitUntil(_ condition: @escaping () -> Bool) async throws {
         for _ in 0..<150 {
             if condition() { return }
@@ -19,6 +35,11 @@ import SwiftAgentKit
         try await waitUntil { ui.approvalID != nil }
         let message = try XCTUnwrap(ui.session?.messages.last { $0.tool?.name == "tap" })
         return (model, ui, try XCTUnwrap(ui.presentation(for: message)))
+    }
+    func testNoArgumentToolsHaveNoParameterPreview() {
+        for name in ["screenshot", "list_apps"] {
+            XCTAssertNil(AgentEventProjection.arguments(for: AgentToolCall(id: "empty", name: name, parameters: [:])))
+        }
     }
     func testApprovalUsesSessionRunStepAndRequestIdentityAndConsumesOnce() async throws {
         let (model, ui, item) = try await pendingDemo()

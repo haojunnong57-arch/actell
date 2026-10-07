@@ -159,9 +159,10 @@
       "modified": false
     },
     "vendor/idevice/src/services/core_device/app_service.rs": {
-      "sha256": "a355b93b76b62ca70262d5fa2c216327709f4795a422de81a158211564985082",
+      "sha256": "ac7ddf6a2da0f050c8b0f3358dcb09ca6064c1728a5f4e00fc6dfb03c80bba43",
       "device_hub_snapshot_sha256": "a355b93b76b62ca70262d5fa2c216327709f4795a422de81a158211564985082",
-      "modified": false
+      "modified": true,
+      "change": "Manifest corrected to the already-committed local adaptation; upstream snapshot hash retained."
     },
     "vendor/idevice/src/services/core_device/diagnosticsservice.rs": {
       "sha256": "0f667d0766c7baa79ae1f3bf767146a85ffe73d07623db6e1489616fc1f61874",
@@ -174,9 +175,10 @@
       "modified": false
     },
     "vendor/idevice/src/services/core_device/display_stream/hevc.rs": {
-      "sha256": "e01f2cebe72ec5969859a40828a8ef2b817e811c3207e37f9b3cae96cdd3e7ee",
+      "sha256": "285f0f453b1547fb545f5c23652072312c3e942db2d2834897b95756c8df21c0",
       "device_hub_snapshot_sha256": "e01f2cebe72ec5969859a40828a8ef2b817e811c3207e37f9b3cae96cdd3e7ee",
-      "modified": false
+      "modified": true,
+      "change": "Manifest corrected to the already-committed local adaptation; upstream snapshot hash retained. Complete synchronized access-unit boundary query for sender-confirmed idle snapshots; opt-in sequence-gap diagnostics."
     },
     "vendor/idevice/src/services/core_device/display_stream/media_negotiation.proto": {
       "sha256": "ee3d03178e506f5e86eb360ca8067e80c7f9d612fb6114734f8b799d763ae5ea",
@@ -189,9 +191,10 @@
       "modified": false
     },
     "vendor/idevice/src/services/core_device/display_stream/negotiation.rs": {
-      "sha256": "f1883b5166669fa01e4be2190887d4ccfbb14a5031b59a780d4538bbc5462527",
+      "sha256": "78d1a7106965f56679a7706c2ba258df99ae3bf27144cb2e074f76143593a446",
       "device_hub_snapshot_sha256": "f1883b5166669fa01e4be2190887d4ccfbb14a5031b59a780d4538bbc5462527",
-      "modified": false
+      "modified": true,
+      "change": "Manifest corrected to the already-committed local adaptation; upstream snapshot hash retained. Receiver-specific video bitrate budget, preserving the generic desktop and audio offer defaults."
     },
     "vendor/idevice/src/services/core_device/display_stream/protobuf.rs": {
       "sha256": "75f9a8b83c266d5f3c85855a4faffb04251b8a7d4a2f3c6636c3dad97ddb489f",
@@ -199,9 +202,10 @@
       "modified": false
     },
     "vendor/idevice/src/services/core_device/display_stream/rtcp.rs": {
-      "sha256": "8925da50470ea0891deccc4abe3fa26f46c61b2a07cea8ba3f481e80f3576b88",
+      "sha256": "3fe7f0741288e7846bea7b55349c4740c0a56ba656ac278ad68d2314d63a4fbf",
       "device_hub_snapshot_sha256": "8925da50470ea0891deccc4abe3fa26f46c61b2a07cea8ba3f481e80f3576b88",
-      "modified": false
+      "modified": true,
+      "change": "RCTL receipt timestamp/packet counters/constant suffix; independent public wire fixture. Sender packet-count parsing and explicit receiver bandwidth in RCTL; 60001-to-2000 semantics verified in iOS VCRC logs."
     },
     "vendor/idevice/src/services/core_device/display_stream/rtp.rs": {
       "sha256": "3cd49ade63d0e63bd6949d1ff7e64b736fce32d525386d27741bdb4f2f39405c",
@@ -224,9 +228,10 @@
       "modified": false
     },
     "vendor/idevice/src/services/core_device/mod.rs": {
-      "sha256": "667a10b353c4be6830bf57313e34b9f89e14c2bf94d8e60cc5bf2fada9d174ab",
+      "sha256": "d9c8a8da3e4c222c5f0f3a5cc512a818a4ecbc1f621166fb2ddcbf1a408c36a0",
       "device_hub_snapshot_sha256": "667a10b353c4be6830bf57313e34b9f89e14c2bf94d8e60cc5bf2fada9d174ab",
-      "modified": false
+      "modified": true,
+      "change": "Manifest corrected to the already-committed local adaptation; upstream snapshot hash retained."
     },
     "vendor/idevice/src/services/core_device/openstdiosocket.rs": {
       "sha256": "7991b0ca0e1210e8148fa419fe046b45ab4a388a5547489631e817835c5e598b",

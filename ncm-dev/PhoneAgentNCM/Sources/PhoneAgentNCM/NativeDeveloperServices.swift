@@ -55,9 +55,10 @@ public enum InputDelivery: Sendable { case reportsWrittenVisualEffectUnverified 
     private var busy = false
     private var ready = false
     private var services: [String] = []
-    private var videoDrainSerial: UInt64 = 0
+    private var videoPollSerial: UInt64 = 0
     private var videoPump: Task<Void, Never>?
     private var videoDecoder: NCMVideoDecoder?
+    public private(set) var videoSnapshotDiagnostics: String?
     private var videoDecodeFailure: NativeBackendError?
     public init() {}
     deinit { videoPump?.cancel(); if handle != 0 { ncm_backend_close(handle) } }
@@ -117,7 +118,7 @@ public enum InputDelivery: Sendable { case reportsWrittenVisualEffectUnverified 
                 do {
                     guard let self, self.handle == token, self.videoDecoder === decoder else { return }
                     consumed = try await self.receiveVideoPicture(token: token, decoder: decoder)
-                    if !consumed { self.videoDrainSerial &+= 1 }
+                    self.videoPollSerial &+= 1
                 } catch is CancellationError { return }
                 catch {
                     if let self, self.handle == token, self.videoDecoder === decoder {
@@ -141,13 +142,14 @@ public enum InputDelivery: Sendable { case reportsWrittenVisualEffectUnverified 
     /// Snapshot the continuously decoded video picture, independent of input history.
     public func captureVideoJPEG() async throws -> Data {
         guard ready, handle != 0, let decoder = videoDecoder else { throw NativeBackendError.closed }
+        videoSnapshotDiagnostics = nil
         let token = handle, began = ContinuousClock.now
         var initial = ncm_video_status()
         let initialCode = ncm_backend_video_get_status(token, &initial)
-        let notBefore = NCMVideoFreshness().minimumReceipt(at: began)
-        let drainedAfter = videoDrainSerial
+        var initialSnapshot = ncm_video_snapshot()
+        guard ncm_backend_video_get_snapshot(token, &initialSnapshot) == 0 else { throw NativeBackendError.closed }
+        let polledAfter = videoPollSerial
         let deadline = began.advanced(by: .seconds(8))
-        var nextRefresh = began.advanced(by: .milliseconds(100))
         while ContinuousClock.now < deadline {
             try Task.checkCancellation()
             guard token == handle, ready else { throw NativeBackendError.closed }
@@ -155,23 +157,34 @@ public enum InputDelivery: Sendable { case reportsWrittenVisualEffectUnverified 
             // Reject cached pixels while a new generation reset is pending.
             await Task.yield()
             guard token == handle, ready else { throw NativeBackendError.closed }
-            if videoDrainSerial != drainedAfter, let jpeg = try await decoder.jpeg(notBefore: notBefore) {
+            guard videoDecoder === decoder else { throw NativeBackendError.closed }
+            var snapshot = ncm_video_snapshot()
+            guard ncm_backend_video_get_snapshot(token, &snapshot) == 0 else { throw NativeBackendError.closed }
+            // A new decoded picture, or a post-request report confirming that all
+            // emitted packets form the already decoded picture. Picture age alone
+            // says nothing about a static display; no input-history dependency.
+            let confirmed = snapshot.report > initialSnapshot.report ? snapshot.serial : 0
+            if videoPollSerial != polledAfter,
+               let jpeg = try await decoder.jpeg(notBefore: began, confirmedEpoch: snapshot.epoch, confirmedSerial: confirmed) {
                 guard token == handle, ready else { throw NativeBackendError.closed }
+                var after = ncm_video_snapshot()
+                guard ncm_backend_video_get_snapshot(token, &after) == 0 else { throw NativeBackendError.closed }
+                if after.epoch != snapshot.epoch { continue }
                 videoDecodeFailure = nil
+                videoSnapshotDiagnostics = "screenshot.video received=true decoder=\(await decoder.diagnosticStatus())"
                 return jpeg
-            }
-            if ContinuousClock.now >= nextRefresh {
-                guard ncm_backend_video_refresh(token) == 0 else { throw NativeBackendError.closed }
-                nextRefresh = ContinuousClock.now.advanced(by: .seconds(1))
             }
             try await Task.sleep(for: .milliseconds(25))
         }
         var status = ncm_video_status()
         let code = ncm_backend_video_get_status(token, &status)
         NSLog("NCM screenshot timeout status=%d datagrams=%llu rtp=%llu rejected=%llu frames=%llu discontinuities=%llu overflows=%llu refreshes=%llu sourcePort=%llu", code, status.datagrams, status.rtp, status.rejected, status.frames, status.discontinuities, status.overflows, status.refreshes, status.source_port)
+        let diagnostics = "screenshot.video timeout=true datagrams=\(status.datagrams) rtp=\(status.rtp) frames=\(status.frames) refreshes=\(status.refreshes) intervalDatagrams=\(status.datagrams &- initial.datagrams) intervalFrames=\(status.frames &- initial.frames) decoder=\(await decoder.diagnosticStatus())"
+        videoSnapshotDiagnostics = diagnostics
+        NSLog("NCM %@", diagnostics)
         if let videoDecodeFailure { throw videoDecodeFailure }
         // Historical overload is diagnostic history, not the cause of every later failure.
-        let cause = code == 0 ? NCMVideoFreshness.timeoutCause(datagrams: status.datagrams, rtp: status.rtp, frames: status.frames, overflows: status.overflows, initialOverflows: initialCode == 0 ? initial.overflows : 0) : UInt32(2)
+        let cause = code == 0 ? NCMVideoSnapshotFailure.timeoutCause(datagrams: status.datagrams, rtp: status.rtp, frames: status.frames, overflows: status.overflows, initialOverflows: initialCode == 0 ? initial.overflows : 0) : UInt32(2)
         throw NativeBackendError.screenshotFailure(stage: 20, cause: cause)
     }
     private func receiveVideoPicture(token: UInt64, decoder: NCMVideoDecoder) async throws -> Bool {
@@ -194,13 +207,13 @@ public enum InputDelivery: Sendable { case reportsWrittenVisualEffectUnverified 
         }
         if header.size < data.count { data.removeSubrange(header.size..<data.count) }
         do {
-            try await decoder.consume(data)
+            let decoded = try await decoder.consume(data)
             guard handle == token, ready, videoDecoder === decoder else { throw NativeBackendError.closed }
-            videoDecodeFailure = nil
+            if decoded { videoDecodeFailure = nil }
         } catch {
             try Task.checkCancellation()
             guard handle == token, ready, videoDecoder === decoder else { throw NativeBackendError.closed }
-            videoDecodeFailure = .screenshotFailure(stage: 20, cause: 1)
+            videoDecodeFailure = (error as? NativeBackendError) ?? .screenshotFailure(stage: 20, cause: 1)
             NSLog("NCM screenshot decode failed: %@", String(describing: error))
             await decoder.reset()
             _ = ncm_backend_video_refresh(token)
@@ -290,10 +303,10 @@ public enum InputDelivery: Sendable { case reportsWrittenVisualEffectUnverified 
         guard code == 0 else { throw NativeBackendError.transport(code: code) }
         handle = started; try await finishConnect(started)
     }
-    func connectVideoBurstFixture(_ sample: Data) async throws {
+    func connectVideoBurstFixture(_ sample: Data, continuous: Bool = true) async throws {
         guard !busy, handle == 0 else { throw NativeBackendError.busy }
         var started: UInt64 = 0
-        let code = withSlices([sample]) { ncm_test_start_video_burst($0[0], &started) }
+        let code = withSlices([sample]) { ncm_test_start_video_burst($0[0], continuous ? 1 : 0, &started) }
         guard code == 0 else { throw NativeBackendError.transport(code: code) }
         handle = started; try await finishConnect(started)
     }
@@ -422,7 +435,9 @@ struct NCMVideoSample {
 private final class NCMDecodedOutput: @unchecked Sendable {
     private let lock = NSLock()
     private var buffer: CVPixelBuffer?
-    func store(_ value: CVPixelBuffer) { lock.lock(); defer { lock.unlock() }; buffer = value }
+    private var status: OSStatus = noErr
+    func store(_ value: CVPixelBuffer?, status: OSStatus) { lock.lock(); defer { lock.unlock() }; buffer = value; self.status = status }
+    func error() -> OSStatus { lock.lock(); defer { lock.unlock() }; return status }
     func take() -> CVPixelBuffer? { lock.lock(); defer { lock.unlock() }; return buffer }
 }
 
@@ -443,6 +458,13 @@ final class NCMVideoDecoder: @unchecked Sendable {
     private var requiresSync = true
     private var latest: (buffer: CVPixelBuffer, rect: CGRect, received: ContinuousClock.Instant, serial: UInt64)?
     private var lastSerial: UInt64 = 0
+    private var decodedCount: UInt64 = 0
+    func diagnosticStatus() async -> String {
+        await withCheckedContinuation { continuation in queue.async {
+            let age = self.latest.map { String(describing: $0.received.duration(to: .now)) } ?? "none"
+            continuation.resume(returning: "polled=\(self.lastSerial) decoded=\(self.decodedCount) latestAge=\(age) requiresSync=\(self.requiresSync)")
+        } }
+    }
     deinit { if let session { VTDecompressionSessionInvalidate(session) } }
     func reset() async {
         await withCheckedContinuation { continuation in
@@ -457,23 +479,23 @@ final class NCMVideoDecoder: @unchecked Sendable {
         probeKeyframe = nil
         #endif
     }
-    func consume(_ data: Data) async throws {
+    @discardableResult func consume(_ data: Data) async throws -> Bool {
         let observed = ContinuousClock.now
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
             queue.async {
-                do { try self.decode(NCMVideoSample(data), observed: observed); continuation.resume() }
+                do { continuation.resume(returning: try self.decode(NCMVideoSample(data), observed: observed)) }
                 catch { self.resetOnQueue(); continuation.resume(throwing: error) }
             }
         }
     }
-    private func decode(_ sample: NCMVideoSample, observed: ContinuousClock.Instant) throws {
+    private func decode(_ sample: NCMVideoSample, observed: ContinuousClock.Instant) throws -> Bool {
         dispatchPrecondition(condition: .notOnQueue(.main))
         guard sample.serial > lastSerial else { throw NativeBackendError.malformedEvent }
         lastSerial = sample.serial
         if revision != sample.revision || epoch != sample.epoch { resetOnQueue() }
-        if requiresSync && !sample.sync { return }
+        if requiresSync && !sample.sync { return false }
         if session == nil {
-            guard sample.sync else { return }
+            guard sample.sync else { return false }
             var description: CMVideoFormatDescription?
             let p = sample.parameters
             let result = p[0].withUnsafeBytes { vps in p[1].withUnsafeBytes { sps in p[2].withUnsafeBytes { pps in
@@ -491,14 +513,23 @@ final class NCMVideoDecoder: @unchecked Sendable {
             guard (dimensions.width == sample.width && dimensions.height == sample.height) ||
                   (presented.width == CGFloat(sample.width) && presented.height == CGFloat(sample.height)) else { throw NativeBackendError.malformedEvent }
             var callback = VTDecompressionOutputCallbackRecord(decompressionOutputCallback: { _, source, status, _, image, _, _ in
-                if status == noErr, let source, let image {
-                    Unmanaged<NCMDecodedOutput>.fromOpaque(source).takeUnretainedValue().store(image)
+                if let source {
+                    Unmanaged<NCMDecodedOutput>.fromOpaque(source).takeUnretainedValue().store(image, status: status)
                 }
             }, decompressionOutputRefCon: nil)
             let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary
-            guard VTDecompressionSessionCreate(allocator: kCFAllocatorDefault, formatDescription: description,
+            let created = VTDecompressionSessionCreate(allocator: kCFAllocatorDefault, formatDescription: description,
                 decoderSpecification: nil, imageBufferAttributes: attributes, outputCallback: &callback,
-                decompressionSessionOut: &session) == noErr else { throw NativeBackendError.screenshotFailure(stage: 20, cause: 1) }
+                decompressionSessionOut: &session)
+            NSLog("NCM VT create status=%d", created)
+            guard created == noErr else { throw NativeBackendError.screenshotFailure(stage: 20, cause: created == kVTInvalidSessionErr ? 13 : 14) }
+            #if DEBUG
+            if let session {
+                var hardware: CFTypeRef?
+                let queried = VTSessionCopyProperty(session, key: kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, allocator: kCFAllocatorDefault, valueOut: &hardware)
+                NSLog("NCM VT hardware query=%d value=%@", queried, String(describing: hardware))
+            }
+            #endif
             format = description; revision = sample.revision; epoch = sample.epoch
         }
         guard let session, let format else { throw NativeBackendError.malformedEvent }
@@ -534,11 +565,14 @@ final class NCMVideoDecoder: @unchecked Sendable {
         let status = VTDecompressionSessionDecodeFrame(session, sampleBuffer: buffer, flags: [],
             frameRefcon: Unmanaged.passUnretained(output).toOpaque(), infoFlagsOut: nil)
         let waited = VTDecompressionSessionWaitForAsynchronousFrames(session)
-        guard status == noErr, waited == noErr, let pixels = output.take() else {
-            throw NativeBackendError.screenshotFailure(stage: 20, cause: 1)
+        guard status == noErr, waited == noErr, output.error() == noErr, let pixels = output.take() else {
+            NSLog("NCM VT decode status=%d waited=%d callback=%d output=%d sync=%d", status, waited, output.error(), output.take() == nil ? 0 : 1, sample.sync ? 1 : 0)
+            let invalid = [status, waited, output.error()].contains(kVTInvalidSessionErr)
+            throw NativeBackendError.screenshotFailure(stage: 20, cause: invalid ? 13 : 14)
         }
         requiresSync = false
-        // Include time in the Rust queue; late delivery cannot make an old frame fresh.
+        decodedCount &+= 1
+        // Include time in the Rust queue when deciding whether capture advanced after the request.
         let rect: CGRect
         if let size = streamContentSize ?? sample.visibleSize {
             rect = CGRect(x: 0, y: CGFloat(CVPixelBufferGetHeight(pixels)) - size.height, width: size.width, height: size.height)
@@ -555,12 +589,15 @@ final class NCMVideoDecoder: @unchecked Sendable {
             loggedGeometry = geometry
         }
         latest = (pixels, rect, observed.advanced(by: .milliseconds(-Int64(min(sample.ageMS, UInt64(Int64.max))))), sample.serial)
+        return true
     }
-    func jpeg(notBefore: ContinuousClock.Instant) async throws -> Data? {
+    func jpeg(notBefore: ContinuousClock.Instant, confirmedEpoch: UInt64? = nil, confirmedSerial: UInt64 = 0) async throws -> Data? {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data?, Error>) in
             queue.async {
                 do {
-                    guard let latest = self.latest, latest.received >= notBefore else { continuation.resume(returning: nil); return }
+                    guard let latest = self.latest, !self.requiresSync,
+                          latest.received >= notBefore || (confirmedSerial > 0 && self.epoch == confirmedEpoch && latest.serial >= confirmedSerial)
+                    else { continuation.resume(returning: nil); return }
                     let data = try NCMVideoImage.jpeg(buffer: latest.buffer, rect: latest.rect, context: self.context)
                     continuation.resume(returning: data)
                 } catch { continuation.resume(throwing: error) }
@@ -569,17 +606,14 @@ final class NCMVideoDecoder: @unchecked Sendable {
     }
 }
 
-/// Freshness bound for the retained video route; no input-history coupling.
-struct NCMVideoFreshness {
+/// Transport/assembly diagnostics; no arbitrary maximum picture age.
+struct NCMVideoSnapshotFailure {
     static func timeoutCause(datagrams: UInt64, rtp: UInt64, frames: UInt64, overflows: UInt64, initialOverflows: UInt64 = 0) -> UInt32 {
         if datagrams == 0 { return 8 }
         if rtp == 0 { return 9 }
         if frames == 0 { return 10 }
         if overflows > initialOverflows { return 12 }
         return 11
-    }
-    func minimumReceipt(at now: ContinuousClock.Instant) -> ContinuousClock.Instant {
-        now.advanced(by: .seconds(-1))
     }
 }
 

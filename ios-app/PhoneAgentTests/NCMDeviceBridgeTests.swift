@@ -24,6 +24,25 @@ import LLMProviderKit
     var releases = 0
     var reservations = 0
     var captures = 0
+    var captureError: NCMControlError?
+    var connectionStopID: UUID? = UUID()
+    var allowsConnectionWait = false
+    var connectionDelay: Duration?
+    var connectionAttempts = 0
+    private var connectionTask: Task<Void, Never>?
+    func connectIfNeeded() throws {
+        connectionAttempts += 1
+        guard allowsConnectionWait else {
+            if !ready { throw NCMControlError.unavailable(connectionFailure ?? "ESP32 未连接") }
+            return
+        }
+        if let connectionDelay, connectionTask == nil {
+            connectionTask = Task { @MainActor in
+                try? await Task.sleep(for: connectionDelay)
+                self.ready = true; self.controlSessionID = UUID()
+            }
+        }
+    }
     var png: Data = UIGraphicsImageRenderer(size: CGSize(width: 10, height: 20), format: {
         let format = UIGraphicsImageRendererFormat(); format.scale = 1; return format
     }()).pngData { context in UIColor.blue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 10, height: 20)) }
@@ -35,7 +54,7 @@ import LLMProviderKit
         try validate(); systemActions.append(name)
     }
     func registerAgent(owner: UUID, session: UUID) { reservations += 1 }
-    func agentCapture(owner: UUID, session: UUID) async throws -> Data { captures += 1; return png }
+    func agentCapture(owner: UUID, session: UUID) async throws -> Data { captures += 1; if let captureError { throw captureError }; return png }
     func agentTap(owner: UUID, session: UUID, x: UInt16, y: UInt16, validate: () throws -> Void) async throws { try validate(); taps += 1 }
     func agentDrag(owner: UUID, session: UUID, fromX: UInt16, fromY: UInt16, toX: UInt16, toY: UInt16, durationMS: UInt16, validate: () throws -> Void) async throws { try validate(); drags = [fromX, fromY, toX, toY, durationMS] }
     func releaseAgent(owner: UUID, session: UUID) { releases += 1 }
@@ -53,6 +72,19 @@ import LLMProviderKit
 }
 
 @MainActor final class NCMDeviceBridgeTests: XCTestCase {
+    func testTransportStopIsToolErrorWhileExplicitRunStopRemainsCancellation() async throws {
+        let connection = NCMConnectionSpy()
+        let bridge = try NCMDeviceBridge(flow: connection)
+        connection.captureError = .stopped
+        do { _ = try await bridge.screenshot(); XCTFail("Expected connection error") }
+        catch { guard case AppError.unavailable = error else { return XCTFail("Transport loss must not stop the Agent: \(error)") } }
+        connection.captureError = nil
+        _ = try await bridge.screenshot()
+        await bridge.stop()
+        do { _ = try await bridge.screenshot(); XCTFail("Explicit stop must cancel") }
+        catch { XCTAssertEqual(error as? AppError, .stopped) }
+    }
+
     @MainActor func testPredictiveVideoFrameUpdatesScreenshotWithoutInputOrNewKeyframe() async throws {
         // Synthetic green IDR followed by blue P-frame, encoded with libx265.
         var first = Data(base64Encoded: "AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAQAAAEAAAABgAAAAGAAAACkAAAAHAAAAGwAAAEABDAH//wFgAAADAJAAAAMAAAMAHpKAkEIBAQFgAAADAJAAAAMAAAMAHqAggYWWSpJMrwFoCAAAAwAIAAADAAhARAHBcrQiQAAAABcoAa8TgOUyUf/ySo/+t9X+gGtACCMdhw==")!
@@ -70,7 +102,7 @@ import LLMProviderKit
         let green = try XCTUnwrap(initial)
         try await Task.sleep(for: .milliseconds(1100))
         try await decoder.consume(second)
-        let updated = try await decoder.jpeg(notBefore: NCMVideoFreshness().minimumReceipt(at: .now))
+        let updated = try await decoder.jpeg(notBefore: .now.advanced(by: .seconds(-1)))
         let blue = try XCTUnwrap(updated)
         XCTAssertNotEqual(green, blue, "A P-frame must update the screenshot without input or another keyframe")
         let source = try XCTUnwrap(CGImageSourceCreateWithData(blue as CFData, nil))
@@ -163,24 +195,29 @@ import LLMProviderKit
         XCTAssertEqual(rect, CGRect(x: 16, y: 24, width: 66, height: 98))
     }
     func testScreenshotTimeoutReasonDistinguishesTransportAssemblyAndFreshness() {
-        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 0, rtp: 0, frames: 0, overflows: 0), 8)
-        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 0, frames: 0, overflows: 0), 9)
-        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 4, frames: 0, overflows: 0), 10)
-        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 0), 11)
-        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 1), 12)
-        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 1, initialOverflows: 1), 11, "Historical overload must not label a later screenshot failure")
+        XCTAssertEqual(NCMVideoSnapshotFailure.timeoutCause(datagrams: 0, rtp: 0, frames: 0, overflows: 0), 8)
+        XCTAssertEqual(NCMVideoSnapshotFailure.timeoutCause(datagrams: 4, rtp: 0, frames: 0, overflows: 0), 9)
+        XCTAssertEqual(NCMVideoSnapshotFailure.timeoutCause(datagrams: 4, rtp: 4, frames: 0, overflows: 0), 10)
+        XCTAssertEqual(NCMVideoSnapshotFailure.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 0), 11)
+        XCTAssertEqual(NCMVideoSnapshotFailure.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 1), 12)
+        XCTAssertEqual(NCMVideoSnapshotFailure.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 1, initialOverflows: 1), 11, "Historical overload must not label a later screenshot failure")
     }
-    @MainActor func testVideoSnapshotFreshnessIsIndependentOfInputHistory() async throws {
+    @MainActor func testIdleSnapshotRequiresConfirmedSerialAndEpoch() async throws {
         let bytes = Data(base64Encoded: "AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAACQXwEAAQAAAEAAAABgAAAAGAAAACkAAAAHAAAAGgAAAEABDAH//wFgAAADAJAAAAMAAAMAHpWYCUIBAQFgAAADAJAAAAMAAAMAHqAggYWWVmkkyvAWgIAAAAMAgAAAAwCERAHBcrQiQAAAABYoAa8TgOUyUf/aKP+n1f6Aa0AIIx2H")!
         let decoder = NCMVideoDecoder()
         try await decoder.consume(bytes)
-        let freshness = NCMVideoFreshness()
-        let recent = try await decoder.jpeg(notBefore: freshness.minimumReceipt(at: .now))
-        XCTAssertNotNil(recent, "A recent complete frame need not arrive after the screenshot call")
-        let repeated = try await decoder.jpeg(notBefore: freshness.minimumReceipt(at: .now))
-        XCTAssertNotNil(repeated, "Video snapshots must not depend on any input event")
-        let stale = try await decoder.jpeg(notBefore: NCMVideoFreshness().minimumReceipt(at: .now.advanced(by: .seconds(2))))
-        XCTAssertNil(stale, "Old idle frames must not be returned as current screenshots")
+        let began = ContinuousClock.now.advanced(by: .seconds(2))
+        let unconfirmed = try await decoder.jpeg(notBefore: began)
+        XCTAssertNil(unconfirmed, "A stale image alone does not prove a live static screen")
+        let confirmed = try await decoder.jpeg(notBefore: began, confirmedEpoch: 1, confirmedSerial: 1)
+        XCTAssertNotNil(confirmed, "Sender-confirmed complete picture stays valid while static")
+        let behind = try await decoder.jpeg(notBefore: began, confirmedEpoch: 1, confirmedSerial: 2)
+        XCTAssertNil(behind, "Decoder must catch up to the peer confirmation")
+        let otherEpoch = try await decoder.jpeg(notBefore: began, confirmedEpoch: 2, confirmedSerial: 1)
+        XCTAssertNil(otherEpoch, "Confirmation cannot cross a reset")
+        await decoder.reset()
+        let reset = try await decoder.jpeg(notBefore: began, confirmedEpoch: 1, confirmedSerial: 1)
+        XCTAssertNil(reset, "Reset pixels cannot satisfy an earlier confirmation")
     }
     @MainActor func testHEVCConformanceCropProducesExactVisibleScreenshotDimensions() async throws {
         let decoder = NCMVideoDecoder()
@@ -340,16 +377,88 @@ import LLMProviderKit
         XCTAssertEqual(connection.captures, 0)
         await bridge.stop()
     }
-    func testApplicationQueryNeedsNoFrameButStopAndReconnectStillFenceIt() async throws {
+    func testApplicationQueryRebindsConnectionWithoutFrameButExplicitStopFencesIt() async throws {
         let connection = NCMConnectionSpy(), bridge = try NCMDeviceBridge(flow: connection)
         _ = try await bridge.installedApplications()
         XCTAssertEqual(connection.appQueries, 1)
         connection.controlSessionID = UUID()
-        do { _ = try await bridge.installedApplications(); XCTFail("reconnected query") } catch {}
-        XCTAssertEqual(connection.appQueries, 1)
+        _ = try await bridge.installedApplications()
+        XCTAssertEqual(connection.appQueries, 2)
+        XCTAssertEqual(connection.captures, 0)
+        await bridge.stop()
+        do { _ = try await bridge.installedApplications(); XCTFail("explicit stop") } catch {}
+        XCTAssertEqual(connection.appQueries, 2)
+    }
+    func testDeviceToolWaitsForConnectionAndReportsBoundedTimeout() async throws {
+        let delayed = NCMConnectionSpy()
+        delayed.ready = false; delayed.allowsConnectionWait = true; delayed.connectionDelay = .milliseconds(70)
+        let bridge = try NCMDeviceBridge(flow: delayed, connectionTimeout: .seconds(1))
+        _ = try await bridge.installedApplications()
+        XCTAssertEqual(delayed.connectionAttempts, 1); XCTAssertEqual(delayed.appQueries, 1)
+        XCTAssertEqual(delayed.captures, 0)
+        await bridge.stop()
+        let absent = NCMConnectionSpy()
+        absent.ready = false; absent.allowsConnectionWait = true
+        let waiting = try NCMDeviceBridge(flow: absent, connectionTimeout: .milliseconds(120))
+        do { _ = try await waiting.screenshot(); XCTFail("Expected bounded timeout") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("连接超时")) }
+        XCTAssertEqual(absent.captures, 0)
+        await waiting.stop()
+    }
+    func testExplicitStopInterruptsConnectionWaitWithoutDispatch() async throws {
+        let connection = NCMConnectionSpy()
+        connection.ready = false; connection.allowsConnectionWait = true
+        let bridge = try NCMDeviceBridge(flow: connection, connectionTimeout: .seconds(2))
+        let waiting = Task { try await bridge.installedApplications() }
+        while connection.connectionAttempts == 0 { await Task.yield() }
+        await bridge.stop()
+        do { _ = try await waiting.value; XCTFail("Stopped waiter must not dispatch") }
+        catch { XCTAssertEqual(error as? AppError, .stopped) }
+        XCTAssertEqual(connection.appQueries, 0)
+    }
+    func testServiceStopInterruptsWaitWithoutStartingAnotherConnection() async throws {
+        let connection = NCMConnectionSpy()
+        connection.ready = false; connection.allowsConnectionWait = true
+        let bridge = try NCMDeviceBridge(flow: connection, connectionTimeout: .seconds(2))
+        let waiting = Task { try await bridge.installedApplications() }
+        while connection.connectionAttempts == 0 { await Task.yield() }
+        connection.connectionStopID = UUID()
+        do { _ = try await waiting.value; XCTFail("Service stop must interrupt wait") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("连接等待已停止")) }
+        XCTAssertEqual(connection.connectionAttempts, 1); XCTAssertEqual(connection.appQueries, 0)
         await bridge.stop()
     }
-    func testNewActionsRequireApprovalConsumeImageAndCannotReplay() async throws {
+    func testReconnectInvalidatesOldCoordinateGrantButAllowsNewObservation() async throws {
+        let connection = NCMConnectionSpy(), bridge = try NCMDeviceBridge(flow: connection)
+        let frame = try await bridge.screenshot()
+        try await bridge.authorizeTaskInput(imageID: frame.id)
+        connection.controlSessionID = UUID()
+        do { try await bridge.tap(x: 1, y: 1, imageID: frame.id); XCTFail("Old coordinates cannot cross connection generations") } catch {}
+        XCTAssertEqual(connection.taps, 0)
+        let fresh = try await bridge.screenshot()
+        try await bridge.authorizeTaskInput(imageID: fresh.id)
+        try await bridge.tap(x: 1, y: 1, imageID: fresh.id)
+        XCTAssertEqual(connection.taps, 1)
+        await bridge.stop()
+    }
+    func testSystemActionsNeedOneUseAuthorizationButNoScreenshot() async throws {
+        for name in ["home", "launch_app", "type_text"] {
+            let connection = NCMConnectionSpy(), bridge = try NCMDeviceBridge(flow: connection)
+            _ = try await bridge.systemActionContext()
+            do { try await bridge.systemAction(name: name, text: "fixture", arguments: [], imageID: "not-approved"); XCTFail("unapproved") } catch {}
+            try await bridge.authorizeSystemAction(authorizationID: "single-use", taskScoped: true)
+            try await bridge.systemAction(name: name, text: "fixture", arguments: [], imageID: "single-use")
+            do { try await bridge.systemAction(name: name, text: "fixture", arguments: [], imageID: "single-use"); XCTFail("replay") } catch {}
+            XCTAssertEqual(connection.systemActions, [name]); XCTAssertEqual(connection.captures, 0)
+            try await bridge.authorizeSystemAction(authorizationID: "old-session", taskScoped: true)
+            connection.controlSessionID = UUID()
+            _ = try await bridge.installedApplications()
+            do { try await bridge.systemAction(name: name, text: "fixture", arguments: [], imageID: "old-session"); XCTFail("old grant") } catch {}
+            XCTAssertEqual(connection.systemActions, [name])
+            await bridge.stop()
+        }
+    }
+    func testNewActionsConsumeOneUseApprovalAndCannotReplay() async throws {
         for name in ["home", "launch_app", "type_text"] {
             let connection = NCMConnectionSpy(), bridge = try NCMDeviceBridge(flow: connection)
             let frame = try await bridge.screenshot()
@@ -361,6 +470,15 @@ import LLMProviderKit
             XCTAssertEqual(connection.systemActions, [name])
             await bridge.stop()
         }
+    }
+    func testStartupRestoreDoesNotFalselyMarkBackgroundAsForeground() {
+        let url = URL.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "identity.plist")
+        let flow = PairingFlow(store: RemotePairRecordStore(url: url))
+        flow.background()
+        flow.restoreConnection()
+        XCTAssertTrue(flow.isBackground)
+        XCTAssertFalse(flow.ready); XCTAssertFalse(flow.hasRecord); XCTAssertFalse(flow.running)
+        flow.cancel()
     }
     func testBackgroundKeepsIdleAuthenticatedSession() {
         let flow = PairingFlow()
@@ -403,6 +521,29 @@ import LLMProviderKit
         XCTAssertEqual(flow.controlSessionID, session)
         flow.cancel()
     }
+    func testConsecutiveAuthorizedOperationsReuseCoordinateReferenceWithoutCaptures() async throws {
+        for mode in [InputAuthorizationMode.perAction, .task] {
+            let connection = NCMConnectionSpy(), bridge = try NCMDeviceBridge(flow: connection)
+            let coordinator = ActionCoordinator(bridge: bridge, limits: AgentLimits(), approve: { _ in true },
+                onImage: { _, _ in }, onReceipt: { _ in }, authorizationMode: mode)
+            _ = try await coordinator.execute(name: "screenshot", parameters: [:], callID: "frame")
+            let tap = try await coordinator.execute(name: "tap", parameters: ["x": 2, "y": 3, "purpose": "first"], callID: "tap1")
+            let wait = try await coordinator.execute(name: "wait", parameters: ["duration_ms": 1], callID: "wait")
+            _ = try await coordinator.execute(name: "home", parameters: ["purpose": "home"], callID: "home")
+            _ = try await coordinator.execute(name: "drag", parameters: ["from_x": 1, "from_y": 2, "to_x": 5, "to_y": 10, "duration_ms": 200, "purpose": "drag"], callID: "drag")
+            _ = try await coordinator.execute(name: "tap", parameters: ["x": 2, "y": 3, "purpose": "next"], callID: "tap2")
+            XCTAssertFalse(tap.isError)
+            XCTAssertEqual(tap.result, "Command delivery acknowledged.")
+            XCTAssertFalse(wait.isError)
+            XCTAssertEqual(wait.result, "Wait completed.")
+            XCTAssertEqual(connection.captures, 1)
+            XCTAssertEqual(connection.taps, 2)
+            XCTAssertEqual(connection.drags.count, 5)
+            XCTAssertEqual(connection.systemActions, ["home"])
+            await coordinator.stop()
+        }
+    }
+
     func testUsesRemotePixelsAndRequiresApprovalBeforeInput() async throws {
         let connection = NCMConnectionSpy(), bridge = try NCMDeviceBridge(flow: connection)
         let frame = try await bridge.screenshot()
@@ -414,22 +555,23 @@ import LLMProviderKit
         do { try await bridge.tap(x: 100, y: 200, imageID: frame.id); XCTFail("replayed input") } catch {}
         XCTAssertEqual(connection.taps, 1)
     }
-    func testReconnectInvalidatesOldRunEvenWhenReadyAgain() async throws {
+    func testReconnectInvalidatesOldGrantButRunCanObserveAgain() async throws {
         let connection = NCMConnectionSpy(), bridge = try NCMDeviceBridge(flow: connection)
         let frame = try await bridge.screenshot()
         try await bridge.authorizeTaskInput(imageID: frame.id)
         connection.controlSessionID = UUID()
         do { try await bridge.tap(x: 0, y: 0, imageID: frame.id); XCTFail("new generation accepted") } catch {}
-        do { _ = try await bridge.screenshot(); XCTFail("old run reconnect") } catch {}
+        _ = try await bridge.screenshot()
         XCTAssertEqual(connection.taps, 0)
+        XCTAssertEqual(connection.captures, 2)
     }
-    func testDragForwardsNormalizedCoordinatesAndInvalidatesImage() async throws {
+    func testDragForwardsNormalizedCoordinatesAndConsumesApproval() async throws {
         let connection = NCMConnectionSpy(), bridge = try NCMDeviceBridge(flow: connection)
         let frame = try await bridge.screenshot()
         try await bridge.authorizeTaskInput(imageID: frame.id)
         try await bridge.drag(fromX: 0, fromY: 65535, toX: 65535, toY: 0, durationMS: 1000, imageID: frame.id)
         XCTAssertEqual(connection.drags, [0, 65535, 65535, 0, 1000])
-        do { try await bridge.tap(x: 0, y: 0, imageID: frame.id); XCTFail("stale image accepted") } catch {}
+        do { try await bridge.tap(x: 0, y: 0, imageID: frame.id); XCTFail("consumed approval accepted") } catch {}
     }
     func testCancellationFencesBeforeAsynchronousRelease() async throws {
         let connection = NCMConnectionSpy(), bridge = try NCMDeviceBridge(flow: connection)
@@ -467,13 +609,13 @@ import LLMProviderKit
         connection.controlSessionID = UUID()
         let capable = await bridge.supportsBackgroundExecution(tool: "screenshot")
         XCTAssertTrue(capable)
-        do { _ = try await bridge.screenshot(); XCTFail("old generation accepted") } catch {}
-        XCTAssertEqual(connection.captures, 1)
+        _ = try await bridge.screenshot()
+        XCTAssertEqual(connection.captures, 2)
     }
     func testDisconnectedOrdinaryChatAndFailedToolBothAllowModelReply() async throws {
         for requestsScreenshot in [false, true] {
-            let connection = NCMConnectionSpy(); connection.ready = false
-            let bridge = try NCMDeviceBridge(flow: connection)
+            let connection = NCMConnectionSpy(); connection.ready = false; connection.allowsConnectionWait = true
+            let bridge = try NCMDeviceBridge(flow: connection, connectionTimeout: .milliseconds(120))
             let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
                 runServices: AgentRunServices(provider: DisconnectedChatProvider(requestsScreenshot: requestsScreenshot), bridge: bridge))
             let id = model.createConversation(mode: .live)
@@ -490,6 +632,7 @@ import LLMProviderKit
             if requestsScreenshot { XCTAssertEqual(tools.first?.state, .failed) }
             XCTAssertEqual(connection.reservations, 0)
             XCTAssertEqual(connection.captures, 0)
+            XCTAssertEqual(connection.connectionAttempts, requestsScreenshot ? 1 : 0)
         }
     }
     func testOrdinaryRunPreservesBackgroundConnectionWithoutReservingDevice() async throws {
@@ -584,7 +727,7 @@ private struct DisconnectedChatProvider: LLMProvider {
             return LLMResponse(text: "", finishReason: .toolCalls,
                 toolCalls: [LLMToolCall(id: "screen", name: "screenshot", arguments: "{}")], request: request, providerName: Self.name)
         }
-        if requestsScreenshot && result?.content.contains("手机操控未连接") != true {
+        if requestsScreenshot && result?.content.contains("等待 ESP32 连接超时") != true {
             throw AppError.invalid("模型未收到设备工具的连接错误")
         }
         return LLMResponse(text: "正常回复", finishReason: .stop, request: request, providerName: Self.name)

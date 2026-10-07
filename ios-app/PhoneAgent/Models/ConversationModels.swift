@@ -43,11 +43,22 @@ struct ToolStep: Codable, Sendable, Equatable {
     // Only bounded public fields from our five registered tools are stored.
     var arguments: String?
     var skillName: String?
-    var symbol: String {
-        switch name {
-        case "load_skill": return "book.closed"
-        default: return "wrench.and.screwdriver"
+    var displayArguments: String? { Self.nonemptyArguments(arguments) }
+    static func nonemptyArguments(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let json = try? JSONSerialization.jsonObject(with: Data(trimmed.utf8), options: [.fragmentsAllowed]) {
+            if json is NSNull { return nil }
+            if let object = json as? [String: Any], object.isEmpty { return nil }
+            if let array = json as? [Any], array.isEmpty { return nil }
+            if let string = json as? String, string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
         }
+        return value
+    }
+    var symbol: String {
+        let operation = AgentActivityAttributes.Operation.tool(name)
+        return operation == .processing ? "wrench.and.screwdriver" : operation.symbol
     }
     var title: String {
         switch name {

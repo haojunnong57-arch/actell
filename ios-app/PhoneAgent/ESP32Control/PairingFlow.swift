@@ -14,6 +14,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     private let store: RemotePairRecordStore
     private var service: NetService?
     private var generation = UUID()
+    private(set) var connectionStopID: UUID? = UUID()
     private(set) var controlSessionID = UUID()
     private var agentOwner: UUID?
     private var connectionUsers: Set<UUID> = []
@@ -144,6 +145,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         running = false; pairingActive = false; job = nil; hasRecord = store.exists
     }
     func cancel() {
+        connectionStopID = UUID()
         mediaLifetime.revoke()
         operationLease?.complete(success: false); operationLease = nil
         stopHeartbeat()
@@ -162,9 +164,24 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         // still closes the session, without replaying input after reconnect.
     }
     func resume() {
+        let wasBackground = isBackground
         isBackground = false
+        // Cancelling an in-flight native readiness request closes its transport.
+        // Scene transitions may wake an idle heartbeat, never cancel active I/O.
+        if ready, wasBackground, !maintenanceBusy { startHeartbeat(immediate: true) }
+        restoreConnection()
+    }
+    func restoreConnection() {
         hasRecord = store.exists
         if hasRecord, !pairingActive, !running, !ready { verify() }
+    }
+    /// Called only by a device tool or App startup, never by normal chat.
+    /// Concurrent waiters share the same verification job.
+    func connectIfNeeded() throws {
+        hasRecord = store.exists
+        if ready || pairingActive { return }
+        guard hasRecord else { throw NCMControlError.unavailable("请先在设置 → 手机操控 → ESP32 控制中完成系统配对") }
+        if !running && !agentReserved { verify() }
     }
     func verify() {
         guard !running, !agentReserved, store.exists else { return }
@@ -390,11 +407,13 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     }
     /// Read-only service traffic keeps the ESP32's 60-second relay idle lease alive.
     /// Shares the operation gate; never overlaps a screenshot or touch request.
-    private func startHeartbeat() {
+    private func startHeartbeat(immediate: Bool = false) {
         stopHeartbeat(); let epoch = heartbeatEpoch
         heartbeatTask = Task { @MainActor [weak self] in
+            var delay: Duration = immediate ? .zero : .seconds(20)
             while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(20)) } catch { return }
+                do { try await Task.sleep(for: delay) } catch { return }
+                delay = .seconds(20)
                 guard let self, self.heartbeatEpoch == epoch, self.ready else { return }
                 if self.running { continue }
                 self.maintenanceBusy = true
@@ -425,7 +444,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         }
         if case NativeBackendError.protocolFailure(let stage, let cause) = error {
             if stage == 19 || stage == 20 {
-                let reasons: [UInt32: String] = [1:"协议错误", 2:"超时", 3:"参数无效", 4:"服务缺失", 5:"尚未就绪", 8:"超时，未收到视频数据", 9:"超时，未收到协商匹配的视频包", 10:"超时，视频包未组成完整帧", 11:"超时，未取得新的视频画面", 12:"超时，视频画面超过接收大小限制"]
+                let reasons: [UInt32: String] = [1:"协议错误", 2:"超时", 3:"参数无效", 4:"服务缺失", 5:"尚未就绪", 8:"超时，未收到视频数据", 9:"超时，未收到协商匹配的视频包", 10:"超时，视频包未组成完整帧", 11:"超时，未能确认视频画面完整性", 12:"超时，视频画面超过接收大小限制", 13:"视频解码会话已失效", 14:"视频解码失败"]
                 return "截图\(stage == 19 ? "服务连接" : "请求与接收")失败（\(reasons[cause] ?? "原因 \(cause)")）"
             }
             let labels: [UInt32: String] = [1:"配对身份", 2:"ESP32 转发连接", 3:"手机身份认证", 4:"动态隧道入口", 5:"隧道 TLS", 6:"远程服务列表", 7:"开发者模式", 8:"开发者镜像", 9:"截图", 10:"屏幕视频会话", 11:"输入发送", 12:"会话关闭", 21:"App 服务"]

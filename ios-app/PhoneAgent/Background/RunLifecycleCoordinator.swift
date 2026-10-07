@@ -267,23 +267,23 @@ extension RunCheckpointStorage {
         activity(generation: generation, milestone: "tool:" + callID)
     }
     func toolFailed(callID: String, generation: UUID) {
-        guard ownsRun, checkpoint?.generation == generation, checkpoint?.phase == .running else { return }
-        if let i = checkpoint?.tools.firstIndex(where: { $0.callID == callID }), checkpoint?.tools[i].delivery == .dispatching {
-            if ["tap", "drag", "home", "launch_app", "type_text"].contains(checkpoint?.tools[i].name ?? "") {
-                checkpoint?.tools[i].delivery = .outcomeUnknown
-                pause("工具发送后未得到确认；结果未知，请核对设备，旧动作不会重放")
-            } else {
-                // Failed observations have no input side effect. Preserve the
-                // ordinary tool-error -> model explanation path.
-                checkpoint?.tools[i].delivery = .failed
-                activeToolBackgroundCapable = true; saveOrPause()
-            }
-        } else {
-            if let i = checkpoint?.tools.firstIndex(where: { $0.callID == callID }), checkpoint?.tools[i].delivery == .prepared {
-                checkpoint?.tools[i].delivery = .failed
-            }
-            activeToolBackgroundCapable = true; saveOrPause()
+        guard ownsRun, checkpoint?.generation == generation,
+              let i = checkpoint?.tools.firstIndex(where: { $0.callID == callID }) else { return }
+        let wasWaiting = checkpoint?.phase == .waitingApproval && checkpoint?.pendingApproval == callID
+        guard checkpoint?.phase == .running || wasWaiting else { return }
+        let delivery = checkpoint?.tools[i].delivery
+        if delivery == .dispatching {
+            checkpoint?.tools[i].delivery = ["tap", "drag", "home", "launch_app", "type_text"].contains(checkpoint?.tools[i].name ?? "")
+                ? .outcomeUnknown : .failed
+        } else if delivery == .prepared {
+            checkpoint?.tools[i].delivery = .failed
         }
+        // Unknown delivery belongs to this call, not the Agent's entire run.
+        // Persist it for recovery/no replay, then let the model observe/react.
+        if wasWaiting { checkpoint?.pendingApproval = nil; checkpoint?.phase = .running }
+        activeToolBackgroundCapable = true
+        saveOrPause()
+        if wasWaiting, checkpoint?.phase == .running { requestSegment() }
     }
     func waitForApproval(callID: String, generation: UUID) throws {
         guard ownsRun, checkpoint?.generation == generation, checkpoint?.phase == .running,

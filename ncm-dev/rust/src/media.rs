@@ -7,11 +7,11 @@ use idevice::{
     core_device::{
         DisplayServiceClient, TouchEvent, TouchPoint, UniversalHidServiceClient,
         display_stream::{
-            RtpPacket, build_frame_ack, build_keyframe_request, build_liveness, build_rctl,
+            RtpPacket, ReportBlock, SenderReport, build_frame_ack, build_pli, build_liveness, build_rctl,
             build_start_video_parameters,
             hevc::{HevcAccessUnitAssembler, HevcDepacketizerEvent},
             is_rtcp,
-            negotiation::{CallInfoBlob, build_screen_video_offer, parse_screen_video_answer},
+            negotiation::{CallInfoBlob, build_screen_video_offer_with_bitrate, parse_screen_video_answer},
         },
     },
     rsd::RsdHandshake,
@@ -25,7 +25,11 @@ use std::{
     time::Duration,
 };
 use tokio::task::JoinHandle;
-const VIDEO_PORT: u16 = 50001;
+// Requested sender port is an offer only; feedback uses the returned SourcePort.
+const REQUESTED_VIDEO_PORT: u16 = 50001;
+// S3 relay budget, not an iOS limit. Live 6 Mbps produced sender ENOBUFS;
+// 2 Mbps RCTL feedback made the peer target ~1.7 Mbps without steady-state loss.
+const RECEIVER_BANDWIDTH_KBPS: u16 = 2000;
 // Display identity and geometry are queried from the authenticated peer.
 struct DisplayInfoClient(idevice::core_device::CoreDeviceServiceClient<Stream>);
 impl RsdService for DisplayInfoClient {
@@ -136,7 +140,7 @@ impl Media {
         let ssrc =
             u32::from_be_bytes(uuid::Uuid::new_v4().as_bytes()[..4].try_into().unwrap()).max(1);
         let call_id = uuid::Uuid::new_v4().to_string().to_uppercase();
-        let offer = build_screen_video_offer(&call_id, &info, ssrc).map_err(|_| fail())?;
+        let offer = build_screen_video_offer_with_bitrate(&call_id, &info, ssrc, u32::from(RECEIVER_BANDWIDTH_KBPS) * 1000).map_err(|_| fail())?;
         // Retain the video session until close; audio is not needed for touch.
         let mut video = bounded(
             Stage::VideoService,
@@ -163,7 +167,7 @@ impl Media {
                 &receiver,
                 video_udp.local_port(),
                 &sender,
-                VIDEO_PORT,
+                REQUESTED_VIDEO_PORT,
                 offer,
                 140,
                 DISPLAY_ID,
@@ -179,6 +183,16 @@ impl Media {
             );
         }
         let negotiated = parse_screen_video_answer(extract_answer(&answer)?).map_err(|_| fail())?;
+        let config = match feedback_endpoint(&answer) {
+            Some(config) => config,
+            None => {
+                let status = bounded(Stage::VideoAnswer, video.get_media_stream_server_status()).await?;
+                feedback_endpoint(&status).ok_or_else(fail)?
+            }
+        };
+        if config.1 != negotiated.ssrc { return Err(fail()); }
+        let (feedback_port, _, receiver_ssrc) = config;
+        eprintln!("NCM video feedback negotiated port={feedback_port} receiver={receiver_ssrc} sender={}", negotiated.ssrc);
         // Refresh outside the receiver: service latency must not block RTP/ACKs.
         // Each frame carries a snapshot, validated against that frame's SPS.
         mailbox.begin_stream();
@@ -201,8 +215,11 @@ impl Media {
             let mut needs_sync = true;
             let mut probe_extensions = 0;
             let mut probe_rtcp = 0;
-            let mut reports = VideoFeedback::new(ssrc, negotiated.ssrc, call_id);
-            let began = tokio::time::Instant::now();
+            let mut received_payload_octets = 0u64;
+            let mut discontinuity_logs = 0;
+            let probe_began = std::time::Instant::now();
+            let mut probe_packets = 0u64;
+            let mut reports = VideoFeedback::new(receiver_ssrc, negotiated.ssrc, call_id);
             let mut control_tick = tokio::time::interval(Duration::from_millis(50));
             control_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut feedback = tokio::time::interval(Duration::from_secs(1));
@@ -215,6 +232,17 @@ impl Media {
                             // The adapter already binds the authenticated peer IP and local port.
                             // senderPort is our feedback destination, not a constraint on inbound source ports.
                             if is_rtcp(&p.data) {
+                                if let Some(sr) = SenderReport::parse_first(&p.data) {
+                                    if sr.ssrc == negotiated.ssrc {
+                                        reports.sender_report = Some((sr.ntp_middle, tokio::time::Instant::now()));
+                                        mailbox.sender_report(sr.packet_count == reports.unique_packets && assembler.is_complete());
+                                    }
+                                }
+                                if geometry_probe && p.data.len() >= 28 && p.data[1] == 200 {
+                                    let sent_packets = u32::from_be_bytes(p.data[20..24].try_into().unwrap());
+                                    let sent_octets = u32::from_be_bytes(p.data[24..28].try_into().unwrap());
+                                    eprintln!("NCM video sender report sentPackets={sent_packets} receivedPackets={} sentOctets={sent_octets} receivedOctets={received_payload_octets}", reports.packets);
+                                }
                                 if geometry_probe && probe_rtcp < 4 {
                                     eprintln!("NCM geometry RTCP {:02x?}", &p.data[..p.data.len().min(512)]);
                                     probe_rtcp += 1;
@@ -226,20 +254,32 @@ impl Media {
                                 eprintln!("NCM geometry RTP marker padding={} profile={} ext={:02x?} rawtail={:02x?}", packet.padding, packet.ext_profile, packet.ext_data, &p.data[p.data.len().saturating_sub(96)..]);
                                 probe_extensions += 1;
                             }
+                            if geometry_probe && probe_packets < 30000 {
+                                eprintln!("NCM packet us={} seq={} ts={} marker={} size={}", probe_began.elapsed().as_micros(), packet.sequence_number, packet.timestamp, packet.marker, packet.payload.len());
+                                probe_packets += 1;
+                            }
+                            mailbox.packet_pending();
                             mailbox.count(1);
-                            reports.observe_sequence(packet.sequence_number);
+                            received_payload_octets += packet.payload.len() as u64;
+                            if let Some(ack) = reports.observe_packet(&packet) {
+                                if video_udp.send_to(feedback_port, ack).await.is_err() { video_health.store(false, Ordering::SeqCst); return; }
+                            }
                             for event in assembler.push_packet(&packet) {
                                 match event {
                                     HevcDepacketizerEvent::AccessUnit(unit) => {
                                         mailbox.count(3);
-                                        let ack = reports.acknowledge(unit.rtp_timestamp);
-                                        if video_udp.send_to(VIDEO_PORT, ack).await.is_err() { video_health.store(false, Ordering::SeqCst); return; }
                                         if let Some(params) = assembler.parameter_sets() {
                                             if mailbox.push(unit, params) { needs_sync = false; }
                                             else { assembler.mark_stream_discontinuity(); needs_sync = true; }
                                         }
                                     },
-                                    HevcDepacketizerEvent::Discontinuity(_) => { mailbox.count(4); mailbox.reset(); needs_sync = true; },
+                                    HevcDepacketizerEvent::Discontinuity(reason) => {
+                                        if discontinuity_logs < 8 {
+                                            eprintln!("NCM video discontinuity {reason:?} seq={} ts={} marker={}", packet.sequence_number, packet.timestamp, packet.marker);
+                                            discontinuity_logs += 1;
+                                        }
+                                        mailbox.count(4); mailbox.reset(); needs_sync = true;
+                                    },
                                     HevcDepacketizerEvent::PacketRejected(_) => { mailbox.count(2); },
                                 }
                             }
@@ -247,17 +287,22 @@ impl Media {
                         Err(_)=>break,
                     },
                     _=control_tick.tick()=> {
-                        if let Some(report) = reports.control_report(began.elapsed()) {
-                            if video_udp.send_to(VIDEO_PORT,report).await.is_err() { break; }
+                        if let Some(report) = reports.control_report() {
+                            if video_udp.send_to(feedback_port,report).await.is_err() { break; }
                         }
                     },
                     _=feedback.tick()=> {
                         let refresh = mailbox.take_refresh();
-                        let report = if needs_sync || refresh {
+                        // Receiver Reports must continue during recovery; a PLI
+                        // does not satisfy the sender's RTCP reception timeout.
+                        let mut report = reports.liveness_report();
+                        if needs_sync || refresh {
                             mailbox.count(6);
-                            reports.keyframe_request()
-                        } else { build_liveness(ssrc, &reports.cname, &[]) };
-                        if video_udp.send_to(VIDEO_PORT,report).await.is_err() { break; }
+                            let request = reports.keyframe_request();
+                            if geometry_probe { eprintln!("NCM refresh us={} port={feedback_port} sync={needs_sync} requested={refresh} bytes={request:02x?}",probe_began.elapsed().as_micros()); }
+                            report.extend_from_slice(&request);
+                        }
+                        if video_udp.send_to(feedback_port,report).await.is_err() { break; }
                     }
                 }
             }
@@ -372,10 +417,17 @@ struct VideoFeedback {
     our_ssrc: u32,
     media_ssrc: u32,
     cname: String,
-    fir_sequence: u8,
     base: Option<u16>,
     highest: u32,
-    frames: u16,
+    timestamp: u32,
+    packets: u32,
+    unique_packets: u32,
+    seen: std::collections::HashSet<u32>,
+    current_frame_packets: u32,
+    last_frame_packets: u32,
+    previous_expected: u32,
+    previous_received: u32,
+    sender_report: Option<(u32,tokio::time::Instant)>,
 }
 impl VideoFeedback {
     fn new(our_ssrc: u32, media_ssrc: u32, cname: String) -> Self {
@@ -383,10 +435,11 @@ impl VideoFeedback {
             our_ssrc,
             media_ssrc,
             cname,
-            fir_sequence: 0,
             base: None,
             highest: 0,
-            frames: 0,
+            unique_packets: 0, seen: std::collections::HashSet::new(),
+            timestamp: 0, packets: 0, current_frame_packets: 0, last_frame_packets: 0,
+            previous_expected: 0, previous_received: 0, sender_report: None,
         }
     }
     fn observe_sequence(&mut self, sequence: u16) {
@@ -400,30 +453,68 @@ impl VideoFeedback {
             self.highest = self.highest.wrapping_add(u32::from(delta));
         }
     }
-    fn acknowledge(&mut self, timestamp: u32) -> Vec<u8> {
-        self.frames = self.frames.wrapping_add(1);
-        build_frame_ack(self.our_ssrc, timestamp)
+    fn observe_packet(&mut self, packet: &RtpPacket<'_>) -> Option<Vec<u8>> {
+        // Receipt counts and the highest sequence serve different purposes.
+        // A reordered packet is still received, even if it cannot advance highest.
+        self.observe_sequence(packet.sequence_number);
+        let highest = u32::from(self.base.unwrap()).wrapping_add(self.highest);
+        let behind = (highest as u16).wrapping_sub(packet.sequence_number);
+        if behind < 0x8000 && self.seen.insert(highest.wrapping_sub(u32::from(behind))) {
+            self.unique_packets = self.unique_packets.wrapping_add(1);
+            if self.seen.len() > 0x9000 { self.seen.retain(|seq| highest.wrapping_sub(*seq) < 0x8000); }
+        }
+        if self.packets == 0 || packet.timestamp.wrapping_sub(self.timestamp) < 0x80000000 {
+            self.timestamp = packet.timestamp;
+        }
+        self.packets = self.packets.wrapping_add(1);
+        self.current_frame_packets = self.current_frame_packets.saturating_add(1);
+        if !packet.marker { return None; }
+        self.last_frame_packets = std::mem::take(&mut self.current_frame_packets);
+        // Receipt pacing must continue even if an AU was discarded after loss.
+        Some(build_frame_ack(self.our_ssrc, packet.timestamp))
     }
-    fn control_report(&self, elapsed: Duration) -> Option<Vec<u8>> {
+    fn control_report(&self) -> Option<Vec<u8>> {
         self.base?;
-        Some(build_rctl(
-            self.our_ssrc,
-            elapsed.as_millis() as u16,
-            self.frames,
-            self.highest as u16,
-        ))
+        Some(build_rctl(self.our_ssrc, self.timestamp, self.last_frame_packets, self.packets, RECEIVER_BANDWIDTH_KBPS))
+    }
+    fn liveness_report(&mut self) -> Vec<u8> {
+        let expected = self.base.map(|_| self.highest.saturating_add(1)).unwrap_or(0);
+        let interval_expected = expected.saturating_sub(self.previous_expected);
+        let interval_received = self.packets.saturating_sub(self.previous_received);
+        let loss = interval_expected.saturating_sub(interval_received);
+        let fraction = if interval_expected == 0 { 0 } else { ((u64::from(loss)*256/u64::from(interval_expected)).min(255)) as u8 };
+        self.previous_expected = expected; self.previous_received = self.packets;
+        let (lsr,dlsr) = self.sender_report.map(|(lsr,at)| (lsr,(at.elapsed().as_secs_f64()*65536.0).min(u32::MAX as f64) as u32)).unwrap_or((0,0));
+        build_liveness(self.our_ssrc, &self.cname, &[ReportBlock {
+            source_ssrc: self.media_ssrc, fraction_lost: fraction,
+            cumulative_lost: expected.saturating_sub(self.packets).min(0x7fffff),
+            highest_seq: self.base.map(|base| u32::from(base).wrapping_add(self.highest)).unwrap_or(0),
+            jitter: 0, lsr, dlsr,
+        }])
     }
     fn keyframe_request(&mut self) -> Vec<u8> {
-        let request = build_keyframe_request(
-            self.our_ssrc,
-            &self.cname,
-            self.media_ssrc,
-            &[],
-            self.fir_sequence,
-        );
-        self.fir_sequence = self.fir_sequence.wrapping_add(1);
-        request
+        // PLI and FIR reached the same iOS encoder hook; sending both together
+        // generated "Request key frame too soon, discard" for the duplicate.
+        build_pli(self.our_ssrc, self.media_ssrc)
     }
+
+}
+/// Authenticated stream configuration, never infer RTCP destination from the offer.
+fn feedback_endpoint(value: &plist::Value) -> Option<(u16,u32,u32)> {
+    fn number(d: &plist::Dictionary, key: &str) -> Option<u64> { d.get(key)?.as_unsigned_integer() }
+    fn visit(v: &plist::Value, depth: usize, found: &mut Vec<(u16,u32,u32)>) {
+        if depth > 5 { return; }
+        if let Some(d) = v.as_dictionary() {
+            if let (Some(port),Some(sender),Some(receiver)) = (number(d,"SourcePort"),number(d,"LocalSSRC"),number(d,"RemoteSSRC")) {
+                if let (Ok(port),Ok(sender),Ok(receiver)) = (u16::try_from(port),u32::try_from(sender),u32::try_from(receiver)) {
+                    if port != 0 && sender != 0 && receiver != 0 { found.push((port,sender,receiver)); }
+                }
+            }
+            for child in d.values() { visit(child,depth+1,found); }
+        }
+    }
+    let mut found=Vec::new(); visit(value,0,&mut found);
+    if found.len()==1 { Some(found[0]) } else { None }
 }
 fn extract_answer(value: &plist::Value) -> Result<&[u8], Error> {
     fn visit<'a>(
@@ -530,7 +621,7 @@ mod tests {
     }
     #[test]
     fn synthetic_rtp_reaches_complete_hevc_handoff_and_frame_ack() {
-        // Same synthetic green 64x96 sample decoded by Swift/VideoToolbox tests.
+        // Same synthetic green 64x96 sample decoded by the Swift/VideoToolbox tests.
         let mut bytes = vec![0x80, 0x80 | 100, 0, 1, 0, 0, 0, 2, 0, 0, 0, 7];
         bytes.extend_from_slice(&[
             96, 1, 0, 24, 64, 1, 12, 1, 255, 255, 1, 96, 0, 0, 3, 0, 144, 0, 0, 3, 0, 0, 3, 0, 30,
@@ -549,43 +640,87 @@ mod tests {
         mailbox.begin_stream();
         mailbox.received_from(49152); // Dynamic inbound source port must be admitted.
         let mut feedback = VideoFeedback::new(11, 7, "synthetic".into());
+        assert_eq!(feedback.observe_packet(&packet), Some(build_frame_ack(11, 2)));
         for event in assembler.push_packet(&packet) {
             if let HevcDepacketizerEvent::AccessUnit(unit) = event {
-                assert_eq!(
-                    feedback.acknowledge(unit.rtp_timestamp),
-                    build_frame_ack(11, 2)
-                );
                 assert!(mailbox.push(unit, assembler.parameter_sets().unwrap()));
             }
         }
+        assert!(assembler.is_complete());
+        mailbox.sender_report(feedback.unique_packets == 1 && assembler.is_complete());
+        assert_eq!(mailbox.snapshot().serial, 1);
+        // A missing FU fragment invalidates an otherwise complete picture.
+        let partial = RtpPacket { sequence_number: 3, timestamp: 3, marker: true, ..packet.clone() };
+        assembler.push_packet(&partial);
+        assert!(!assembler.is_complete());
+        mailbox.sender_report(assembler.is_complete());
+        assert_eq!(mailbox.snapshot().serial, 0);
         assert_eq!(mailbox.poll(0).0, 14);
         let (_, size, _) = mailbox.poll(0);
         let (_, _, data) = mailbox.poll(size);
         let data = data.expect("complete HEVC access unit reaches App handoff");
         assert_eq!(u32::from_le_bytes(data[40..44].try_into().unwrap()), 64);
         assert_eq!(u32::from_le_bytes(data[44..48].try_into().unwrap()), 96);
-        assert_eq!(feedback.frames, 1);
+        assert_eq!(feedback.packets, 1);
     }
     #[test]
     fn receiver_feedback_tracks_real_frames_wraparound_and_compound_refresh() {
         let mut f = VideoFeedback::new(11, 22, "public-fixture".into());
-        assert!(f.control_report(Duration::ZERO).is_none());
-        f.observe_sequence(65535);
-        f.observe_sequence(0);
-        f.observe_sequence(65535);
+        assert!(f.control_report().is_none());
+        let raw = |seq: u16, ts: u32, marker: bool| {
+            let mut b = vec![0x80, 100 | if marker { 0x80 } else { 0 }];
+            b.extend_from_slice(&seq.to_be_bytes()); b.extend_from_slice(&ts.to_be_bytes());
+            b.extend_from_slice(&22u32.to_be_bytes()); b.extend_from_slice(&[2,1,0x80]); b
+        };
+        let a = raw(65535, 1000, false); let b = raw(0, 1234, true);
+        assert!(f.observe_packet(&RtpPacket::parse_checked(&a).unwrap()).is_none());
+        assert_eq!(f.observe_packet(&RtpPacket::parse_checked(&b).unwrap()), Some(build_frame_ack(11,1234)));
+        assert!(f.observe_packet(&RtpPacket::parse_checked(&a).unwrap()).is_none());
         assert_eq!(f.highest, 1);
-        let ack = f.acknowledge(1234);
-        assert_eq!(ack, build_frame_ack(11, 1234));
-        assert_eq!(
-            f.control_report(Duration::from_millis(50)).unwrap(),
-            build_rctl(11, 50, 1, 1)
-        );
+        assert_eq!(f.control_report().unwrap(), build_rctl(11,1234,2,3, RECEIVER_BANDWIDTH_KBPS));
+        // Sequence loss must not stop sender receipt pacing while awaiting IDR.
+        let c = raw(50, 2000, true);
+        assert_eq!(f.observe_packet(&RtpPacket::parse_checked(&c).unwrap()), Some(build_frame_ack(11,2000)));
+        let rr = f.liveness_report();
+        assert_eq!(rr[0] & 31,1,"One receiver-report block must be sent even during IDR recovery");
+        assert_eq!(&rr[8..12],&22u32.to_be_bytes());
+        assert_eq!(&rr[16..20],&65586u32.to_be_bytes(),"Extended sequence includes the initial base and wrap");
+        assert!(rr[12] > 0,"Loss is reported to the sender rather than assumed zero");
         let request = f.keyframe_request();
-        assert_eq!(
-            request,
-            build_keyframe_request(11, "public-fixture", 22, &[], 0)
-        );
-        assert_ne!(f.keyframe_request(), request, "FIR sequence must advance");
+        assert_eq!(request, build_pli(11,22));
+        assert_eq!(f.unique_packets, 3, "Duplicates must not satisfy a sender progress barrier");
+    }
+    #[test]
+    fn reordered_marker_is_received_and_acknowledged_without_false_loss() {
+        let mut feedback = VideoFeedback::new(11,22,"reorder".into());
+        for (seq,marker) in [(10u16,false),(12,false),(11,true)] {
+            let mut bytes = vec![0x80,100 | if marker { 0x80 } else { 0 }];
+            bytes.extend_from_slice(&seq.to_be_bytes());
+            bytes.extend_from_slice(&1234u32.to_be_bytes());
+            bytes.extend_from_slice(&22u32.to_be_bytes());
+            bytes.extend_from_slice(&[2,1,0x80]);
+            let ack = feedback.observe_packet(&RtpPacket::parse_checked(&bytes).unwrap());
+            assert_eq!(ack, marker.then(|| build_frame_ack(11,1234)));
+        }
+        let report = feedback.liveness_report();
+        assert_eq!(&report[12..16], &[0,0,0,0], "Reordering must not report packet loss");
+        assert_eq!(&report[16..20], &12u32.to_be_bytes());
+        assert_eq!(feedback.control_report().unwrap(), build_rctl(11,1234,3,3, RECEIVER_BANDWIDTH_KBPS));
+    }
+    #[test]
+    fn feedback_uses_authenticated_dynamic_port_and_both_ssrc_roles() {
+        let mut cfg=plist::Dictionary::new();
+        cfg.insert("SourcePort".into(),plist::Value::Integer(53134u64.into()));
+        cfg.insert("LocalSSRC".into(),plist::Value::Integer(22u64.into()));
+        cfg.insert("RemoteSSRC".into(),plist::Value::Integer(11u64.into()));
+        let mut connection=plist::Dictionary::new();
+        connection.insert("streamConfig".into(),plist::Value::Dictionary(cfg.clone()));
+        let mut answer=plist::Dictionary::new(); answer.insert("connection".into(),plist::Value::Dictionary(connection));
+        assert_eq!(feedback_endpoint(&plist::Value::Dictionary(answer)),Some((53134,22,11)));
+        cfg.insert("SourcePort".into(),plist::Value::Integer(65536u64.into()));
+        assert_eq!(feedback_endpoint(&plist::Value::Dictionary(cfg.clone())),None);
+        cfg.insert("SourcePort".into(),plist::Value::Integer(0u64.into()));
+        assert_eq!(feedback_endpoint(&plist::Value::Dictionary(cfg)),None);
     }
     #[test]
     fn answer_must_be_unique_bounded_data() {

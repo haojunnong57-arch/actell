@@ -3,11 +3,22 @@
 The normal Agent registers screenshot, tap, drag, home, list_apps, launch_app,
 type_text and wait. The demo keeps its synthetic screenshot/tap/drag/wait/finish
 set. The retained legacy bridge reports unsupported capabilities through tools;
-normal conversation has no device-connection preflight requirement.
+normal conversation has no device-connection preflight requirement. App startup
+attempts to restore an existing paired connection without requiring the Settings
+page. Device tools share connection preparation and wait up to 20 seconds while
+verification/reconnection is pending; unpaired devices still need system pairing.
+Explicit cancellation interrupts the wait. A new connection generation clears
+old images/action grants, but fresh reads and newly authorized system actions can
+bind to it without restarting the Agent run. Failed dispatched input is never
+retried by connection preparation. Scene backgrounding does not close transport;
+returning to foreground schedules a liveness check when maintenance is idle.
 
-Home, launch and typing use the same current-image, approval digest, authenticated
-session generation and per-run operation ownership as tap/drag. The image is
-consumed before dispatch. An uncertain action is journaled as outcomeUnknown;
+Home, launch and typing use an independent single-use action authorization,
+approval digest, authenticated session generation and per-run operation ownership.
+They do not require a screenshot. Tap/drag additionally require current screenshot
+coordinates and consume a single-use approval before dispatch, retaining the coordinate
+reference for subsequent newly authorized actions. Successful actions and waits do
+not force another capture. An uncertain action is journaled as outcomeUnknown;
 reconnects, process recovery and fresh images never replay it. App queries are
 read-only and expose only name, bundle identifier and version. New DDIs use
 advertised streamapplist rather than the non-responsive older listapps endpoint.
@@ -25,8 +36,14 @@ Return, retry or partial prefix is sent. Paste may require iOS consent; pending
 consent must not cause text to be resent. Previously registered remote virtual
 keyboards are not blindly removed by guessed service ID; closing the old session
 and checking software-keyboard restoration still requires device verification.
-Every action needs subsequent visual
-verification.
+Observations are chosen according to the task, rather than required after every
+action. Tool receipts describe the operation without prescribing another capture. Tool failures, including uncertain input delivery, return to the
+Agent loop without pausing the run or disabling all later inputs. The failed
+call remains outcomeUnknown in the durable journal, its image is consumed, and
+no transport resend occurs. The Agent chooses its next step from available evidence; uncertain actions are
+never blindly repeated. Lost connection generations are tool errors;
+explicit run cancellation still stops execution. Process recovery never resumes
+an old dispatch.
 
 Screenshot service connection, response and PNG validation failures are scoped to
 that read-only request. Swift retains the authenticated native handle and App
@@ -139,3 +156,36 @@ The restored paste-only implementation has local tests/build validation
 only. That replacement was made while hardware testing was prohibited; later geometry
 testing does not validate text entry. The earlier Unicode/paste result does not
 validate the replacement.
+
+## Connection and independent-action regression validation
+
+App startup calls restoreConnection independently of Settings and without changing
+scene visibility. Returning foreground can wake an idle heartbeat, but must not
+cancel an in-flight native request (cancellation closes its transport). Tool
+connection waits share verification and honor manual service/run stop. Rebinding
+for reads clears coordinate images, task input grants and system action tokens.
+Application queries acknowledge metadata receipt, not visual observation.
+
+Validation: 301 default App core tests passed
+(.build/validation/core.E4Wgdp/test.log); the final 39 NCM bridge tests, including
+startup visibility and manual connection-wait stop, passed
+(.build/connection-final-ncm-tests.log). Signed iPhoneOS build succeeded
+(.build/connection-tools-build.log). Real-device installation and repeated
+foreground/background screenshot acceptance remain pending.
+
+
+## Consecutive operations and operation-only receipts
+
+Action/wait results no longer prescribe screenshot calls. The bundled iOS skill
+and system prompt allow known action sequences using the latest coordinate
+reference. NCM retains that reference after successful input, but consumes each
+single-use dispatch approval; a new action still needs its own authorization.
+An in-flight fence rejects concurrent input. Stop, reconnect and uncertain input
+retain their invalidation/no-replay behavior.
+
+Validation: 305 default App core tests passed
+(.build/validation/core.0qJEXE/test.log). After removing the remaining screenshot
+guidance from shared error text, 62 safety, NCM bridge and batch tests passed
+(.build/action-receipts-focused.log). Final unsigned iPhoneOS build succeeded
+(.build/action-receipts-build-final.log). No real-device installation or test was
+performed for this change.

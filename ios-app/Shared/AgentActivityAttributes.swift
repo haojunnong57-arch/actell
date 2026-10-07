@@ -13,6 +13,75 @@ struct AgentActivityAttributes: ActivityAttributes {
         var completedTools: Int
         var approvalID: UUID?
         var updatedAt: Date
+        // Optional preserves decoding of activities created before operation icons.
+        var operation: Operation? = nil
+        var symbol: String { phase.isTerminal ? phase.symbol : (operation?.symbol ?? phase.symbol) }
+        var title: String {
+            [.working, .executing].contains(phase) ? (operation?.title ?? phase.title) : phase.title
+        }
+        var compactTitle: String {
+            switch phase {
+            case .thinking: return "思考"
+            case .working, .executing: return operation?.compactTitle ?? "处理"
+            case .awaitingApproval: return "确认"
+            case .approved: return "批准"
+            case .completed: return "完成"
+            case .stopped: return "停止"
+            case .interrupted: return "中断"
+            case .blocked: return "查看"
+            }
+        }
+    }
+
+    enum Operation: String, Codable, Hashable {
+        case screenshot, apps, tap, drag, home, launch, text, skill, processing
+        static func tool(_ name: String) -> Self {
+            switch name {
+            case "screenshot": return .screenshot
+            case "list_apps": return .apps
+            case "tap": return .tap
+            case "drag": return .drag
+            case "home": return .home
+            case "launch_app": return .launch
+            case "type_text": return .text
+            case "load_skill": return .skill
+            default: return .processing
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .screenshot, .apps: return "inset.filled.rectangle.and.person"
+            case .tap, .drag, .home, .launch, .text: return "pointer.arrow.ipad"
+            case .skill: return "book.closed"
+            case .processing: return "gearshape"
+            }
+        }
+        var compactTitle: String {
+            switch self {
+            case .screenshot: return "查看"
+            case .apps: return "查询"
+            case .tap: return "点击"
+            case .drag: return "滑动"
+            case .home: return "主页"
+            case .launch: return "启动"
+            case .text: return "输入"
+            case .skill: return "技能"
+            case .processing: return "处理"
+            }
+        }
+        var title: String {
+            switch self {
+            case .screenshot: return "正在查看屏幕"
+            case .apps: return "正在查询 App"
+            case .tap: return "正在点击"
+            case .drag: return "正在滑动"
+            case .home: return "正在返回主屏幕"
+            case .launch: return "正在启动 App"
+            case .text: return "正在输入文本"
+            case .skill: return "正在读取技能"
+            case .processing: return "正在处理"
+            }
+        }
     }
 
     enum Phase: String, Codable, Hashable {
@@ -22,8 +91,8 @@ struct AgentActivityAttributes: ActivityAttributes {
         var isTerminal: Bool { [.completed, .stopped, .interrupted, .blocked].contains(self) }
         var title: String {
             switch self {
-            case .thinking: return "正在请求模型"
-            case .working: return "正在处理工具"
+            case .thinking: return "正在思考"
+            case .working: return "正在处理"
             case .awaitingApproval: return "等待确认"
             case .approved: return "已收到批准"
             case .executing: return "正在发送动作"
@@ -40,7 +109,8 @@ struct AgentActivityAttributes: ActivityAttributes {
             case .completed: return "checkmark.circle"
             case .stopped: return "stop.circle"
             case .interrupted, .blocked: return "exclamationmark.circle"
-            default: return "sparkles"
+            case .thinking: return "brain"
+            case .working, .executing: return "gearshape"
             }
         }
         var detail: String {

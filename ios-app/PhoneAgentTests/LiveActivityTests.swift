@@ -127,6 +127,24 @@ import Combine
         try await waitUntil { model.approval != nil }
         return model
     }
+    func testOperationIconsMatchConversationAndTerminalPhaseOverridesOldTool() throws {
+        for name in ["screenshot", "list_apps", "tap", "drag", "home", "launch_app", "type_text", "load_skill"] {
+            let tool = ToolStep(callID: "test", name: name, state: .running, detail: "")
+            var state = AgentActivityAttributes.ContentState(phase: .working, completedTools: 0, updatedAt: Date(), operation: .tool(name))
+            XCTAssertEqual(state.symbol, tool.symbol)
+            XCTAssertEqual(state.title, state.operation?.title)
+            XCTAssertEqual(state.compactTitle, state.operation?.compactTitle)
+            for phase in [AgentActivityAttributes.Phase.completed, .stopped, .interrupted, .blocked] {
+                state.phase = phase
+                XCTAssertEqual(state.symbol, phase.symbol)
+                XCTAssertEqual(state.title, phase.title)
+            }
+        }
+        let old = AgentActivityAttributes.ContentState(phase: .thinking, completedTools: 0, updatedAt: Date())
+        let data = try JSONEncoder().encode(old)
+        XCTAssertEqual(try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: data).symbol, "brain")
+        XCTAssertEqual(AgentActivityAttributes.Phase.working.symbol, "gearshape")
+    }
     func testStrictRouteRoundTripRejectsActionAndMalformedParameters() throws {
         let route = AgentActivityRoute(sessionID: UUID(), runID: UUID(), approvalID: UUID())
         XCTAssertEqual(AgentActivityRoute(url: route.url), route)
@@ -140,6 +158,7 @@ import Combine
         let model = try await pendingDemo(); defer { model.stop() }
         let waiting = try XCTUnwrap(model.activitySnapshot), request = try XCTUnwrap(model.approval)
         XCTAssertEqual(waiting.state.phase, .awaitingApproval)
+        XCTAssertEqual(waiting.state.symbol, "pointer.arrow.ipad")
         XCTAssertEqual(waiting.state.approvalID, request.id)
         XCTAssertEqual(waiting.attributes.runID, model.currentRun?.runID)
         let encoded = String(data: try JSONEncoder().encode(waiting.state), encoding: .utf8)!
@@ -151,6 +170,8 @@ import Combine
         XCTAssertNil(model.activitySnapshot?.state.approvalID)
         try await waitUntil { !model.running }
         XCTAssertEqual(model.activitySnapshot?.state.phase, .completed)
+        XCTAssertEqual(model.activitySnapshot?.state.symbol, "checkmark.circle")
+        XCTAssertNil(model.activitySnapshot?.state.operation)
         XCTAssertEqual(model.activitySnapshot?.state.completedTools, 4)
         XCTAssertTrue(phases.contains(.executing))
         XCTAssertLessThan(try XCTUnwrap(phases.firstIndex(of: .approved)), try XCTUnwrap(phases.firstIndex(of: .executing)))

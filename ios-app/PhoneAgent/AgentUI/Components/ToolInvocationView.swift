@@ -33,9 +33,8 @@ struct ToolInvocationView<Preview: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             switch configuration.tool.state {
             case .awaitingApproval: toolHeader
-            case .requested, .running, .approved, .executing: runningView
-            case .succeeded: completedView
-            case .failed, .denied, .cancelled: failedView
+            case .requested, .running, .approved, .executing: toolHeader
+            case .succeeded, .failed, .denied, .cancelled: resultView
             }
         }
         .padding(.vertical, 4)
@@ -67,63 +66,53 @@ struct ToolInvocationView<Preview: View>: View {
         }
     }
 
-    private var runningView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            toolHeader
-            parameterDisclosure
-        }
-    }
-
-    private var completedView: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ConversationDisclosureGroup {
+    private var resultView: some View {
+        ConversationDisclosureGroup {
+            ToolResultCard {
                 VStack(alignment: .leading, spacing: 6) {
-                    if let arguments = configuration.tool.arguments {
+                    if let arguments = configuration.tool.displayArguments {
                         Text("请求参数").font(.caption2).foregroundStyle(.tertiary)
                         Text(arguments).font(.caption.monospaced()).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     if !configuration.tool.result.isEmpty {
-                        Text("结果").font(.caption2).foregroundStyle(.tertiary)
+                        Text(configuration.tool.state == .succeeded ? "结果" : "结果说明")
+                            .font(.caption2).foregroundStyle(.tertiary)
                         Text(configuration.tool.result).font(.footnote).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
-            } label: {
-                toolHeader
-            }.tint(.secondary)
-            // Completion must be readable without opening the parameter fold.
-            if configuration.tool.name == "finish" {
-                Text(configuration.tool.result).font(.callout).textSelection(.enabled)
+                    preview()
+                }.frame(maxWidth: .infinity, alignment: .leading)
             }
-            preview()
-        }
-    }
-
-    private var failedView: some View {
-        ConversationDisclosureGroup {
-            VStack(alignment: .leading, spacing: 6) {
-                if let arguments = configuration.tool.arguments {
-                    Text("请求参数").font(.caption2).foregroundStyle(.tertiary)
-                    Text(arguments).font(.caption.monospaced()).textSelection(.enabled)
-                }
-                if !configuration.tool.result.isEmpty {
-                    Text("结果说明").font(.caption2).foregroundStyle(.tertiary)
-                    Text(configuration.tool.result).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
-                }
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
         } label: {
             toolHeader
         }.tint(.secondary)
     }
+}
 
-    @ViewBuilder private var parameterDisclosure: some View {
-        if let arguments = configuration.tool.arguments {
-            ConversationDisclosureGroup {
-                Text(arguments).font(.caption.monospaced()).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
-            } label: {
-                Text("请求参数 · \(configuration.tool.name)").accessibilityIdentifier("toolArgumentsLabel")
-            }.font(.caption).tint(.secondary)
+/// Short results size to their content; long results scroll inside the card.
+private struct ToolResultCard<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    @State private var contentHeight: CGFloat = 1
+    @State private var atEnd = false
+    var body: some View {
+        ScrollView(.vertical) {
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
+        .frame(height: min(contentHeight, 320))
+        .scrollBounceBehavior(.basedOnSize)
+        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(Color.secondary.opacity(0.22), lineWidth: 1) }
+        .onScrollGeometryChange(for: Bool.self) {
+            $0.contentOffset.y + $0.containerSize.height >= $0.contentSize.height + $0.contentInsets.bottom - 2
+        } action: { _, value in atEnd = value }
+        .accessibilityIdentifier("toolResultScroll")
+        .accessibilityValue(atEnd ? "已到末尾" : "可继续滚动")
+        .padding(.top, 4)
     }
 }
 
@@ -137,7 +126,7 @@ struct ToolApprovalCard<Preview: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                MessageHeaderIcon(systemName: "wrench.and.screwdriver")
+                MessageHeaderIcon(systemName: configuration.tool.symbol)
                 Text(configuration.tool.title).foregroundStyle(.secondary)
                 Spacer()
                 Text("需要授权").font(.caption).foregroundStyle(.secondary)
@@ -148,7 +137,7 @@ struct ToolApprovalCard<Preview: View>: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(configuration.tool.detail).font(.subheadline).textSelection(.enabled)
-                        if let arguments = configuration.tool.arguments {
+                        if let arguments = configuration.tool.displayArguments {
                             Text("请求参数").font(.caption).foregroundStyle(.secondary)
                             Text(arguments).font(.caption.monospaced()).textSelection(.enabled)
                         }

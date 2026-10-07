@@ -290,22 +290,13 @@ struct ConversationView: View {
     }
     @ViewBuilder private func toolPreview(_ item: ToolPresentation) -> some View {
         if !item.attachments.isEmpty, item.approval == nil {
-            ConversationDisclosureGroup {
-                ForEach(item.attachments) { attachment in
-                    AttachmentThumbnail(attachment: attachment, store: presentation.attachments, conversationID: presentation.sessionID)
-                }
-            } label: { Text("查看本地截图").accessibilityIdentifier("toolScreenshot-result") }
-                .font(.footnote).tint(.secondary)
+            ForEach(item.attachments) { attachment in
+                AttachmentThumbnail(attachment: attachment, store: presentation.attachments, conversationID: presentation.sessionID)
+            }
         } else if let image = item.image, let uiImage = UIImage(data: image.png) {
-            ConversationDisclosureGroup {
-                HStack { Spacer(); SaveScreenshotButton(data: image.png) }
-                Image(uiImage: uiImage).resizable().scaledToFit().frame(maxHeight: 280)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .accessibilityLabel(image.isDemo ? "演示合成屏幕，不是真机截图" : "当前步骤的设备截图")
-            } label: {
-                Text(image.isDemo ? "查看合成截图" : "查看本轮截图")
-                    .accessibilityIdentifier(item.approval == nil ? "toolScreenshot-result" : "toolScreenshot-approval")
-            }.font(.footnote).tint(.secondary)
+            Image(uiImage: uiImage).resizable().scaledToFit().frame(maxHeight: 280)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .accessibilityLabel(image.isDemo ? "演示合成屏幕，不是真机截图" : "当前步骤的设备截图")
         } else if item.tool.name == "screenshot", item.tool.state == .succeeded {
             Text("此历史截图未保存本地原图，无法从工具记录恢复。").font(.caption).foregroundStyle(.secondary)
         }

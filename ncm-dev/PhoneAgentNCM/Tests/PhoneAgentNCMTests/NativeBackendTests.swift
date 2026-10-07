@@ -37,7 +37,7 @@ final class NativeBackendTests: XCTestCase {
         let green = try XCTUnwrap(initial)
         try await Task.sleep(for: .milliseconds(1100))
         try await decoder.consume(second)
-        let updated = try await decoder.jpeg(notBefore: NCMVideoFreshness().minimumReceipt(at: .now))
+        let updated = try await decoder.jpeg(notBefore: .now.advanced(by: .seconds(-1)))
         let blue = try XCTUnwrap(updated)
         XCTAssertNotEqual(green, blue, "A P-frame must update the screenshot without input or another keyframe")
         let source = try XCTUnwrap(CGImageSourceCreateWithData(blue as CFData, nil))
@@ -159,24 +159,29 @@ final class NativeBackendTests: XCTestCase {
         XCTAssertEqual(rect, CGRect(x: 16, y: 24, width: 66, height: 98))
     }
     func testScreenshotTimeoutReasonDistinguishesTransportAssemblyAndFreshness() {
-        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 0, rtp: 0, frames: 0, overflows: 0), 8)
-        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 0, frames: 0, overflows: 0), 9)
-        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 4, frames: 0, overflows: 0), 10)
-        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 0), 11)
-        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 1), 12)
-        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 1, initialOverflows: 1), 11, "Historical overload must not label a later screenshot failure")
+        XCTAssertEqual(NCMVideoSnapshotFailure.timeoutCause(datagrams: 0, rtp: 0, frames: 0, overflows: 0), 8)
+        XCTAssertEqual(NCMVideoSnapshotFailure.timeoutCause(datagrams: 4, rtp: 0, frames: 0, overflows: 0), 9)
+        XCTAssertEqual(NCMVideoSnapshotFailure.timeoutCause(datagrams: 4, rtp: 4, frames: 0, overflows: 0), 10)
+        XCTAssertEqual(NCMVideoSnapshotFailure.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 0), 11)
+        XCTAssertEqual(NCMVideoSnapshotFailure.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 1), 12)
+        XCTAssertEqual(NCMVideoSnapshotFailure.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 1, initialOverflows: 1), 11, "Historical overload must not label a later screenshot failure")
     }
-    @MainActor func testVideoSnapshotFreshnessIsIndependentOfInputHistory() async throws {
+    @MainActor func testIdleSnapshotRequiresConfirmedSerialAndEpoch() async throws {
         let bytes = Data(base64Encoded: "AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAACQXwEAAQAAAEAAAABgAAAAGAAAACkAAAAHAAAAGgAAAEABDAH//wFgAAADAJAAAAMAAAMAHpWYCUIBAQFgAAADAJAAAAMAAAMAHqAggYWWVmkkyvAWgIAAAAMAgAAAAwCERAHBcrQiQAAAABYoAa8TgOUyUf/aKP+n1f6Aa0AIIx2H")!
         let decoder = NCMVideoDecoder()
         try await decoder.consume(bytes)
-        let freshness = NCMVideoFreshness()
-        let recent = try await decoder.jpeg(notBefore: freshness.minimumReceipt(at: .now))
-        XCTAssertNotNil(recent, "A recent complete frame need not arrive after the screenshot call")
-        let repeated = try await decoder.jpeg(notBefore: freshness.minimumReceipt(at: .now))
-        XCTAssertNotNil(repeated, "Video snapshots must not depend on any input event")
-        let stale = try await decoder.jpeg(notBefore: NCMVideoFreshness().minimumReceipt(at: .now.advanced(by: .seconds(2))))
-        XCTAssertNil(stale, "Old idle frames must not be returned as current screenshots")
+        let began = ContinuousClock.now.advanced(by: .seconds(2))
+        let unconfirmed = try await decoder.jpeg(notBefore: began)
+        XCTAssertNil(unconfirmed, "A stale image alone does not prove a live static screen")
+        let confirmed = try await decoder.jpeg(notBefore: began, confirmedEpoch: 1, confirmedSerial: 1)
+        XCTAssertNotNil(confirmed, "Sender-confirmed complete picture stays valid while static")
+        let behind = try await decoder.jpeg(notBefore: began, confirmedEpoch: 1, confirmedSerial: 2)
+        XCTAssertNil(behind, "Decoder must catch up to the peer confirmation")
+        let otherEpoch = try await decoder.jpeg(notBefore: began, confirmedEpoch: 2, confirmedSerial: 1)
+        XCTAssertNil(otherEpoch, "Confirmation cannot cross a reset")
+        await decoder.reset()
+        let reset = try await decoder.jpeg(notBefore: began, confirmedEpoch: 1, confirmedSerial: 1)
+        XCTAssertNil(reset, "Reset pixels cannot satisfy an earlier confirmation")
     }
     @MainActor func testHEVCConformanceCropProducesExactVisibleScreenshotDimensions() async throws {
         let decoder = NCMVideoDecoder()
@@ -249,6 +254,46 @@ final class NativeBackendTests: XCTestCase {
         catch { XCTAssertEqual(error as? NativeBackendError, .authorizationRequired) }
     }
     #if NCM_OFFLINE_FIXTURES
+    func testSkippedPredictiveFrameDoesNotReportDecodeSuccess() async throws {
+        var bytes = Data(base64Encoded: "AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAACQXwEAAQAAAEAAAABgAAAAGAAAACkAAAAHAAAAGgAAAEABDAH//wFgAAADAJAAAAMAAAMAHpWYCUIBAQFgAAADAJAAAAMAAAMAHqAggYWWVmkkyvAWgIAAAAMAgAAAAwCERAHBcrQiQAAAABYoAa8TgOUyUf/aKP+n1f6Aa0AIIx2H")!
+        let decoder = NCMVideoDecoder()
+        let decoded = try await decoder.consume(bytes)
+        XCTAssertTrue(decoded)
+        await decoder.reset()
+        bytes.replaceSubrange(0..<8, with: withUnsafeBytes(of: UInt64(2).littleEndian) { Data($0) })
+        bytes[36] = 0
+        let skipped = try await decoder.consume(bytes)
+        XCTAssertFalse(skipped, "Skipping a dependent frame must not clear a prior decoder failure")
+        let image = try await decoder.jpeg(notBefore: .now.advanced(by: .seconds(-1)))
+        XCTAssertNil(image)
+    }
+
+    @MainActor func testIdleVideoSnapshotsAcceptSenderConfirmedPictureButRejectSilentPeer() async throws {
+        let bytes = Data(base64Encoded: "AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAACQXwEAAQAAAEAAAABgAAAAGAAAACkAAAAHAAAAGgAAAEABDAH//wFgAAADAJAAAAMAAAMAHpWYCUIBAQFgAAADAJAAAAMAAAMAHqAggYWWVmkkyvAWgIAAAAMAgAAAAwCERAHBcrQiQAAAABYoAa8TgOUyUf/aKP+n1f6Aa0AIIx2H")!
+        let client = NativeDeveloperServices()
+        try await client.connectVideoBurstFixture(bytes, continuous: false)
+        defer { client.close() }
+        try await client.startTouchMedia()
+        let first = try await client.captureVideoJPEG()
+        XCTAssertTrue(first.starts(with: [0xff, 0xd8, 0xff]))
+        // The fixture sends no future pictures, only progress reports for
+        // three seconds, then goes silent without closing authentication.
+        try await Task.sleep(for: .milliseconds(100))
+        let repeated = try await client.captureVideoJPEG()
+        XCTAssertEqual(repeated, first)
+        XCTAssertTrue(client.videoSnapshotDiagnostics?.contains("received=true") == true)
+        try await Task.sleep(for: .milliseconds(1200))
+        let idle = try await client.captureVideoJPEG()
+        XCTAssertEqual(idle, first, "A picture older than one second remains valid with current sender confirmation")
+        try await Task.sleep(for: .milliseconds(2100))
+        do { _ = try await client.captureVideoJPEG(); XCTFail("A silent peer cannot validate cached pixels or trigger stream replacement") }
+        catch { guard case NativeBackendError.screenshotFailure(stage: 20, cause: _) = error else { return XCTFail("Unexpected error: \(error)") } }
+        XCTAssertTrue(client.videoSnapshotDiagnostics?.contains("timeout=true") == true)
+        // A failed read leaves the same authenticated tunnel usable.
+        try await client.checkDeveloperReadiness()
+        try await client.stopTouchMedia()
+    }
+
     @MainActor func testDemandScreenshotDecodesLatestNativeBurstAndCanReopenAfterRelease() async throws {
         let bytes=Data(base64Encoded: "AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAACQXwEAAQAAAEAAAABgAAAAGAAAACkAAAAHAAAAGgAAAEABDAH//wFgAAADAJAAAAMAAAMAHpWYCUIBAQFgAAADAJAAAAMAAAMAHqAggYWWVmkkyvAWgIAAAAMAgAAAAwCERAHBcrQiQAAAABYoAa8TgOUyUf/aKP+n1f6Aa0AIIx2H")!
         let client=NativeDeveloperServices()

@@ -208,7 +208,9 @@ private final class PiPPlaybackState: @unchecked Sendable {
     #if DEBUG
     private var controlProbeRunning = false
     func setControlProbeRunning(_ value: Bool) {
-        guard ProcessInfo.processInfo.arguments.contains("--ncm-tools-probe") else { return }
+        let args = ProcessInfo.processInfo.arguments
+        guard args.contains("--ncm-tools-probe") ||
+              (args.contains("--ncm-video-geometry-probe") && args.contains("--ncm-video-background-probe")) else { return }
         controlProbeRunning = value
         setTaskRunning(value)
     }

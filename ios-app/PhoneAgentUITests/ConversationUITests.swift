@@ -39,6 +39,29 @@ import XCTest
         }
         capture("disclosure-reading-position")
     }
+    func testLongToolResultScrollsInsideBoundedCardToItsEnd() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-disclosure-scroll"]
+        app.launch(); app.staticTexts["新会话"].firstMatch.tap()
+        let toggle = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "查询 App")).firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5)); toggle.tap()
+        let card = app.scrollViews["toolResultScroll"]
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(card.frame.height, 321)
+        app.scrollViews["conversationMessages"].swipeUp()
+        let headerY = toggle.frame.minY
+        let tail = app.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", "工具结果末尾标记")).firstMatch
+        for _ in 0..<15 {
+            let last = card.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+            last.press(forDuration: 0.05, thenDragTo: card.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)))
+        }
+        XCTAssertTrue(tail.exists)
+        XCTAssertEqual(card.value as? String, "已到末尾")
+        XCTAssertTrue(toggle.isHittable)
+        XCTAssertEqual(toggle.frame.minY, headerY, accuracy: 12)
+        capture("tool-result-internal-scroll")
+    }
     func testDeviceControlsAndSettingsDoNotStartAnything() {
         let app = launch()
         XCTAssertFalse(app.buttons["openProviders"].exists)

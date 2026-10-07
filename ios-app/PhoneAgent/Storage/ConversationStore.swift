@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-/// UI history contains public text, resource references, bounded tool receipts
+/// UI history contains public text, resource references, tool results
 /// and explicit readable provider reasoning; no image bytes, opaque reasoning,
 /// credentials or resumable tool queues.
 @MainActor final class ConversationStore: ObservableObject {
@@ -202,11 +202,11 @@ import Combine
                 conversations[index].messages[message].tool?.state = state
             }
             if !detail.isEmpty { conversations[index].messages[message].tool?.detail = String(detail.prefix(500)) }
-            if !result.isEmpty { conversations[index].messages[message].tool?.result = String(result.prefix(1_000)) }
+            if !result.isEmpty { conversations[index].messages[message].tool?.result = result }
             if let arguments { conversations[index].messages[message].tool?.arguments = String(arguments.prefix(4_000)) }
             if let skillName { conversations[index].messages[message].tool?.skillName = String(skillName.prefix(80)) }
         } else {
-            let tool = ToolStep(callID: callID, name: name, state: state, detail: String(detail.prefix(500)), result: String(result.prefix(1_000)), arguments: arguments.map { String($0.prefix(4_000)) }, skillName: skillName.map { String($0.prefix(80)) })
+            let tool = ToolStep(callID: callID, name: name, state: state, detail: String(detail.prefix(500)), result: result, arguments: arguments.map { String($0.prefix(4_000)) }, skillName: skillName.map { String($0.prefix(80)) })
             conversations[index].messages.append(ChatMessage(runID: identity.runID, role: .tool, text: "", tool: tool))
         }
         if state == .awaitingApproval { conversations[index].phase = .awaitingApproval }

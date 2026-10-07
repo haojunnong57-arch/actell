@@ -40,6 +40,10 @@ typedef struct {
 } ncm_video_status;
 /* SCREEN-gated snapshot; does not consume frame or command queues. */
 int32_t ncm_backend_video_get_status(uint64_t handle, ncm_video_status *status);
+/* A post-request sender report confirms the latest complete picture even when
+ * the screen is static. serial=0 means incomplete, unsynchronized or unconfirmed. */
+typedef struct { uint64_t report, epoch, serial; } ncm_video_snapshot;
+int32_t ncm_backend_video_get_snapshot(uint64_t handle, ncm_video_snapshot *snapshot);
 int32_t ncm_backend_video_refresh(uint64_t handle);
 int32_t ncm_backend_video_poll(uint64_t handle, ncm_event *event, uint8_t *buffer, size_t capacity);
 uint32_t ncm_backend_abi(void);
@@ -86,7 +90,7 @@ int32_t ncm_test_start_loopback(uint16_t relay_port,uint64_t *handle);
 /* Synthetic recoverable preparation / uncertain delivery ownership fixture. */
 int32_t ncm_test_start_media_failure(uint64_t *handle);
 /* Synthetic HEVC burst, no network; absent from device archives. */
-int32_t ncm_test_start_video_burst(ncm_bytes sample,uint64_t *handle);
+int32_t ncm_test_start_video_burst(ncm_bytes sample,uint32_t continuous,uint64_t *handle);
 #endif
 #ifdef __cplusplus
 }

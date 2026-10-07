@@ -10,12 +10,16 @@ protocol DeviceBridge: Sendable {
     func tap(x: Int, y: Int, imageID: String) async throws
     func drag(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMS: Int, imageID: String) async throws
     func installedApplications() async throws -> Data
+    func systemActionContext() async throws -> String
+    func authorizeSystemAction(authorizationID: String, taskScoped: Bool) async throws
     func systemAction(name: String, text: String, arguments: [String], imageID: String) async throws
     func cancelTransport()
     func stop() async
 }
 
 extension DeviceBridge {
+    func systemActionContext() async throws -> String { throw AppError.unavailable("当前通道不支持独立系统操作") }
+    func authorizeSystemAction(authorizationID: String, taskScoped: Bool) async throws { throw AppError.unavailable("当前通道不支持独立系统操作") }
     func installedApplications() async throws -> Data { throw AppError.unavailable("当前通道不支持查询 App") }
     func systemAction(name: String, text: String, arguments: [String], imageID: String) async throws { throw AppError.unavailable("当前通道不支持此操作") }
     var executionContext: ScreenUSBExecutionContext? { nil }

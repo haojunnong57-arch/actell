@@ -14,8 +14,10 @@ import XCTest
         app.terminate()
         app.launchArguments = ["--ui-testing", "--ui-test-images-restore", "--ui-test-dark"]
         app.launch(); app.staticTexts["Synthetic image history"].firstMatch.tap()
-        let preview = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "toolScreenshot-")).firstMatch
+        let preview = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "查看屏幕")).firstMatch
         XCTAssertTrue(preview.waitForExistence(timeout: 5)); preview.tap()
+        XCTAssertFalse(app.staticTexts["请求参数"].exists)
+        XCTAssertFalse(app.staticTexts["查看本地截图"].exists)
         let thumbnail = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "attachment-")).firstMatch
         XCTAssertTrue(thumbnail.waitForExistence(timeout: 5)); thumbnail.tap()
         XCTAssertTrue(app.images["本地原图"].waitForExistence(timeout: 5))

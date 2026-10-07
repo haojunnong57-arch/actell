@@ -29,6 +29,8 @@ struct Queue {
     revision: Option<u64>,
     reset: bool,
     visible: Option<(u32, u32)>,
+    report: u64,
+    confirmed_serial: u64,
 }
 #[derive(Default)]
 pub(crate) struct VideoMailbox(Mutex<Queue>, AtomicBool, [AtomicU64; 8]);
@@ -44,7 +46,28 @@ pub struct VideoStatus {
     pub refreshes: u64,
     pub source_port: u64,
 }
+/// Separate additive ABI: the existing statistics struct keeps its layout.
+#[repr(C)]
+#[derive(Default, Copy, Clone, Debug)]
+pub struct VideoSnapshot {
+    pub report: u64,
+    pub epoch: u64,
+    pub serial: u64,
+}
 impl VideoMailbox {
+    pub fn snapshot(&self) -> VideoSnapshot {
+        self.0.lock().map(|q| VideoSnapshot { report: q.report, epoch: q.epoch, serial: q.confirmed_serial }).unwrap_or_default()
+    }
+    pub fn packet_pending(&self) {
+        if let Ok(mut q) = self.0.lock() { q.confirmed_serial = 0; }
+    }
+    pub fn sender_report(&self, complete: bool) {
+        if let Ok(mut q) = self.0.lock() {
+            q.report += 1;
+            q.confirmed_serial = if complete && q.have_sync { q.serial } else { 0 };
+        }
+    }
+
     pub fn begin_stream(&self) {
         for value in &self.2 {
             value.store(0, Ordering::Relaxed);
@@ -92,6 +115,7 @@ impl VideoMailbox {
             q.revision = None;
             q.epoch += 1;
             q.reset = true;
+            q.confirmed_serial = 0;
         }
     }
     pub fn push(&self, unit: HevcAccessUnit, params: HevcParameterSets) -> bool {
@@ -108,6 +132,7 @@ impl VideoMailbox {
             q.have_sync = false;
             q.epoch += 1;
             q.reset = true;
+            q.confirmed_serial = 0;
         }
         q.revision = Some(params.revision);
         // P-frames are required to update the decoded picture after the first
@@ -141,6 +166,7 @@ impl VideoMailbox {
             q.have_sync = false;
             q.epoch += 1;
             q.reset = true;
+            q.confirmed_serial = 0;
             return false;
         }
         q.serial += 1;
@@ -239,6 +265,21 @@ mod tests {
                 picture_parameter_set: vec![3],
             },
         )
+    }
+    #[test]
+    fn snapshot_requires_sender_progress_and_valid_complete_epoch() {
+        let q = VideoMailbox::default(); q.begin_stream(); q.poll(0);
+        let (u,p) = sample(true); assert!(q.push(u,p));
+        assert_eq!(q.snapshot().serial, 0, "No sender confirmation yet");
+        q.sender_report(false); assert_eq!(q.snapshot().serial, 0, "Unreceived/partial packets cannot confirm a picture");
+        q.sender_report(true); let confirmed=q.snapshot();
+        assert_eq!(confirmed.serial, 1); assert_eq!(confirmed.report, 2);
+        q.sender_report(true);
+        assert_eq!(q.snapshot().serial, 1, "Idle screen keeps the same valid picture");
+        assert!(q.snapshot().report > confirmed.report, "Fresh peer progress without a new frame");
+        q.packet_pending(); assert_eq!(q.snapshot().serial, 0, "New unassembled data invalidates the old confirmation");
+        q.reset(); q.sender_report(true);
+        assert_eq!(q.snapshot().serial, 0); assert_ne!(q.snapshot().epoch, confirmed.epoch);
     }
     #[test]
     fn display_geometry_is_snapshotted_and_checked_against_each_picture() {

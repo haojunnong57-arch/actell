@@ -43,6 +43,7 @@ struct Approval: Identifiable, Sendable {
     let id = UUID()
     let tool: String
     let detail: String
+    // Coordinate actions bind a frame; system actions bind a one-use request reference.
     let imageID: String
     var callID: String? = nil
     var parametersDigest = ""
@@ -61,9 +62,9 @@ enum AppError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalid(let s), .unavailable(let s), .protocolViolation(let s): return s
-        case .stopped: return "已停止；继续时将获取新截图"
+        case .stopped: return "已停止"
         case .timeout: return "桥接超时，已断开；没有自动重发动作"
-        case .unknownOutcome: return "动作结果未知；请检查设备后重新获取截图，不要重发该动作"
+        case .unknownOutcome: return "动作结果未知；未自动重发。"
         }
     }
 }

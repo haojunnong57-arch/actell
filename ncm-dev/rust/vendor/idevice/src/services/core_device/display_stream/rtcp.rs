@@ -63,6 +63,7 @@ fn rtcp_packet_length(buf: &[u8], offset: usize) -> Option<usize> {
 pub struct SenderReport {
     pub ssrc: u32,
     pub ntp_middle: u32,
+    pub packet_count: u32,
 }
 
 impl SenderReport {
@@ -88,7 +89,7 @@ impl SenderReport {
                     buf[off + 15],
                 ]);
                 let ntp_middle = (ntp_msw << 16) | (ntp_lsw >> 16);
-                return Some(SenderReport { ssrc, ntp_middle });
+                return Some(SenderReport { ssrc, ntp_middle, packet_count: u32::from_be_bytes(buf[off+20..off+24].try_into().ok()?) });
             }
             off += pkt_len;
         }
@@ -207,34 +208,20 @@ pub fn build_frame_ack(our_ssrc: u32, rtp_timestamp: u32) -> Vec<u8> {
 /// it the encoder drifts out of sync with the receiver during heavy motion and
 /// the picture corrupts with no decode errors.
 ///
-/// 32-byte wire format, fields reverse-engineered from a capture:
-///   `80 cc 00 07` | our SSRC (4) | `RCTL` (4) | 20-byte body:
-///     [0..4]  = `85 00 00 04` (constant tag)
-///     [4..6]  = frame counter (received frames, big-endian)
-///     [6..8]  = 0
-///     [8..12] = 0  (per-interval metric; 0 = nominal)
-///     [12..14]= millisecond clock (for RTT; only the delta matters)
-///     [14..16]= 0
-///     [16..18]= highest RTP sequence number received, relative to the base seq
-///     [18..20]= 0
-/// The loss/jitter-ish fields are sent as 0, which is accurate for a lossless
-/// link (matching what Apple sent on its lossless session).
-pub fn build_rctl(our_ssrc: u32, clock_ms: u16, frames: u16, highest_seq: u16) -> Vec<u8> {
+/// 32-byte receiver feedback matching the independently captured Xcode layout.
+/// Timestamp is the received RTP media clock; packet counts are receipts, not
+/// decoded pictures or a sequence delta. The final u16 is receiver bandwidth in
+/// kbps: confirmed by the peer VCRC RemoteBWE log (60001 -> 2000).
+pub fn build_rctl(our_ssrc: u32, timestamp: u32, frame_packets: u32, received_packets: u32, receiver_bandwidth_kbps: u16) -> Vec<u8> {
     let mut out = Vec::with_capacity(32);
-    out.push(0x80); // V=2, P=0, subtype=0
-    out.push(PT_APP);
-    out.extend_from_slice(&[0, 0]); // length, patched below
+    out.extend_from_slice(&[0x80, PT_APP, 0, 7]);
     out.extend_from_slice(&our_ssrc.to_be_bytes());
     out.extend_from_slice(b"RCTL");
-    // 20-byte body.
-    out.extend_from_slice(&[0x85, 0x00, 0x00, 0x04]);
-    out.extend_from_slice(&frames.to_be_bytes());
-    out.extend_from_slice(&[0, 0, 0, 0, 0, 0]); // [6..12]
-    out.extend_from_slice(&clock_ms.to_be_bytes());
-    out.extend_from_slice(&[0, 0]); // [14..16]
-    out.extend_from_slice(&highest_seq.to_be_bytes());
-    out.extend_from_slice(&[0, 0]); // [18..20]
-    patch_length(&mut out, 0);
+    out.extend_from_slice(&0x85000004u32.to_be_bytes());
+    out.extend_from_slice(&(((timestamp >> 8) & 0xffff) << 16).to_be_bytes());
+    out.extend_from_slice(&frame_packets.to_be_bytes());
+    out.extend_from_slice(&(((timestamp / 24) & 0xffff) << 16).to_be_bytes());
+    out.extend_from_slice(&(((received_packets & 0xffff) << 16) | u32::from(receiver_bandwidth_kbps)).to_be_bytes());
     out
 }
 
@@ -363,15 +350,12 @@ mod tests {
 
     #[test]
     fn rctl_is_well_formed_and_carries_fields() {
-        let r = build_rctl(0x00db_16eb, 12438, 6, 21);
+        let r = build_rctl(0x00db_16eb, 0x12345678, 7, 0x2345, 60001);
         assert_well_formed(&r);
-        assert_eq!(r.len(), 32);
-        assert_eq!(r[1], PT_APP);
-        assert_eq!(&r[8..12], b"RCTL");
-        assert_eq!(&r[12..16], &[0x85, 0x00, 0x00, 0x04]);
-        assert_eq!(&r[16..18], &6u16.to_be_bytes()); // frame counter
-        assert_eq!(&r[24..26], &12438u16.to_be_bytes()); // clock at body[12..14]
-        assert_eq!(&r[28..30], &21u16.to_be_bytes()); // highest seq at body[16..18]
+        // Independent Python struct.pack wire fixture, not the Rust builder.
+        let expected = [0x80,0xcc,0,7,0,0xdb,0x16,0xeb,0x52,0x43,0x54,0x4c,
+            0x85,0,0,4,0x34,0x56,0,0,0,0,0,7,0x2e,0x45,0,0,0x23,0x45,0xea,0x61];
+        assert_eq!(r, expected);
     }
 
     #[test]

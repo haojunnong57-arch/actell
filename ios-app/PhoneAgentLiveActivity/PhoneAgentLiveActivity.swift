@@ -24,8 +24,8 @@ struct PhoneAgentLiveActivity: Widget {
                     Text("已返回 \(context.state.completedTools) 步").font(.caption).monospacedDigit()
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    Label(stale ? "请回到 App" : context.state.phase.title,
-                          systemImage: stale ? "exclamationmark.circle" : context.state.phase.symbol)
+                    Label(stale ? "查看" : context.state.compactTitle,
+                          systemImage: stale ? "exclamationmark.circle" : context.state.symbol)
                         .font(.headline).foregroundStyle(activityTint(context))
                 }
                 DynamicIslandExpandedRegion(.bottom) {
@@ -40,11 +40,14 @@ struct PhoneAgentLiveActivity: Widget {
                     }
                 }
             } compactLeading: {
-                Image(systemName: stale ? "exclamationmark.circle" : context.state.phase.symbol).foregroundStyle(activityTint(context))
+                Image(systemName: "sparkles").foregroundStyle(.cyan)
             } compactTrailing: {
-                Text(stale ? "查看" : compactTitle(context.state.phase)).font(.caption2).foregroundStyle(activityTint(context))
+                HStack(spacing: 3) {
+                    Image(systemName: stale ? "exclamationmark.circle" : context.state.symbol)
+                    Text(stale ? "查看" : context.state.compactTitle).lineLimit(1)
+                }.font(.caption2).foregroundStyle(activityTint(context))
             } minimal: {
-                Image(systemName: stale ? "exclamationmark.circle" : context.state.phase.symbol).foregroundStyle(activityTint(context))
+                Image(systemName: stale ? "exclamationmark.circle" : context.state.symbol).foregroundStyle(activityTint(context))
             }
             .widgetURL(route(context).url)
             .keylineTint(activityTint(context))
@@ -58,18 +61,6 @@ private func route(_ context: ActivityViewContext<AgentActivityAttributes>) -> A
 private func activityTint(_ context: ActivityViewContext<AgentActivityAttributes>) -> Color {
     context.isStale || context.state.phase == .awaitingApproval ? .orange : .cyan
 }
-private func compactTitle(_ phase: AgentActivityAttributes.Phase) -> String {
-    switch phase {
-    case .awaitingApproval: return "确认"
-    case .approved: return "批准"
-    case .thinking: return "请求"
-    case .working, .executing: return "处理"
-    case .completed: return "结束"
-    case .stopped: return "停止"
-    case .interrupted: return "中断"
-    case .blocked: return "查看"
-    }
-}
 private struct ActivityCard: View {
     let context: ActivityViewContext<AgentActivityAttributes>
     private var stale: Bool { context.isStale && !context.state.phase.isTerminal }
@@ -81,8 +72,8 @@ private struct ActivityCard: View {
                 Spacer()
                 Text("已返回 \(context.state.completedTools) 步").font(.caption).monospacedDigit()
             }
-            Label(stale ? "请回到 App" : context.state.phase.title,
-                  systemImage: stale ? "exclamationmark.circle" : context.state.phase.symbol)
+            Label(stale ? "请回到 App" : context.state.title,
+                  systemImage: stale ? "exclamationmark.circle" : context.state.symbol)
                 .font(.headline).foregroundStyle(activityTint(context))
             Text(stale ? "状态已过期；执行情况需在 App 核对" : context.state.phase.detail)
                 .font(.caption).foregroundStyle(.white.opacity(0.7))

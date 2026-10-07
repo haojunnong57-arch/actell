@@ -529,7 +529,8 @@ import LLMProviderKit
         XCTAssertEqual(scheduler.identifiers.count, 1)
         c.toolFailed(callID: "tap", generation: token)
         XCTAssertEqual(c.checkpoint?.tools[0].delivery, .outcomeUnknown)
-        XCTAssertEqual(c.checkpoint?.phase, .paused)
+        XCTAssertEqual(c.checkpoint?.phase, .running)
+        XCTAssertThrowsError(try c.dispatch(callID: "tap", generation: token, backgroundCapable: true))
     }
     func testNewSystemActionsPersistUnknownOutcomeAndNeverResumeTheirDispatch() throws {
         for name in ["home", "launch_app", "type_text"] {
@@ -540,10 +541,27 @@ import LLMProviderKit
             try lifecycle.dispatch(callID: name, generation: token, backgroundCapable: true)
             lifecycle.toolFailed(callID: name, generation: token)
             XCTAssertEqual(lifecycle.checkpoint?.tools[0].delivery, .outcomeUnknown)
-            XCTAssertEqual(lifecycle.checkpoint?.phase, .paused)
+            XCTAssertEqual(lifecycle.checkpoint?.phase, .running)
             let recovered = RunLifecycleCoordinator(scheduler: scheduler, storage: store)
             XCTAssertThrowsError(try recovered.dispatch(callID: name, generation: token, backgroundCapable: true))
         }
+    }
+    func testPreflightErrorAfterApprovalReturnsToRunningAndAllowsObservation() throws {
+        let scheduler = FakeScheduler(), store = MemoryRunCheckpointStore()
+        let c = RunLifecycleCoordinator(scheduler: scheduler, storage: store)
+        var paused = false
+        c.onPause = { _ in paused = true }
+        try c.begin(identity: identity, generation: token)
+        try c.prepare(tool(), generation: token, backgroundCapable: true)
+        try c.waitForApproval(callID: "tap", generation: token)
+        c.toolFailed(callID: "tap", generation: token)
+        XCTAssertEqual(c.checkpoint?.phase, .running)
+        XCTAssertNil(c.checkpoint?.pendingApproval)
+        XCTAssertEqual(c.checkpoint?.tools[0].delivery, .failed)
+        XCTAssertFalse(paused)
+        let observation = RunCheckpoint.Tool(callID: "new-screen", name: "screenshot", parameterSummary: "{}", argumentDigest: "screen")
+        try c.prepare(observation, generation: token, backgroundCapable: true)
+        try c.dispatch(callID: "new-screen", generation: token, backgroundCapable: true)
     }
     func testAcknowledgementIsNotVisualObservation() throws {
         let scheduler = FakeScheduler(), store = MemoryRunCheckpointStore()
@@ -635,7 +653,7 @@ private struct DisconnectedModel: LLMProvider {
         XCTAssertEqual(sent, 0); XCTAssertTrue(closed)
         XCTAssertEqual(c.checkpoint?.phase, .stopped)
     }
-    func testUnknownDispatchStopsRealAgentAndFreshRunDoesNotReplay() async throws {
+    func testUnknownDispatchReturnsToRealAgentAndCompletesWithoutReplay() async throws {
         let scheduler = FakeScheduler(), bridge = BackgroundSpyBridge(uncertain: true)
         let c = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
         let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
@@ -643,8 +661,9 @@ private struct DisconnectedModel: LLMProvider {
         model.start(); _ = scheduler.grant()
         try await waitUntil { model.approval != nil }; model.approve(true)
         try await waitUntil { !model.running && !model.stopping }
-        XCTAssertEqual(c.checkpoint?.phase, .paused)
-        XCTAssertEqual(c.checkpoint?.tools.last?.delivery, .outcomeUnknown)
+        XCTAssertEqual(c.checkpoint?.phase, .completed)
+        XCTAssertEqual(c.checkpoint?.tools.first(where: { $0.name == "tap" })?.delivery, .outcomeUnknown)
+        XCTAssertTrue(c.checkpoint?.tools.contains(where: { $0.name == "screenshot" && $0.delivery == .observedResult }) == true)
         XCTAssertEqual(scheduler.identifiers.count, 2)
         let sent = await bridge.sent, closed = await bridge.closed
         XCTAssertEqual(sent, 1); XCTAssertTrue(closed)
@@ -665,7 +684,7 @@ private struct DisconnectedModel: LLMProvider {
         let sent = await bridge.sent, closed = await bridge.closed
         XCTAssertEqual(sent, 0); XCTAssertTrue(closed)
     }
-    func testApprovalRevalidatesDeviceBeforeNewSegmentOrInput() async throws {
+    func testChangedDeviceInvalidatesApprovalButAgentCanObserveAndFinish() async throws {
         let scheduler = FakeScheduler(), bridge = BackgroundSpyBridge()
         let c = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
         let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
@@ -675,8 +694,9 @@ private struct DisconnectedModel: LLMProvider {
         await bridge.changeDevice(); model.approve(true)
         try await waitUntil { !model.running && !model.stopping }
         let sent = await bridge.sent
-        XCTAssertEqual(sent, 0); XCTAssertEqual(scheduler.identifiers.count, 1)
-        XCTAssertEqual(c.checkpoint?.phase, .paused)
+        XCTAssertEqual(sent, 0); XCTAssertEqual(scheduler.identifiers.count, 2)
+        XCTAssertEqual(c.checkpoint?.phase, .completed)
+        XCTAssertEqual(c.checkpoint?.tools.first(where: { $0.name == "tap" })?.delivery, .failed)
     }
     func testPiPObservesBackgroundTaskCompletionWithoutSwiftUIViewUpdates() async throws {
         let scheduler = FakeScheduler(), bridge = BackgroundSpyBridge()

@@ -146,7 +146,8 @@ import LLMProviderKit
         XCTAssertTrue(tools.allSatisfy { $0.state == .succeeded })
         XCTAssertEqual(tools.last?.skillName, "Synthetic Guide")
         XCTAssertEqual(tools.last?.symbol, "book.closed")
-        XCTAssertFalse(tools.contains { $0.result.contains("BODY_NOT_A_SUMMARY") || $0.result.contains("REFERENCE_BODY") })
+        XCTAssertTrue(tools.contains { $0.result.contains("BODY_NOT_A_SUMMARY") })
+        XCTAssertTrue(tools.contains { $0.result.contains("REFERENCE_BODY") })
     }
 }
 

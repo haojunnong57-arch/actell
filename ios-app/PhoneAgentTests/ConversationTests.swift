@@ -8,6 +8,14 @@ import XCTest
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return url
     }
+    func testEmptyToolArgumentsAreHiddenWithoutHidingZeroOrFalse() {
+        for value in [nil, "", " \n ", "{}", "{ \n }", "[]", "[ ]", "null", "\"\"", "\" \""] as [String?] {
+            XCTAssertNil(ToolStep.nonemptyArguments(value), "Should hide \(value ?? "nil")")
+        }
+        for value in ["0", "false", "[0]", "{\"x\":0}", "{\"text\":\"hello\"}", "plain text"] {
+            XCTAssertEqual(ToolStep.nonemptyArguments(value), value)
+        }
+    }
     func testPersistAndRestoreInterruptsUnfinishedToolsWithoutResuming() throws {
         let directory = try temporaryDirectory()
         let store = ConversationStore(directory: directory)

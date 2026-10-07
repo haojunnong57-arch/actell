@@ -66,6 +66,16 @@ final class MultiToolTests: XCTestCase {
         let tools = devices + [SkillTool(name: "load_skill", catalog: SkillCatalog(packages: [skill]), canRead: { true })]
         return Agent(config: AgentConfig(provider: BatchProvider(batches: batches, expectedErrors: errors), enableRepairRetry: false, tools: tools, loopDetection: nil, parallelToolCalls: false))
     }
+    func testKnownSequenceKeepsPerActionApprovalWithoutIntermediateCaptures() async throws {
+        let bridge = BatchBridge()
+        let calls = [call("s", "screenshot"), call("t1", "tap", tap),
+                     call("w", "wait", "{\"duration_ms\":1}"), call("t2", "tap", tap),
+                     call("d", "drag", "{\"from_x\":10,\"from_y\":20,\"to_x\":30,\"to_y\":40,\"duration_ms\":200,\"purpose\":\"known next step\"}")]
+        _ = try await runner([calls], bridge: bridge).run("synthetic")
+        let events = await bridge.events
+        XCTAssertEqual(events, ["screenshot", "approve", "tap", "approve", "tap", "approve", "drag"])
+    }
+
     func testOrderedMixedBatchRepeatsObservationsAndKeepsPerActionApproval() async throws {
         let bridge = BatchBridge()
         let calls = [call("s1", "screenshot"), call("t1", "tap", tap), skillCall(), call("s2", "screenshot"), call("t2", "tap", tap)]
@@ -78,13 +88,15 @@ final class MultiToolTests: XCTestCase {
         let events = await bridge.events
         XCTAssertEqual(events, ["screenshot", "approve", "tap", "screenshot", "approve", "tap", "screenshot"])
     }
-    func testUnknownMiddleInputReturnsEveryResultAndFencesLaterInput() async throws {
+    func testUnknownInputReachesModelThenFreshObservationAllowsDifferentAction() async throws {
         let bridge = BatchBridge(failInput: true)
-        let calls = [call("s1", "screenshot"), call("t1", "tap", tap), call("s2", "screenshot"), call("t2", "tap", tap), skillCall()]
-        let result = try await runner([calls], bridge: bridge, errors: ["t1", "t2"]).run("synthetic")
+        let batches = [[call("s1", "screenshot"), call("t1", "tap", tap)],
+                       [call("s2", "screenshot")],
+                       [call("d", "drag", "{\"from_x\":10,\"from_y\":20,\"to_x\":30,\"to_y\":40,\"duration_ms\":200,\"purpose\":\"observed next step\"}"), skillCall()]]
+        let result = try await runner(batches, bridge: bridge, errors: ["t1"]).run("synthetic")
         XCTAssertEqual(result, "batch finished")
         let events = await bridge.events
-        XCTAssertEqual(events, ["screenshot", "approve", "tap", "screenshot"])
+        XCTAssertEqual(events, ["screenshot", "approve", "tap", "screenshot", "approve", "drag"])
     }
     func testValidationErrorCanBeReportedThenFollowedByFreshObservation() async throws {
         let bridge = BatchBridge()

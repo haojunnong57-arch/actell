@@ -73,7 +73,7 @@ import Foundation
                     sessions.beginAssistantTurn(run)
                     sessions.completeAssistantTurn("", reasoning: String(repeating: "长思考内容用于验证展开时保留阅读位置。\n", count: 100), identity: run)
                     sessions.updateTool(callID: "disclosure-tool", name: "list_apps", state: .succeeded,
-                        result: String(repeating: "长工具结果用于验证展开时保留阅读位置。\n", count: 100), arguments: "{}", identity: run)
+                        result: String(repeating: "长工具结果用于验证展开时保留阅读位置。\n", count: 100) + "工具结果末尾标记", arguments: "{}", identity: run)
                     sessions.finish(run, phase: .completed, summary: "")
                 }
                 return AgentViewModel(sessions: sessions, loadPersistentState: false)
