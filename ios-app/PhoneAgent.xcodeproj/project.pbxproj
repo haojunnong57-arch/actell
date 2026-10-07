@@ -891,7 +891,7 @@
 				"PRODUCT_BUNDLE_IDENTIFIER" = "com.ja1chen.PhoneAgent";
 				"ONLY_ACTIVE_ARCH" = "NO";
 				"ENABLE_USER_SCRIPT_SANDBOXING" = "NO";
-				"INFOPLIST_KEY_CFBundleDisplayName" = "PhoneAgent";
+				"INFOPLIST_KEY_CFBundleDisplayName" = "执言";
 				"INFOPLIST_KEY_UILaunchScreen_Generation" = "YES";
 				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = ("$(inherited)", "$(SRCROOT)/../.build/ncm-rust/aarch64-apple-ios-sim/release",);
 				"SUPPORTS_MACCATALYST" = "NO";
@@ -1295,7 +1295,7 @@
 				"PRODUCT_BUNDLE_IDENTIFIER" = "com.ja1chen.PhoneAgent";
 				"ONLY_ACTIVE_ARCH" = "YES";
 				"ENABLE_USER_SCRIPT_SANDBOXING" = "NO";
-				"INFOPLIST_KEY_CFBundleDisplayName" = "PhoneAgent";
+				"INFOPLIST_KEY_CFBundleDisplayName" = "执言";
 				"INFOPLIST_KEY_UILaunchScreen_Generation" = "YES";
 				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "DEBUG $(inherited)";
 				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = ("$(inherited)", "$(SRCROOT)/../.build/ncm-rust/aarch64-apple-ios-sim/release",);
