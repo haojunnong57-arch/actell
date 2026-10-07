@@ -96,15 +96,15 @@ import SwiftAgentKit
             XCTAssertEqual(value.tools[0].delivery, .outcomeUnknown)
             XCTAssertNil(value.pendingApproval); XCTAssertNil(value.segmentID)
             XCTAssertThrowsError(try restored.resumeApproved(callID: value.tools[0].callID, digest: value.tools[0].argumentDigest, generation: value.generation))
-            sessions.addRecoveryNotice(value); sessions.addRecoveryNotice(value)
-            XCTAssertEqual(sessions.conversation(value.conversationID)?.messages.filter { $0.role == .notice }.count, 1)
+            sessions.reconcileRecovery(value); sessions.reconcileRecovery(value)
+            XCTAssertEqual(sessions.conversation(value.conversationID)?.messages.filter { $0.role == .notice }.count, 0)
         }
         try restored.begin(identity: .init(conversationID: a.conversationID, runID: UUID()), generation: UUID())
         restored.stop(message: "new task")
         let again = RunLifecycleCoordinator(scheduler: scheduler, storage: try RunCheckpointStore(directory: root), identifierPrefix: "test.backgroundRun")
         XCTAssertEqual(again.recoveries.flatMap(\.tools).filter { $0.delivery == .outcomeUnknown }.count, 2)
-        for value in again.recoveries { sessions.addRecoveryNotice(value) }
-        XCTAssertEqual(sessions.conversation(a.conversationID)?.messages.filter { $0.role == .notice }.count, 1)
+        for value in again.recoveries { sessions.reconcileRecovery(value) }
+        XCTAssertEqual(sessions.conversation(a.conversationID)?.messages.filter { $0.role == .notice }.count, 0)
         XCTAssertEqual(try Data(contentsOf: legacyURL), legacy)
     }
     func testSameRunDeduplicatesButRetainsBothTransactionsAndUnknownWins() throws {

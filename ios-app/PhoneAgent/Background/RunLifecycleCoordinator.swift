@@ -373,9 +373,9 @@ extension RunCheckpoint {
         if saved.tools.contains(where: { $0.delivery == .outcomeUnknown }) {
             saved.message = "上次有已发送动作结果未知；请先核对设备，旧动作不会重放"
         } else if saved.phase == .waitingApproval {
-            saved.message = "上次有待批准动作；原审批不能直接恢复，请重新获取截图"
+            saved.message = "上次执行已中断，原审批已失效。"
         } else if saved.phase == .paused {
-            saved.message = "上次执行已挂起；请核对设备并重新获取截图，旧动作不会重放"
+            saved.message = "上次执行已中断；已发送动作不会自动重发。"
         } else { saved.message = "" }
         return saved
     }

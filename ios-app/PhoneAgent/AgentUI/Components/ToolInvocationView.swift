@@ -34,7 +34,7 @@ struct ToolInvocationView<Preview: View>: View {
             switch configuration.tool.state {
             case .awaitingApproval: toolHeader
             case .requested, .running, .approved, .executing: toolHeader
-            case .succeeded, .failed, .denied, .cancelled: resultView
+            case .succeeded, .failed, .denied, .cancelled, .interrupted, .outcomeUnknown: resultView
             }
         }
         .padding(.vertical, 4)
@@ -75,10 +75,10 @@ struct ToolInvocationView<Preview: View>: View {
                         Text(arguments).font(.caption.monospaced()).textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    if !configuration.tool.result.isEmpty {
+                    if !configuration.tool.displayResult.isEmpty {
                         Text(configuration.tool.state == .succeeded ? "结果" : "结果说明")
                             .font(.caption2).foregroundStyle(.tertiary)
-                        Text(configuration.tool.result).font(.footnote).textSelection(.enabled)
+                        Text(configuration.tool.displayResult).font(.footnote).textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     preview()

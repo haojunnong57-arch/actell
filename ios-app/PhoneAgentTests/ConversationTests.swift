@@ -1,4 +1,7 @@
 import XCTest
+import Combine
+import SwiftAgentKit
+import LLMProviderKit
 @testable import PhoneAgent
 
 @MainActor final class ConversationTests: XCTestCase {
@@ -30,7 +33,75 @@ import XCTest
         XCTAssertEqual(session.phase, .interrupted)
         XCTAssertEqual(session.messages.first?.text, "任务 A")
         XCTAssertEqual(session.messages.first(where: { $0.role == .assistant })?.state, .interrupted)
-        XCTAssertEqual(session.messages.last?.tool?.state, .cancelled)
+        XCTAssertEqual(session.messages.last?.tool?.state, .interrupted)
+        XCTAssertFalse(session.messages.last?.tool?.displayResult.isEmpty ?? true)
+    }
+    func testBackgroundStreamingPersistsWithoutPublishingHiddenConversationChanges() throws {
+        let directory = try temporaryDirectory(), store = ConversationStore(directory: directory)
+        let id = store.create(mode: .live), run = try XCTUnwrap(store.begin(in: id, query: "后台执行"))
+        store.beginAssistantTurn(run)
+        var changes = 0
+        let observation = store.objectWillChange.sink { changes += 1 }
+        store.setPresentationActive(false)
+        for _ in 0..<1_000 { store.appendReasoning("进度", identity: run) }
+        store.updateTool(callID: "wait", name: "wait", state: .succeeded, result: "Wait completed.", identity: run)
+        XCTAssertEqual(changes, 0)
+        let restored = ConversationStore(directory: directory)
+        XCTAssertEqual(restored.conversation(id)?.messages.first(where: { $0.role == .assistant })?.reasoning?.text, String(repeating: "进度", count: 1_000))
+        XCTAssertEqual(restored.conversation(id)?.messages.last?.tool?.state, .succeeded)
+        store.setPresentationActive(true)
+        XCTAssertEqual(changes, 1, "Returning foreground publishes the accumulated history once")
+        withExtendedLifetime(observation) {}
+    }
+    func testRecoveryUsesDeliveryJournalInsteadOfCancellingAcknowledgedDrag() throws {
+        let directory = try temporaryDirectory(), store = ConversationStore(directory: directory)
+        let id = store.create(mode: .live), run = try XCTUnwrap(store.begin(in: id, query: "绘图"))
+        for call in ["delivered", "unknown", "prepared", "denied"] {
+            store.updateTool(callID: call, name: "drag", state: call == "denied" ? .denied : .executing, identity: run)
+        }
+        var checkpoint = RunCheckpoint(runID: run.runID, conversationID: id, generation: UUID())
+        checkpoint.tools = zip(["delivered", "unknown", "prepared", "denied"], [RunCheckpoint.Delivery.observedResult, .dispatching, .prepared, .acknowledged]).map {
+            .init(callID: $0.0, name: "drag", parameterSummary: "{\"from_x\":590,\"to_x\":665}", argumentDigest: $0.0, delivery: $0.1)
+        }
+        let restored = ConversationStore(directory: directory)
+        restored.reconcileRecovery(checkpoint.recovered())
+        restored.reconcileRecovery(checkpoint.recovered())
+        let tools = try XCTUnwrap(restored.conversation(id)).messages.compactMap(\.tool)
+        XCTAssertEqual(tools.map(\.state), [.succeeded, .outcomeUnknown, .cancelled, .denied])
+        XCTAssertEqual(tools[0].result, "Command delivery acknowledged.")
+        XCTAssertNotNil(tools[0].displayArguments)
+        XCTAssertTrue(tools[1].result.contains("结果未知"))
+        XCTAssertTrue(tools[2].result.contains("未发送"))
+        XCTAssertEqual(restored.conversation(id)?.messages.filter { $0.role == .notice }.count, 0)
+        XCTAssertNil(restored.activeRun, "Recovery never dispatches or resumes an old action")
+        XCTAssertEqual(ConversationStore(directory: directory).conversation(id)?.messages.compactMap(\.tool).map(\.state), tools.map(\.state))
+    }
+    func testRecoveryLeavesExistingNoticesAndHistoryOrderUnchanged() throws {
+        struct LegacyArchive: Encodable { let version = 1; let conversations: [AgentConversation] }
+        let directory = try temporaryDirectory()
+        var session = AgentConversation(mode: .live)
+        session.phase = .interrupted
+        let runID = UUID(), originalDate = session.updatedAt
+        let oldText = "上次执行已挂起；请核对设备并重新获取截图，旧动作不会重放"
+        let newText = "上次执行已中断；已发送动作不会自动重发。"
+        session.recoveryNotices = ["old": oldText, "new": newText]
+        let user = ChatMessage(runID: runID, role: .user, text: oldText)
+        let failure = ChatMessage(runID: runID, role: .notice, text: "截图请求与接收失败（超时）")
+        session.messages = [user, ChatMessage(role: .notice, text: oldText),
+            ChatMessage(runID: runID, role: .notice, text: newText), failure]
+        try JSONEncoder().encode(LegacyArchive(conversations: [session]))
+            .write(to: directory.appendingPathComponent("conversations-v1.json"))
+        let store = ConversationStore(directory: directory)
+        let checkpoint = RunCheckpoint(runID: runID, conversationID: session.id, generation: UUID(), phase: .paused).recovered()
+        store.reconcileRecovery(checkpoint)
+        store.reconcileRecovery(checkpoint)
+        let restored = try XCTUnwrap(store.conversation(session.id))
+        XCTAssertEqual(restored.messages, session.messages)
+        XCTAssertEqual(restored.phase, .interrupted)
+        XCTAssertEqual(restored.updatedAt, originalDate)
+        XCTAssertEqual(restored.recoveryNotices, session.recoveryNotices)
+        XCTAssertNil(store.activeRun)
+        XCTAssertEqual(ConversationStore(directory: directory).conversation(session.id)?.messages, restored.messages)
     }
     func testLateEventsCannotAffectAnotherConversationOrLaterRun() throws {
         let store = ConversationStore(inMemory: true)
@@ -97,6 +168,23 @@ import XCTest
 }
 
 @MainActor final class ConversationRuntimeTests: XCTestCase {
+    func testToolReceiptsAreSavedBeforeNextModelRequest() async throws {
+        let store = ConversationStore(inMemory: true)
+        let provider = ReceiptInspectionProvider {
+            let tools = store.conversations.flatMap(\.messages).compactMap(\.tool)
+            XCTAssertEqual(tools.map(\.callID), ["receipt-1", "receipt-2"])
+            XCTAssertEqual(tools.map(\.state), [.succeeded, .succeeded])
+            XCTAssertTrue(tools.allSatisfy { $0.result == "Wait completed." })
+        }
+        let model = AgentViewModel(sessions: store, loadPersistentState: false,
+            runServices: .init(provider: provider, bridge: UnavailableBridge()))
+        let id = model.createConversation(mode: .live)
+        XCTAssertTrue(model.send("顺序回执验证", in: id, cloudConsent: true))
+        try await waitUntil { !model.running }
+        XCTAssertEqual(store.conversation(id)?.phase, .completed)
+        XCTAssertEqual(model.activitySnapshot?.state.phase, .completed)
+        XCTAssertNil(model.activitySnapshot?.state.operation)
+    }
     private func waitUntil(_ condition: @escaping () -> Bool) async throws {
         for _ in 0..<150 {
             if condition() { return }
@@ -225,5 +313,34 @@ import XCTest
         XCTAssertFalse(model.send("测试", in: id))
         XCTAssertFalse(model.running)
         XCTAssertTrue(store.conversation(id)?.messages.isEmpty == true)
+    }
+}
+
+private struct ReceiptInspectionProvider: LLMProvider {
+    static let name = "receipt-inspection"
+    let configuration = DemoProvider().configuration
+    let inspect: @MainActor @Sendable () -> Void
+    func complete(_ request: LLMRequest) async throws -> LLMResponse {
+        if request.messages.contains(where: { $0.role == .tool }) {
+            await inspect()
+            return LLMResponse(text: "回执验证完成", finishReason: .stop, request: request, providerName: Self.name)
+        }
+        return LLMResponse(text: "", finishReason: .toolCalls, toolCalls: [
+            .init(id: "receipt-1", name: "wait", arguments: "{\"duration_ms\":1}"),
+            .init(id: "receipt-2", name: "wait", arguments: "{\"duration_ms\":1}")
+        ], request: request, providerName: Self.name)
+    }
+    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let response = try await complete(request)
+                    if !response.text.isEmpty { continuation.yield(.text(response.text)) }
+                    for call in response.toolCalls { continuation.yield(.toolCall(call)) }
+                    continuation.yield(.finish(reason: response.finishReason, usage: nil)); continuation.finish()
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import Darwin
 
 @main @MainActor struct PhoneAgentApp: App {
     @StateObject private var model = PhoneAgentRuntime.shared.model
@@ -23,16 +24,22 @@ import SwiftUI
                         .allowsHitTesting(false).accessibilityHidden(true)
                 }
                 .task {
-                    PairingFlow.shared.restoreConnection()
+                    let streamProbe = ProcessInfo.processInfo.arguments.contains("--task-pip-probe") && ProcessInfo.processInfo.arguments.contains("--background-stream-probe")
+                    if !streamProbe { PairingFlow.shared.restoreConnection() }
                     statusPiP.setBackgroundMode(BackgroundPlaybackMode(rawValue: backgroundMode) ?? .defaultMode)
                     statusPiP.observeTasks(in: model)
                     #if DEBUG
                     if ProcessInfo.processInfo.arguments.contains("--task-pip-probe") {
+                        if streamProbe { statusPiP.setBackgroundMode(.audio) }
                         model.start()
-                        for step in 0..<5 {
+                        let startCPU = processCPUSecondsForProbe(), startTime = Date()
+                        for step in 0..<(streamProbe ? 10 : 5) {
                             try? await Task.sleep(for: .seconds(10))
                             statusPiP.recordTaskProbe(step: step, running: model.hasBusySessions,
                                 liveActivities: model.liveActivities.activeCountForProbe)
+                            if streamProbe {
+                                BackgroundExecutionTrace.record("streamProbe.cpu wall=\(Date().timeIntervalSince(startTime)) cpu=\(processCPUSecondsForProbe()-startCPU) running=\(model.hasBusySessions)")
+                            }
                             if step == 0 { UIApplication.shared.perform(NSSelectorFromString("suspend")) }
                         }
                     } else { await PairingFlow.shared.runBackgroundProbeIfRequested() }
@@ -83,6 +90,12 @@ import SwiftUI
 }
 
 #if DEBUG
+private func processCPUSecondsForProbe() -> Double {
+    var usage = rusage()
+    guard getrusage(RUSAGE_SELF, &usage) == 0 else { return -1 }
+    return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
+}
+
 /// Explicit read-only screenshot probe. Raw media is saved only for this launch flag.
 private struct NCMVideoGeometryProbeView: View {
     let statusPiP: StatusPiPController

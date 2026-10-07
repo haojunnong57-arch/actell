@@ -34,10 +34,6 @@ struct ConversationView: View {
         Group {
             if let session {
                 VStack(spacing: 0) {
-                    if let navigation = presentation.activityNavigation {
-                        Text(navigation.notice).font(.caption).foregroundStyle(.secondary)
-                            .padding(.horizontal, 20).padding(.bottom, 8).accessibilityIdentifier("activityNavigationNotice")
-                    }
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 12) {
@@ -193,7 +189,7 @@ struct ConversationView: View {
                         .markdownImageProvider(NoRemoteMarkdownImages()).markdownInlineImageProvider(NoRemoteInlineImages())
                         .textSelection(.enabled)
                 } else if message.state == .streaming && message.reasoning == nil { Text("正在准备回复…").foregroundStyle(.secondary) }
-                if message.state == .interrupted { Text("回复已中断").font(.caption).foregroundStyle(.secondary) }
+                if message.state == .interrupted { Text(message.text.isEmpty && message.reasoning != nil ? "思考已中断" : "回复已中断").font(.caption).foregroundStyle(.secondary) }
                 if message.state == .failed { Text("回复未完成").font(.caption).foregroundStyle(.secondary) }
                 MessageAttachmentsView(message: message, presentation: presentation)
             }.frame(maxWidth: .infinity, alignment: .leading)

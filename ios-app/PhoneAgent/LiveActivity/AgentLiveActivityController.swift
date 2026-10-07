@@ -32,8 +32,9 @@ struct AgentActivitySnapshot: Equatable {
         tail = Task {
             for orphan in orphans {
                 var state = orphan.content.state
-                state.phase = .interrupted; state.approvalID = nil; state.updatedAt = Date()
+                state.phase = .interrupted; state.approvalID = nil; state.operation = nil; state.updatedAt = Date()
                 await orphan.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(300)))
+                BackgroundExecutionTrace.record("activity.recovered phase=interrupted")
             }
         }
     }

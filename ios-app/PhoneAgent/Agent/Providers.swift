@@ -290,6 +290,15 @@ struct TaskPiPProbeProvider: LLMProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
+                    if ProcessInfo.processInfo.arguments.contains("--background-stream-probe") {
+                        for _ in 0..<4_500 {
+                            try await Task.sleep(for: .milliseconds(20))
+                            continuation.yield(.reasoning("离线流式验证。"))
+                        }
+                        continuation.yield(.text("离线后台流式验证已结束"))
+                        continuation.yield(.finish(reason: .stop, usage: nil)); continuation.finish()
+                        return
+                    }
                     let response = try await complete(request)
                     continuation.yield(.text(response.text))
                     continuation.yield(.finish(reason: .stop, usage: nil)); continuation.finish()

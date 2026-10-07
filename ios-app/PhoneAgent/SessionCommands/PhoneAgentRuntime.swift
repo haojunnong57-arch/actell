@@ -25,11 +25,20 @@ import Foundation
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--task-pip-probe") {
             let sessions = ConversationStore(inMemory: true)
-            sessions.create(mode: .demo)
+            let id = sessions.create(mode: .demo)
+            let streamProbe = ProcessInfo.processInfo.arguments.contains("--background-stream-probe")
+            if streamProbe, let run = sessions.begin(in: id, query: "离线后台流式更新验证") {
+                for index in 0..<30 {
+                    sessions.beginAssistantTurn(run)
+                    sessions.completeAssistantTurn("", reasoning: String(repeating: "离线思考内容。", count: 100), identity: run)
+                    sessions.updateTool(callID: "seed-\(index)", name: "drag", state: .succeeded, result: "Synthetic receipt.", identity: run)
+                }
+                sessions.finish(run, phase: .completed, summary: "")
+            }
             let primary: any RunBackgroundScheduler = ProcessInfo.processInfo.arguments.contains("--activity-probe-no-system")
                 ? ActivityOnlyProbeScheduler() : ContinuedProcessingScheduler()
             let lifecycle = RunLifecycleCoordinator(
-                scheduler: PiPBackedRunScheduler(primary: primary),
+                scheduler: streamProbe ? MediaOnlyRunScheduler() : PiPBackedRunScheduler(primary: primary),
                 storage: MemoryRunCheckpointStore())
             return AgentViewModel(sessions: sessions, loadPersistentState: false,
                 runServices: .init(provider: TaskPiPProbeProvider(), bridge: DemoBridge()),

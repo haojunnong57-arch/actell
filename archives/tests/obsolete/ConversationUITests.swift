@@ -51,8 +51,8 @@ import XCTest
         let link = springboard.buttons["查看记录"]
         if link.exists { link.tap() }
         else { springboard.staticTexts["查看记录"].tap() }
-        XCTAssertTrue(app.staticTexts["activityNavigationNotice"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["正在查看此轮记录；不会自动重新执行"].exists)
+        XCTAssertTrue(app.scrollViews["conversationMessages"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["activityNavigationNotice"].exists)
         XCTAssertFalse(app.buttons["approveTool"].exists)
         XCTAssertFalse(app.buttons["stopRun"].exists)
         capture("live-activity-03-linked-history")

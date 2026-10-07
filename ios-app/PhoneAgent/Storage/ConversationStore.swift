@@ -5,7 +5,12 @@ import Combine
 /// and explicit readable provider reasoning; no image bytes, opaque reasoning,
 /// credentials or resumable tool queues.
 @MainActor final class ConversationStore: ObservableObject {
-    @Published private(set) var conversations: [AgentConversation] = []
+    // Execution and persistence continue in background, but a hidden chat must
+    // not rebuild its entire SwiftUI tree for every streamed reasoning fragment.
+    private(set) var conversations: [AgentConversation] = [] {
+        willSet { if presentationActive { objectWillChange.send() } }
+    }
+    private var presentationActive = true
     @Published private(set) var activeRuns: [UUID: RunIdentity] = [:]
     var activeRun: RunIdentity? { activeRuns.values.first }
     @Published private(set) var warning: String?
@@ -57,6 +62,11 @@ import Combine
     }
 
     func conversation(_ id: UUID) -> AgentConversation? { conversations.first { $0.id == id } }
+    func setPresentationActive(_ active: Bool) {
+        guard active != presentationActive else { return }
+        presentationActive = active
+        if active { objectWillChange.send() }
+    }
     var referencedAttachments: [StoredAttachment] {
         conversations.flatMap { ($0.draftAttachments ?? []) + $0.messages.flatMap { $0.attachments ?? [] } }
     }
@@ -213,12 +223,8 @@ import Combine
         else if [.approved, .executing, .succeeded, .failed].contains(state) { conversations[index].phase = .running }
         touch(index); saveNow()
     }
-    func addRecoveryNotice(_ checkpoint: RunCheckpoint) {
-        guard !checkpoint.message.isEmpty, let index = index(checkpoint.conversationID),
-              conversations[index].recoveryNotices?[checkpoint.recoveryKey] != checkpoint.message else { return }
-        if conversations[index].recoveryNotices == nil { conversations[index].recoveryNotices = [:] }
-        conversations[index].recoveryNotices?[checkpoint.recoveryKey] = checkpoint.message
-        addNotice(checkpoint.message, in: checkpoint.conversationID)
+    func reconcileRecovery(_ checkpoint: RunCheckpoint) {
+        reconcileTools(checkpoint)
     }
     func selectProvider(_ providerID: UUID?, model: String?, in id: UUID) {
         guard let index = index(id), activeRuns[id] == nil else { return }
@@ -234,7 +240,7 @@ import Combine
     func finish(_ identity: RunIdentity, phase: RunPhase, summary: String) {
         guard accepts(identity), let index = index(identity.conversationID) else { return }
         conversations[index].phase = phase
-        closePendingMessages(at: index, state: phase == .blocked ? .failed : .interrupted)
+        closePendingMessages(at: index, state: phase == .blocked ? .failed : .interrupted, cancelled: phase == .stopped)
         if !summary.isEmpty {
             conversations[index].messages.append(ChatMessage(runID: identity.runID, role: .notice, text: String(summary.prefix(1_000)), state: phase == .blocked ? .failed : .complete))
         }
@@ -260,14 +266,47 @@ import Combine
             }
         }
     }
-    private func closePendingMessages(at index: Int, state terminalState: MessageState = .interrupted) {
+    private func closePendingMessages(at index: Int, state terminalState: MessageState = .interrupted, cancelled: Bool = false) {
         for message in conversations[index].messages.indices {
             if conversations[index].messages[message].state == .streaming { conversations[index].messages[message].state = terminalState }
             if conversations[index].messages[message].reasoning?.state == .streaming { conversations[index].messages[message].reasoning?.state = terminalState }
             if let state = conversations[index].messages[message].tool?.state, !state.isTerminal {
-                conversations[index].messages[message].tool?.state = .cancelled
+                let uncertain = state == .executing
+                conversations[index].messages[message].tool?.state = uncertain ? .outcomeUnknown : (cancelled ? .cancelled : .interrupted)
+                conversations[index].messages[message].tool?.result = uncertain
+                    ? "执行已中断，未保存送达确认；结果未知，未自动重发。"
+                    : (cancelled ? "本次调用已取消。" : "执行已中断，未保存调用结果。")
             }
         }
+    }
+    private func reconcileTools(_ checkpoint: RunCheckpoint) {
+        guard let index = index(checkpoint.conversationID), activeRuns[checkpoint.conversationID] == nil else { return }
+        var changed = false
+        for message in conversations[index].messages.indices {
+            guard conversations[index].messages[message].runID == checkpoint.runID,
+                  let tool = conversations[index].messages[message].tool,
+                  let saved = checkpoint.tools.first(where: { $0.callID == tool.callID && $0.name == tool.name }),
+                  ![.succeeded, .failed, .denied].contains(tool.state) else { continue }
+            let input = ["tap", "drag", "home", "launch_app", "type_text"].contains(tool.name)
+            var recovered = tool
+            switch saved.delivery {
+            case .acknowledged, .observedResult:
+                recovered.state = input ? .succeeded : .interrupted
+                recovered.result = input ? "Command delivery acknowledged." : "调用已完成，但结果未能保存。"
+            case .dispatching, .outcomeUnknown:
+                recovered.state = input ? .outcomeUnknown : .interrupted
+                recovered.result = input ? "动作已发送，但未收到确认；结果未知，未自动重发。" : "调用已中断，未保存调用结果。"
+            case .prepared:
+                recovered.state = .cancelled; recovered.result = "执行已中断，本次调用未发送。"
+            case .failed:
+                recovered.state = .failed; recovered.result = "调用失败，详细结果未能保存。"
+            }
+            if recovered.arguments == nil { recovered.arguments = ToolStep.nonemptyArguments(saved.parameterSummary) }
+            if recovered != tool {
+                conversations[index].messages[message].tool = recovered; changed = true
+            }
+        }
+        if changed { saveNow() }
     }
     private func scheduleSave() {
         guard saveTask == nil else { return }

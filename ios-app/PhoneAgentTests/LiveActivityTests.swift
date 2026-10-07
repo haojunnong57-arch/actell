@@ -188,7 +188,8 @@ import Combine
         XCTAssertFalse(model.openActivityURL(AgentActivityRoute(sessionID: run.conversationID, runID: run.runID, approvalID: UUID()).url))
         model.stop(); try await waitUntil { !model.stopping }
         XCTAssertTrue(model.openActivityURL(route.url))
-        XCTAssertTrue(model.activityNavigation?.notice.contains("失效") == true)
+        XCTAssertEqual(model.activityNavigation?.route, route)
+        XCTAssertEqual(model.activityNavigation?.messageID, model.sessions.conversation(run.conversationID)?.messages.first { $0.tool?.callID == request.callID }?.id)
         XCTAssertNil(model.approval)
         XCTAssertTrue(model.send("new run", in: run.conversationID))
         try await waitUntil { model.approval != nil }

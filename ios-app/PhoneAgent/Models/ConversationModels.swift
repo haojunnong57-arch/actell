@@ -18,8 +18,8 @@ struct PresentedFrame: Sendable {
 enum ChatRole: String, Codable, Sendable { case user, assistant, tool, notice }
 enum MessageState: String, Codable, Sendable { case complete, streaming, interrupted, failed }
 enum ToolStepState: String, Codable, Sendable {
-    case requested, running, awaitingApproval, approved, executing, succeeded, failed, denied, cancelled
-    var isTerminal: Bool { [.succeeded, .failed, .denied, .cancelled].contains(self) }
+    case requested, running, awaitingApproval, approved, executing, succeeded, failed, denied, cancelled, interrupted, outcomeUnknown
+    var isTerminal: Bool { [.succeeded, .failed, .denied, .cancelled, .interrupted, .outcomeUnknown].contains(self) }
     var label: String {
         switch self {
         case .requested: return "已请求"
@@ -30,6 +30,8 @@ enum ToolStepState: String, Codable, Sendable {
         case .failed: return "失败"
         case .denied: return "已拒绝"
         case .cancelled: return "已取消"
+        case .interrupted: return "已中断"
+        case .outcomeUnknown: return "结果未知"
         }
     }
 }
@@ -44,6 +46,15 @@ struct ToolStep: Codable, Sendable, Equatable {
     var arguments: String?
     var skillName: String?
     var displayArguments: String? { Self.nonemptyArguments(arguments) }
+    var displayResult: String {
+        if !result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return result }
+        switch state {
+        case .cancelled: return "本次调用已取消，未保存调用结果。"
+        case .interrupted: return "执行已中断，未保存调用结果。"
+        case .outcomeUnknown: return "未保存送达确认；结果未知，未自动重发。"
+        default: return ""
+        }
+    }
     static func nonemptyArguments(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)

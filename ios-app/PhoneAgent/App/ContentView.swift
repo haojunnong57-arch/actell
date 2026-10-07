@@ -69,6 +69,14 @@ struct ContentView: View {
 
         }
         .onOpenURL { url in model.openActivityURL(url) }
+        #if DEBUG
+        .task {
+            if ProcessInfo.processInfo.arguments.contains("--task-pip-probe"),
+               ProcessInfo.processInfo.arguments.contains("--background-stream-probe"), let id = sessions.conversations.first?.id {
+                path = [id]
+            }
+        }
+        #endif
         .onChange(of: model.activityNavigation) { _, destination in
             guard let destination else { return }
             panel = nil

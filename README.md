@@ -10,6 +10,7 @@ NCM 默认截图继续复用视频帧并编码 JPEG，不调用独立 PNG 截图
 
 
 - [本次待办评估、实现与验证](docs/PROJECT-TODOS.md)
+- [后台 CPU 终止与工具回执恢复诊断](docs/BACKGROUND-RUN-RECOVERY.md)
 - [iOS 构建与测试](ios-app/README.md)
 - [NCM 开发者服务与主工程整合](docs/ncm-coredevice/MAIN-INTEGRATION.md) · [NCM 路线](docs/ncm-coredevice/README.md)
 - [PA3 协议](docs/usb-device/PROTOCOL.md) · [常连基线记录](docs/usb-device/PERSISTENT-USB.md)

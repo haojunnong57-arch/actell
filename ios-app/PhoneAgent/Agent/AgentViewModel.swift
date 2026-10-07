@@ -153,13 +153,13 @@ struct AgentRunServices {
         }
         providerSubscription = self.providers.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         lifecycleSubscription = self.lifecycle.$backgroundStatus.sink { [weak self] in self?.backgroundStatus = $0 }
-        for saved in self.lifecycle.recoveries { self.sessions.addRecoveryNotice(saved) }
+        for saved in self.lifecycle.recoveries { self.sessions.reconcileRecovery(saved) }
         if persistentRuntime && restoreLegacyState {
             let root = URL.applicationSupportDirectory.appending(path: "PhoneAgent/Sessions")
             for folder in (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [] {
                 guard UUID(uuidString: folder.lastPathComponent) != nil else { continue }
                 let recovery = RunLifecycleFactory.make(persistent: true, scheduler: RunExecutionScheduler(), directory: folder)
-                for saved in recovery.recoveries { self.sessions.addRecoveryNotice(saved) }
+                for saved in recovery.recoveries { self.sessions.reconcileRecovery(saved) }
             }
         }
         if sharedCapture == nil {
@@ -266,6 +266,14 @@ struct AgentRunServices {
     private var currentScene = ScreenUSBExecutionContext.Scene.active
     private var canContinueUSBSetup: Bool { usbConnectionStatus.allowsSetup(in: currentScene) }
     func setScene(_ scene: ScreenUSBExecutionContext.Scene) {
+        if runtimeOwner == nil { sessions.setPresentationActive(scene != .background) }
+        #if DEBUG
+        // Explicit negative control for the finite, synthetic CPU probe only.
+        let args = ProcessInfo.processInfo.arguments
+        if runtimeOwner == nil, args.contains("--task-pip-probe"), args.contains("--background-stream-probe"), args.contains("--background-presentation-baseline") {
+            sessions.setPresentationActive(true)
+        }
+        #endif
         for worker in sessionRuntimes.values { worker.setScene(scene) }
 
         if usbClient != nil || usbConnectionStatus.isConnecting {
@@ -590,7 +598,10 @@ struct AgentRunServices {
             do {
                 if let usb = selectedBridge as? USBDeviceBridge { try await usb.arm() }
                 var callbacks = AgentCallbacks()
-                callbacks.afterTool = { [weak runner] _, result, _ in
+                callbacks.afterTool = { [weak self, weak runner] call, result, _ in
+                    // Do not leave receipts behind the streamed-text observer
+                    // queue. Commit the result before the next model request.
+                    await self?.recordToolResult(call, result: result, generation: token)
                     if let runner, !result.images.isEmpty {
                         runner.conversation.rewriteMessages { original in
                             var message = original
@@ -803,11 +814,11 @@ struct AgentRunServices {
     private func record(_ text: String, generation token: UUID) { guard generation == token, running else { return }; status = text; log(text) }
     private func observe(_ event: AgentEvent, generation token: UUID) {
         guard generation == token, running, let identity = runIdentity, sessions.accepts(identity) else { return }
-        AgentEventProjection.record(event, run: identity, frame: latestFrame, in: sessions, skillNames: runSkillNames)
-        if case .toolExecutionFinished(let call, _) = event,
-           let asset = pendingScreenshotAssets.removeValue(forKey: StepIdentity(run: identity, stepID: call.id)) {
-            sessions.attach(asset, toTool: call.id, identity: identity)
+        if case .toolExecutionFinished(let call, let result) = event {
+            recordToolResult(call, result: result, generation: token)
+            return
         }
+        AgentEventProjection.record(event, run: identity, frame: latestFrame, in: sessions, skillNames: runSkillNames)
         switch event {
         case .llmCallStarted(let turn):
             if activeActionCallID == nil { publishActivity(.thinking) }
@@ -815,12 +826,12 @@ struct AgentRunServices {
         case .streamChunk(let text):
             if !text.isEmpty {
                 lifecycle.activity(generation: token)
-                if activeActionCallID == nil && activitySnapshot?.state.phase != .working { publishActivity(.working) }
+                publishStreamActivity(.working)
             }
         case .reasoningChunk(let text):
             if !text.isEmpty {
                 lifecycle.activity(generation: token)
-                if activeActionCallID == nil && activitySnapshot?.state.phase != .thinking { publishActivity(.thinking) }
+                publishStreamActivity(.thinking)
             }
         case .llmCallCompleted(let turn, let response):
             lifecycle.activity(generation: token, milestone: "model:\(turn)")
@@ -831,16 +842,30 @@ struct AgentRunServices {
         case .toolExecutionStarted(let call):
             // The FIFO event consumer can lag the approval/transport callbacks.
             // Do not let a late tool-start downgrade an authoritative state.
+            guard !completedToolIDs.contains(call.id) else { return }
             if activeActionCallID == nil { publishActivity(.working, tool: call.name) }
             status = approval == nil ? "处理 \(call.name)" : "等待确认一次动作"
-        case .toolExecutionFinished(let call, let result):
-            completedToolIDs.insert(call.id)
-            do { try approvalRecords.finish(callID: call.id, run: identity) }
-            catch { stop(message: "审批结果无法保存；请核对设备，本轮已中断", interrupted: true); return }
-            if activeActionCallID == call.id { activeActionCallID = nil }
-            if activeActionCallID == nil { publishActivity(.working, tool: call.name) }
-            if result.isError { log("\(call.name) 失败；错误结果已返回模型") }
         default: break // No raw model arguments or unrelated framework state.
+        }
+    }
+    private func recordToolResult(_ call: AgentToolCall, result: AgentToolResult, generation token: UUID) {
+        guard generation == token, running, let identity = runIdentity, sessions.accepts(identity),
+              completedToolIDs.insert(call.id).inserted else { return }
+        AgentEventProjection.record(.toolExecutionFinished(call: call, result: result), run: identity,
+                                    frame: latestFrame, in: sessions, skillNames: runSkillNames)
+        if let asset = pendingScreenshotAssets.removeValue(forKey: StepIdentity(run: identity, stepID: call.id)) {
+            sessions.attach(asset, toTool: call.id, identity: identity)
+        }
+        do { try approvalRecords.finish(callID: call.id, run: identity) }
+        catch { stop(message: "审批结果无法保存；请核对设备，本轮已中断", interrupted: true); return }
+        if activeActionCallID == call.id { activeActionCallID = nil }
+        if activeActionCallID == nil { publishActivity(.working) }
+        if result.isError { log("\(call.name) 失败；错误结果已返回模型") }
+    }
+    private func publishStreamActivity(_ phase: AgentActivityAttributes.Phase) {
+        guard activeActionCallID == nil else { return }
+        if activitySnapshot?.state.phase != phase || Date().timeIntervalSince(activitySnapshot?.state.updatedAt ?? .distantPast) >= 10 {
+            publishActivity(phase)
         }
     }
     private func end(_ phase: RunPhase, result: String, publishNotice: Bool = true) {
@@ -892,7 +917,6 @@ struct AgentRunServices {
             activityLinkError = "另一轮任务正在运行；旧实时活动不能切换或操作当前任务"; return false
         }
         var messageID = session.messages.first(where: { $0.runID == route.runID })?.id
-        var notice = "正在查看此轮记录；不会自动重新执行"
         if let actionID = route.approvalID {
             if runIdentity == identity, approval?.id != actionID {
                 activityLinkError = "这次确认已失效或已处理；旧链接不能定位当前动作"; return false
@@ -902,13 +926,9 @@ struct AgentRunServices {
                 activityLinkError = "找不到这次确认记录；链接不能授权动作"; return false
             }
             messageID = message.id
-            if runIdentity == identity, let request = approval, request.id == actionID,
-               approvalContinuation != nil, approvalRecords.isPending(request, run: identity) {
-                notice = "已定位本次确认；请查看详情后选择批准或拒绝"
-            } else { notice = "这次确认已失效或已处理；不会自动执行，请查看记录" }
         }
         activityHandoffRun = runIdentity == identity ? identity : nil
-        activityNavigation = ActivityNavigation(route: route, messageID: messageID, notice: notice)
+        activityNavigation = ActivityNavigation(route: route, messageID: messageID)
         return true
     }
     func enterControlDebug() { activityHandoffRun = nil }
