@@ -80,7 +80,15 @@ struct SkillPackage: Codable, Identifiable, Equatable, Sendable {
             }
         } catch { writable = false; warning = "技能未能读取；已保留原存档，暂不能修改" }
     }
-    var enabledSnapshot: [SkillPackage] { packages.filter(\.enabled) }
+    // Shipped references are immutable and never written into user archives.
+    static let builtinID = UUID(uuidString: "8098422E-79C6-49BF-9205-E58F166F42D5")!
+    var builtinPackages: [SkillPackage] {
+        guard let url = Bundle.main.url(forResource: "SKILL", withExtension: "md", subdirectory: "BuiltinSkills/ios-operation"),
+              let text = try? String(contentsOf: url, encoding: .utf8),
+              let checked = try? SkillPackage.make(documents: ["SKILL.md": text]) else { return [] }
+        return [SkillPackage(id: Self.builtinID, name: checked.name, summary: checked.summary, version: checked.version, revision: checked.revision, documents: checked.documents, enabled: true)]
+    }
+    var enabledSnapshot: [SkillPackage] { builtinPackages + packages.filter(\.enabled) }
     @discardableResult func add(documents: [String: String]) throws -> SkillPackage {
         try Task.checkCancellation()
         let candidate = try SkillPackage.make(documents: documents)
@@ -125,7 +133,10 @@ struct SkillPackage: Codable, Identifiable, Equatable, Sendable {
         guard let index = next.firstIndex(where: { $0.id == id }) else { throw AppError.invalid("技能不存在") }
         next[index].enabled = enabled; try save(next)
     }
-    func remove(_ id: UUID) throws { try save(packages.filter { $0.id != id }) }
+    func remove(_ id: UUID) throws {
+        guard id != Self.builtinID else { throw AppError.invalid("内置技能不能删除") }
+        try save(packages.filter { $0.id != id })
+    }
     private func save(_ next: [SkillPackage]) throws {
         guard writable else { throw AppError.unavailable(warning ?? "技能不可写") }
         try Task.checkCancellation()

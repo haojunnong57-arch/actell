@@ -12,6 +12,33 @@ import XCTest
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
     }
+    func testExpandingLongReasoningAndToolKeepsDisclosureInPlace() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-disclosure-scroll"]
+        app.launch()
+        app.staticTexts["新会话"].firstMatch.tap()
+        XCTAssertTrue(app.scrollViews["conversationMessages"].waitForExistence(timeout: 5))
+        for title in ["思考", "查询 App"] {
+            let toggle = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+            XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+            for _ in 0..<3 {
+                XCTAssertTrue(toggle.isHittable)
+                let before = toggle.frame.minY
+                toggle.tap()
+                // Wait through layout/animation; a bottom jump hides the header
+                // above the viewport when the expanded body spans many screens.
+                let jumped = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                    !toggle.isHittable || abs(toggle.frame.minY - before) >= 12
+                }, object: app)
+                jumped.isInverted = true
+                XCTAssertEqual(XCTWaiter.wait(for: [jumped], timeout: 1.5), .completed)
+                XCTAssertTrue(toggle.isHittable)
+                toggle.tap()
+            }
+        }
+        capture("disclosure-reading-position")
+    }
     func testDeviceControlsAndSettingsDoNotStartAnything() {
         let app = launch()
         XCTAssertFalse(app.buttons["openProviders"].exists)

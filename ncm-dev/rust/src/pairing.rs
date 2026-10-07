@@ -143,6 +143,8 @@ pub unsafe extern "C" fn ncm_pairing_start(consent: u32, handle: *mut u64) -> i3
             cancel,
             ready: AtomicBool::new(false),
             done: AtomicBool::new(false),
+            video: Arc::new(crate::video::VideoMailbox::default()),
+            screen_allowed: false,
         });
         let id = NEXT.fetch_add(1, Ordering::SeqCst);
         let Ok(mut entries) = registry().lock() else {
@@ -213,6 +215,7 @@ pub extern "C" fn ncm_pairing_ack(handle: u64, state: u32) -> i32 {
             end_x: 0,
             end_y: 0,
             duration: 0,
+            payload: Zeroizing::new(Vec::new()),
         }) {
             Ok(()) => {
                 submit.0 = u64::from(state);

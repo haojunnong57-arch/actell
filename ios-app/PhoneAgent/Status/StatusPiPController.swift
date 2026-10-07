@@ -6,6 +6,160 @@ import SwiftUI
 import UIKit
 import Combine
 
+enum BackgroundPlaybackMode: String, CaseIterable, Identifiable {
+    case audio, pictureInPicture
+    static let defaultsKey = "backgroundPlaybackMode"
+    static let defaultMode: Self = .audio
+    var id: String { rawValue }
+    var title: String { self == .pictureInPicture ? "画中画" : "音频" }
+}
+
+@MainActor protocol TaskAudioPlayback: AnyObject {
+    var onStopped: (() -> Void)? { get set }
+    func start() async throws -> Bool
+    func stop()
+}
+
+/// All process-wide audio session mutations share one serial worker. Native
+/// activation is asynchronous; waiting for its callback never blocks MainActor.
+/// Keeping deactivation in the same queue prevents an old stop overtaking a new start.
+final class TaskAudioSession: @unchecked Sendable {
+    static let shared = TaskAudioSession()
+    private typealias Operation = @Sendable (@escaping @Sendable () -> Void) -> Void
+    private let queue = DispatchQueue(label: "PhoneAgent.audio-session", qos: .userInitiated)
+    // Accessed exclusively on queue. Each native completion advances the queue.
+    private var operations: [Operation] = []
+    private var running = false
+    private func enqueue(_ operation: @escaping Operation) {
+        queue.async { self.operations.append(operation); self.advance() }
+    }
+    private func advance() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard !running, !operations.isEmpty else { return }
+        running = true
+        let operation = operations.removeFirst()
+        operation {
+            self.queue.async { self.running = false; self.advance() }
+        }
+    }
+    func activate(mode: AVAudioSession.Mode) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            enqueue { finished in
+                dispatchPrecondition(condition: .notOnQueue(.main))
+                do {
+                    let session = AVAudioSession.sharedInstance()
+                    try session.setCategory(.playback, mode: mode, options: [.mixWithOthers])
+                    session.activate(options: []) { activated, error in
+                        if let error { continuation.resume(throwing: error) }
+                        else if activated { continuation.resume() }
+                        else { continuation.resume(throwing: AppError.unavailable("Audio session activation declined")) }
+                        finished()
+                    }
+                } catch { continuation.resume(throwing: error); finished() }
+            }
+        }
+    }
+    func deactivate() {
+        enqueue { finished in
+            dispatchPrecondition(condition: .notOnQueue(.main))
+            AVAudioSession.sharedInstance().deactivate(options: [.notifyOthersOnDeactivation]) { _, _ in finished() }
+        }
+    }
+}
+
+/// Tokens are installed only during initialization, then released on any thread.
+private final class AudioNotificationTokens: @unchecked Sendable {
+    var tokens: [NSObjectProtocol] = []
+    deinit { for token in tokens { NotificationCenter.default.removeObserver(token) } }
+}
+
+/// A real, silent PCM loop; activating AVAudioSession alone is not playback.
+@MainActor final class SilentTaskAudioPlayback: NSObject, TaskAudioPlayback, AVAudioPlayerDelegate {
+    var onStopped: (() -> Void)?
+    private var player: AVAudioPlayer?
+    private var ownsSession = false
+    private var generation = UUID()
+    private let observations = AudioNotificationTokens()
+    private var monitor: Task<Void, Never>?
+    override init() {
+        super.init()
+        for name in [AVAudioSession.interruptionNotification, AVAudioSession.mediaServicesWereResetNotification, AVAudioSession.routeChangeNotification] {
+            observations.tokens.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                let interrupted = notification.name == AVAudioSession.interruptionNotification &&
+                    (notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? NSNumber)?.uintValue == AVAudioSession.InterruptionType.began.rawValue
+                let reset = notification.name == AVAudioSession.mediaServicesWereResetNotification
+                let lostRoute = notification.name == AVAudioSession.routeChangeNotification &&
+                    (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? NSNumber)?.uintValue == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue
+                if interrupted || reset || lostRoute { Task { @MainActor [weak self] in self?.failed() } }
+            })
+        }
+    }
+    deinit { monitor?.cancel() }
+    func start() async throws -> Bool {
+        if let player, player.isPlaying { return true }
+        stop()
+        let current = generation
+        ownsSession = true // Includes the pending activation, so stop queues its release.
+        do {
+            try await TaskAudioSession.shared.activate(mode: .default)
+            guard current == generation, !Task.isCancelled else { throw CancellationError() }
+            let next = try AVAudioPlayer(data: Self.silentPCM())
+            next.numberOfLoops = -1; next.delegate = self
+            guard next.prepareToPlay(), next.play(), next.isPlaying else { stop(); return false }
+            player = next
+            monitor = Task { [weak self] in
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                    guard let self else { return }
+                    guard self.player?.isPlaying == true else { self.failed(); return }
+                }
+            }
+            return true
+        } catch {
+            if current == generation { stop() }
+            throw error
+        }
+    }
+    func stop() {
+        generation = UUID()
+        monitor?.cancel(); monitor = nil
+        player?.stop(); player?.delegate = nil; player = nil
+        if ownsSession {
+            TaskAudioSession.shared.deactivate()
+            ownsSession = false
+        }
+    }
+    private func failed() {
+        guard player != nil || ownsSession else { return }
+        stop(); BackgroundExecutionTrace.record("audio.playbackEnded")
+        onStopped?()
+    }
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        let identity = ObjectIdentifier(player)
+        Task { @MainActor [weak self] in
+            guard let self, self.player.map(ObjectIdentifier.init) == identity else { return }
+            self.failed()
+        }
+    }
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        let identity = ObjectIdentifier(player)
+        Task { @MainActor [weak self] in
+            guard let self, self.player.map(ObjectIdentifier.init) == identity else { return }
+            self.failed()
+        }
+    }
+    static func silentPCM() -> Data {
+        // One second of mono PCM16 at 8 kHz. Zero samples generate actual silence.
+        var data = Data()
+        func ascii(_ value: String) { data.append(contentsOf: value.utf8) }
+        func u16(_ value: UInt16) { var value = value.littleEndian; withUnsafeBytes(of: &value) { data.append(contentsOf: $0) } }
+        func u32(_ value: UInt32) { var value = value.littleEndian; withUnsafeBytes(of: &value) { data.append(contentsOf: $0) } }
+        ascii("RIFF"); u32(16036); ascii("WAVEfmt "); u32(16); u16(1); u16(1)
+        u32(8000); u32(16000); u16(2); u16(16); ascii("data"); u32(16000)
+        data.append(Data(repeating: 0, count: 16000)); return data
+    }
+}
+
 /// A dismissal suppresses re-opening during the same background visit.
 struct TaskPiPPolicy {
     var running = false
@@ -30,6 +184,15 @@ private final class PiPPlaybackState: @unchecked Sendable {
 /// receipts contribute to run execution; an inline preview grants nothing.
 @MainActor final class StatusPiPController: NSObject, ObservableObject {
     @Published private(set) var active = false
+    @Published private(set) var audioActive = false
+    private var preferredMode: BackgroundPlaybackMode = .defaultMode
+    private(set) var playingMode: BackgroundPlaybackMode = .defaultMode
+    private let audioPlayback: any TaskAudioPlayback
+    private var audioAttempted = false
+    private var audioStartTask: Task<Void, Never>?
+    private var audioStartGeneration = UUID()
+    private var sessionPrepareTask: Task<Void, Never>?
+    private var sessionGeneration = UUID()
     @Published private(set) var message = "状态卡片默认关闭"
     @Published var previewEnabled = false
     let displayLayer = AVSampleBufferDisplayLayer()
@@ -42,6 +205,14 @@ private final class PiPPlaybackState: @unchecked Sendable {
     private var frameTask: Task<Void, Never>?
     private var requested = false
     private var modelObservation: AnyCancellable?
+    #if DEBUG
+    private var controlProbeRunning = false
+    func setControlProbeRunning(_ value: Bool) {
+        guard ProcessInfo.processInfo.arguments.contains("--ncm-tools-probe") else { return }
+        controlProbeRunning = value
+        setTaskRunning(value)
+    }
+    #endif
     private var starting = false
     private var ownsAudioSession = false
     private var snapshot = AgentStatusSnapshot(isDemo: true, phase: .idle)
@@ -49,9 +220,16 @@ private final class PiPPlaybackState: @unchecked Sendable {
     private let executionActivity: PiPExecutionActivity
 
     override convenience init() { self.init(executionActivity: .shared) }
-    init(executionActivity: PiPExecutionActivity, executionOwner: UUID = UUID()) {
+    init(executionActivity: PiPExecutionActivity, executionOwner: UUID = UUID(), audioPlayback: (any TaskAudioPlayback)? = nil) {
+        self.audioPlayback = audioPlayback ?? SilentTaskAudioPlayback()
         self.executionActivity = executionActivity; self.executionOwner = executionOwner
         super.init()
+        self.audioPlayback.onStopped = { [weak self] in
+            guard let self, self.audioActive else { return }
+            self.audioActive = false
+            self.executionActivity.update(owner: self.executionOwner, active: false)
+            self.message = "音频播放已中断"
+        }
         displayLayer.videoGravity = .resizeAspect
         var timebase: CMTimebase?
         if CMTimebaseCreateWithSourceClock(allocator: kCFAllocatorDefault,
@@ -88,34 +266,72 @@ private final class PiPPlaybackState: @unchecked Sendable {
         if previewEnabled { render() }
     }
 
+    func setBackgroundMode(_ mode: BackgroundPlaybackMode) {
+        preferredMode = mode
+        if !policy.running { playingMode = mode }
+    }
+
     func setForeground(_ value: Bool) {
         recordLifecycle("pip.foreground value=\(value)")
         foreground = value
         policy.setForeground(value)
-        if value { stop() }
+        if value && playingMode == .pictureInPicture { stop() }
         reconcileTask()
     }
 
     func setTaskRunning(_ value: Bool) {
+        var actual = value
         #if DEBUG
+        actual = actual || controlProbeRunning
         // Finite offline fixture only: isolate island presentation from AVKit.
         if ProcessInfo.processInfo.arguments.contains("--task-pip-probe"),
            ProcessInfo.processInfo.arguments.contains("--activity-probe-no-pip") { return }
         #endif
-        guard value != policy.running else { return }
-        recordLifecycle("pip.task value=\(value)")
-        policy.setRunning(value)
+        guard actual != policy.running else { return }
+        recordLifecycle("pip.task value=\(actual)")
+        if actual { playingMode = preferredMode; audioAttempted = false }
+        policy.setRunning(actual)
         reconcileTask()
     }
 
     private func reconcileTask() {
         guard policy.running else {
+            cancelAudioStart()
+            audioPlayback.stop(); audioActive = false
             controller?.canStartPictureInPictureAutomaticallyFromInline = false
             frameTask?.cancel(); frameTask = nil
             // Keep playback valid through AVKit's stop transition.
             if controller?.isPictureInPictureActive != true { playback.playing = false }
             stop(); previewEnabled = false
             if controller?.isPictureInPictureActive != true { displayLayer.flushAndRemoveImage() }
+            return
+        }
+        if playingMode == .audio {
+            controller?.canStartPictureInPictureAutomaticallyFromInline = false
+            previewEnabled = false
+            frameTask?.cancel(); frameTask = nil
+            displayLayer.flushAndRemoveImage()
+            guard backgroundModeConfigured else { message = "此构建未配置后台音频"; return }
+            // Start while the task is foregrounded so background handoff has no gap.
+            // Scene changes never restart an interrupted player within the same run.
+            guard !audioAttempted else { return }
+            audioAttempted = true
+            let generation = UUID(); audioStartGeneration = generation
+            audioStartTask = Task { [weak self] in
+                guard let self, !Task.isCancelled, self.audioStartGeneration == generation else { return }
+                do {
+                    let playing = try await self.audioPlayback.start()
+                    guard !Task.isCancelled, self.audioStartGeneration == generation,
+                          self.policy.running, self.playingMode == .audio else { return }
+                    self.audioActive = playing
+                    self.executionActivity.update(owner: self.executionOwner, active: playing)
+                    self.message = playing ? "后台音频已准备" : "音频播放未能启动"
+                    BackgroundExecutionTrace.record("audio.started playing=\(playing)")
+                } catch {
+                    if self.audioStartGeneration == generation { self.message = "音频播放未能启动" }
+                }
+                if self.audioStartGeneration == generation { self.audioStartTask = nil }
+            }
             return
         }
         guard supported, backgroundModeConfigured else { return }
@@ -125,31 +341,50 @@ private final class PiPPlaybackState: @unchecked Sendable {
         }
         previewEnabled = true
         if foreground || policy.shouldStart {
-            do {
-                try prepareAudioSession()
-                playback.playing = true
-                controller?.canStartPictureInPictureAutomaticallyFromInline = !policy.dismissed
-                render()
-                if frameTask == nil {
-                    frameTask = Task { [weak self] in
-                        while !Task.isCancelled {
-                            do { try await Task.sleep(for: .seconds(1)) } catch { return }
-                            guard let self else { return }
-                            if self.playback.playing { self.render() }
-                            if self.policy.shouldStart && !self.active && !self.starting { self.start() }
-                        }
+            if !ownsAudioSession || sessionPrepareTask != nil {
+                prepareAudioSession()
+                return
+            }
+            playback.playing = true
+            controller?.canStartPictureInPictureAutomaticallyFromInline = !policy.dismissed
+            render()
+            if frameTask == nil {
+                frameTask = Task { [weak self] in
+                    while !Task.isCancelled {
+                        do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                        guard let self else { return }
+                        if self.playback.playing { self.render() }
+                        if self.policy.shouldStart && !self.active && !self.starting { self.start() }
                     }
                 }
-                if policy.shouldStart { start() }
-            } catch { message = "媒体会话不可用；没有启动画中画" }
+            }
+            if policy.shouldStart { start() }
         }
     }
 
-    private func prepareAudioSession() throws {
-        guard !ownsAudioSession else { return }
-        try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
-        try AVAudioSession.sharedInstance().setActive(true)
-        ownsAudioSession = true
+    private func prepareAudioSession() {
+        guard !ownsAudioSession, sessionPrepareTask == nil else { return }
+        ownsAudioSession = true // stop must release even an activation still in flight.
+        let generation = UUID(); sessionGeneration = generation
+        sessionPrepareTask = Task { [weak self] in
+            guard let self, !Task.isCancelled, self.sessionGeneration == generation else { return }
+            do {
+                try await TaskAudioSession.shared.activate(mode: .moviePlayback)
+                guard !Task.isCancelled, self.sessionGeneration == generation else { return }
+                self.sessionPrepareTask = nil
+                self.reconcileTask()
+            } catch {
+                guard self.sessionGeneration == generation else { return }
+                self.sessionPrepareTask = nil
+                self.releaseAudioSession()
+                self.message = "媒体会话不可用；没有启动画中画"
+            }
+        }
+    }
+
+    private func cancelAudioStart() {
+        audioStartGeneration = UUID()
+        audioStartTask?.cancel(); audioStartTask = nil
     }
 
     func setPreviewEnabled(_ value: Bool) {
@@ -165,32 +400,31 @@ private final class PiPPlaybackState: @unchecked Sendable {
     }
 
     func start() {
-        guard previewEnabled, !starting, !active, policy.shouldStart else { return }
+        guard playingMode == .pictureInPicture, previewEnabled, !starting, !active, policy.shouldStart else { return }
         guard backgroundModeConfigured else {
             message = "此构建未启用后台媒体模式，不能承诺跨 App 显示"
             return
         }
         guard let controller, supported else { message = "当前环境不支持画中画"; return }
-        do {
-            try prepareAudioSession()
-            playback.playing = true
-            render()
-            guard controller.isPictureInPicturePossible else {
-                releaseAudioSession()
-                message = "系统尚不允许画中画；请保持预览可见后重试"
-                return
-            }
-            starting = true; requested = true
-            message = "正在请求系统画中画"
-            controller.startPictureInPicture()
-        } catch {
-            releaseAudioSession()
-            message = "媒体会话不可用；没有启动画中画"
+        guard ownsAudioSession, sessionPrepareTask == nil else {
+            prepareAudioSession()
+            return
         }
+        playback.playing = true
+        render()
+        guard controller.isPictureInPicturePossible else {
+            releaseAudioSession()
+            message = "系统尚不允许画中画；请保持预览可见后重试"
+            return
+        }
+        starting = true; requested = true
+        message = "正在请求系统画中画"
+        controller.startPictureInPicture()
     }
 
     func stop() {
         recordLifecycle("pip.stopRequested")
+        if playingMode == .audio { cancelAudioStart(); audioPlayback.stop(); audioActive = false }
         requested = false
         executionActivity.update(owner: executionOwner, active: false)
         if active || starting || controller?.isPictureInPictureActive == true {
@@ -202,8 +436,10 @@ private final class PiPPlaybackState: @unchecked Sendable {
     }
 
     private func releaseAudioSession() {
+        sessionGeneration = UUID()
+        sessionPrepareTask?.cancel(); sessionPrepareTask = nil
         guard ownsAudioSession else { return }
-        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        if !audioActive { TaskAudioSession.shared.deactivate() }
         ownsAudioSession = false
     }
 
@@ -243,7 +479,7 @@ extension StatusPiPController: AVPictureInPictureControllerDelegate, AVPictureIn
     nonisolated func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            guard self.policy.running, !self.policy.dismissed,
+            guard self.playingMode == .pictureInPicture, self.policy.running, !self.policy.dismissed,
                   UIApplication.shared.applicationState != .active else {
                 self.controller?.stopPictureInPicture(); return
             }
@@ -262,7 +498,7 @@ extension StatusPiPController: AVPictureInPictureControllerDelegate, AVPictureIn
             if self.policy.shouldStart { self.policy.dismissed = true }
             self.playback.playing = false
             self.controller?.canStartPictureInPictureAutomaticallyFromInline = false
-            self.executionActivity.update(owner: self.executionOwner, active: false)
+            if self.playingMode == .pictureInPicture { self.executionActivity.update(owner: self.executionOwner, active: false) }
             self.releaseAudioSession()
             if !self.policy.running { self.displayLayer.flushAndRemoveImage() }
             self.message = "画中画已关闭"
@@ -274,7 +510,7 @@ extension StatusPiPController: AVPictureInPictureControllerDelegate, AVPictureIn
             guard let self else { return }
             self.recordLifecycle("pip.failedToStart")
             self.starting = false; self.active = false
-            self.executionActivity.update(owner: self.executionOwner, active: false)
+            if self.playingMode == .pictureInPicture { self.executionActivity.update(owner: self.executionOwner, active: false) }
             self.releaseAudioSession()
             self.message = "系统未能启动画中画；继续使用 App 内预览"
         }

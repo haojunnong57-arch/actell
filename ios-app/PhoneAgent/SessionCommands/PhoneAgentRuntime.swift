@@ -66,6 +66,18 @@ import Foundation
                     runServices: AgentRunServices(provider: DemoProvider(), bridge: DemoBridge()))
             }
             let sessions = ConversationStore(inMemory: true)
+            if arguments.contains("--ui-test-disclosure-scroll") {
+                let id = sessions.create(mode: .live)
+                for index in 0..<20 { sessions.addNotice("展开滚动验收 \(index)\n本地历史记录", in: id) }
+                if let run = sessions.begin(in: id, query: "展开位置验收") {
+                    sessions.beginAssistantTurn(run)
+                    sessions.completeAssistantTurn("", reasoning: String(repeating: "长思考内容用于验证展开时保留阅读位置。\n", count: 100), identity: run)
+                    sessions.updateTool(callID: "disclosure-tool", name: "list_apps", state: .succeeded,
+                        result: String(repeating: "长工具结果用于验证展开时保留阅读位置。\n", count: 100), arguments: "{}", identity: run)
+                    sessions.finish(run, phase: .completed, summary: "")
+                }
+                return AgentViewModel(sessions: sessions, loadPersistentState: false)
+            }
             if arguments.contains("--ui-test-skill-tools") {
                 sessions.create(mode: .live)
                 return AgentViewModel(sessions: sessions, loadPersistentState: false,

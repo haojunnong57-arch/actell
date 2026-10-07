@@ -17,7 +17,7 @@ typedef struct {
     ncm_bytes seed, controller_id, peer_id, peer_public_key, alt_irk, peer_udid, peer_model;
 } ncm_identity;
 typedef struct { uint32_t abi,interface_index,generation,endpoint_index,permissions; } ncm_config;
-enum ncm_failure_stage { NCM_STAGE_IDENTITY=1, NCM_STAGE_NCM_CONNECT=2, NCM_STAGE_PAIR_VERIFY=3, NCM_STAGE_TUNNEL_LISTENER=4, NCM_STAGE_TLS_TUNNEL=5, NCM_STAGE_RSD=6, NCM_STAGE_DEVELOPER_MODE=7, NCM_STAGE_DEVELOPER_IMAGE=8, NCM_STAGE_SCREENSHOT=9, NCM_STAGE_MEDIA=10, NCM_STAGE_INPUT=11, NCM_STAGE_CLOSED=12, NCM_STAGE_VIDEO_RECEIVER=13, NCM_STAGE_VIDEO_SERVICE=14, NCM_STAGE_VIDEO_NEGOTIATION=15, NCM_STAGE_VIDEO_ANSWER=16, NCM_STAGE_VIDEO_PACKETS=17, NCM_STAGE_TOUCH_SERVICE=18, NCM_STAGE_SCREENSHOT_CONNECTION=19, NCM_STAGE_SCREENSHOT_RESPONSE=20 };
+enum ncm_failure_stage { NCM_STAGE_IDENTITY=1, NCM_STAGE_NCM_CONNECT=2, NCM_STAGE_PAIR_VERIFY=3, NCM_STAGE_TUNNEL_LISTENER=4, NCM_STAGE_TLS_TUNNEL=5, NCM_STAGE_RSD=6, NCM_STAGE_DEVELOPER_MODE=7, NCM_STAGE_DEVELOPER_IMAGE=8, NCM_STAGE_SCREENSHOT=9, NCM_STAGE_MEDIA=10, NCM_STAGE_INPUT=11, NCM_STAGE_CLOSED=12, NCM_STAGE_VIDEO_RECEIVER=13, NCM_STAGE_VIDEO_SERVICE=14, NCM_STAGE_VIDEO_NEGOTIATION=15, NCM_STAGE_VIDEO_ANSWER=16, NCM_STAGE_VIDEO_PACKETS=17, NCM_STAGE_TOUCH_SERVICE=18, NCM_STAGE_SCREENSHOT_CONNECTION=19, NCM_STAGE_SCREENSHOT_RESPONSE=20, NCM_STAGE_APPLICATIONS=21 };
 enum ncm_failure_cause { NCM_CAUSE_PROTOCOL=1, NCM_CAUSE_TIMEOUT=2, NCM_CAUSE_INVALID=3, NCM_CAUSE_MISSING_SERVICE=4, NCM_CAUSE_UNPREPARED=5, NCM_CAUSE_MEDIA_INACTIVE=6, NCM_CAUSE_DELIVERY_UNCERTAIN=7 };
 typedef struct { uint64_t request_id; uint32_t kind,stage,cause,reserved; size_t size; } ncm_event;
 /* Return codes: 0 success/queued, 1 invalid, 2 busy, 3 closed, 4 empty,
@@ -28,6 +28,20 @@ typedef struct { uint64_t request_id; uint32_t kind,stage,cause,reserved; size_t
  * been sent; scoped preparation resources closed, existing session retained.
  * At most 2 process sessions, 1 queued request and 1 pending event per session.
  * Tokens are monotonically allocated handles, never C pointers. */
+/* Independent media poll: kind 13 = complete HEVC sample, 14 = decoder reset.
+ * No command receipts consumed. SCREEN permission required. Uses poll status
+ * codes (EMPTY/SMALL/CLOSED). Sample = 4 LE u64 (serial, epoch, age_ms, revision),
+ * 8 LE u32 (RTP timestamp, flags, width, height, VPS/SPS/PPS/AU lengths),
+ * flags: bit0 sync; bit1 adds 2 LE u32 display width/height after the header.
+ * Geometry is scoped to the selected peer display and validated against SPS.
+ * Followed by VPS, SPS, PPS and 4-byte length-prefixed AU. Max 8 MiB. */
+typedef struct {
+    uint64_t datagrams, rtp, rejected, frames, discontinuities, overflows, refreshes, source_port;
+} ncm_video_status;
+/* SCREEN-gated snapshot; does not consume frame or command queues. */
+int32_t ncm_backend_video_get_status(uint64_t handle, ncm_video_status *status);
+int32_t ncm_backend_video_refresh(uint64_t handle);
+int32_t ncm_backend_video_poll(uint64_t handle, ncm_event *event, uint8_t *buffer, size_t capacity);
 uint32_t ncm_backend_abi(void);
 /* Explicit new RemotePairing only. consent must be 1. No filesystem access.
  * Pairing events (request 0): 5 listener JSON {port,identifier,txt}, 6 PIN UTF8,
@@ -49,11 +63,18 @@ int32_t ncm_backend_start(const ncm_config *,const ncm_identity *,uint64_t *hand
  * close cancels transport and does not assert remote StopSession completed. */
 int32_t ncm_lockdown_start(uint32_t interface_index,uint32_t permissions,ncm_bytes pairing_record,ncm_bytes expected_udid,uint64_t *handle);
 /* Actions: 1 read-only developer/DDI check, 2 capture PNG, 3 start media drain,
- * 4 tap normalized x/y. Every accepted request id must increase; no replay.
+ * 4 tap normalized x/y; 11 release owned media/HID streams (idempotent),
+ * retaining the authenticated tunnel. No global stopAll. Every accepted request id must increase; no replay.
  * Touch media uses screen video only; no audio session is requested. Caller obtains consent. */
 // Drag uses normalized coordinates, 100–2000 ms; uncertain delivery is never replayed.
 int32_t ncm_backend_drag(uint64_t handle,uint64_t request_id,uint16_t x,uint16_t y,uint16_t end_x,uint16_t end_y,uint16_t duration_ms);
 int32_t ncm_backend_submit(uint64_t handle,uint64_t request_id,uint32_t action,uint16_t x,uint16_t y);
+/* 7 Home, 8 installed applications (event 11 JSON name/bundle_id/version).
+ * 9 launch {bundle_id,arguments:[strings]}, 10 type {text}: all text via pasteboard + Cmd-V
+ * (1..8192 UTF-8 bytes, no NUL); no virtual keyboard registration.
+ * command copies bounded JSON; input permission required, no replay. Event 12
+ * is a read-only app query failure retaining the authenticated session. */
+int32_t ncm_backend_command(uint64_t handle,uint64_t request_id,uint32_t action,ncm_bytes payload);
 int32_t ncm_backend_poll(uint64_t handle,ncm_event *,uint8_t *buffer,size_t capacity);
 /* Idempotent. Immediately revokes handle and requests worker cancellation. Does
  * not block UI waiting for join or assert remote media/touch release succeeded. */
@@ -64,6 +85,8 @@ void ncm_backend_close(uint64_t handle);
 int32_t ncm_test_start_loopback(uint16_t relay_port,uint64_t *handle);
 /* Synthetic recoverable preparation / uncertain delivery ownership fixture. */
 int32_t ncm_test_start_media_failure(uint64_t *handle);
+/* Synthetic HEVC burst, no network; absent from device archives. */
+int32_t ncm_test_start_video_burst(ncm_bytes sample,uint64_t *handle);
 #endif
 #ifdef __cplusplus
 }

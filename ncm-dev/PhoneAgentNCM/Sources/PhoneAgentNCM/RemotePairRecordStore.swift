@@ -6,6 +6,10 @@ public struct RemotePairRecordStore {
     public let url: URL
     public init(url: URL) { self.url = url }
     public var exists: Bool { FileManager.default.fileExists(atPath: url.path) }
+    /// Explicit local reset only. A transport failure must never delete identity.
+    public func remove() throws {
+        if exists { try FileManager.default.removeItem(at: url) }
+    }
     public func load() throws -> RemotePairRecord {
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         guard size > 0, size <= 32 * 1024 else { throw NativeBackendError.invalidIdentity }

@@ -56,15 +56,19 @@ private struct BatchProvider: LLMProvider {
 final class MultiToolTests: XCTestCase {
     private func call(_ id: String, _ name: String, _ arguments: String = "{}") -> LLMToolCall { .init(id: id, name: name, arguments: arguments) }
     private let tap = "{\"x\":10,\"y\":20,\"purpose\":\"synthetic tap\"}"
+    private let skill: SkillPackage = try! SkillPackage.make(documents: ["SKILL.md": "---\nname: batch-guide\ndescription: Synthetic batch reference\n---\nBATCH_REFERENCE"])
+    private func skillCall() -> LLMToolCall {
+        call("skills", "load_skill", String(decoding: try! JSONEncoder().encode(["id": skill.id.uuidString, "revision": skill.revision]), as: UTF8.self))
+    }
     private func runner(_ batches: [[LLMToolCall]], bridge: BatchBridge, errors: Set<String> = [], approval: (@Sendable (Approval) async -> Bool)? = nil) -> Agent {
         let coordinator = ActionCoordinator(bridge: bridge, limits: AgentLimits(), approve: approval ?? { _ in await bridge.granted(); return true }, onImage: { _, _ in }, onReceipt: { _ in })
         let devices: [any AgentTool] = ["screenshot", "tap", "drag", "wait", "finish"].map { DeviceTool(name: $0, coordinator: coordinator) }
-        let tools = devices + [SkillTool(name: "list_skills", catalog: SkillCatalog(packages: []), canRead: { true })]
+        let tools = devices + [SkillTool(name: "load_skill", catalog: SkillCatalog(packages: [skill]), canRead: { true })]
         return Agent(config: AgentConfig(provider: BatchProvider(batches: batches, expectedErrors: errors), enableRepairRetry: false, tools: tools, loopDetection: nil, parallelToolCalls: false))
     }
     func testOrderedMixedBatchRepeatsObservationsAndKeepsPerActionApproval() async throws {
         let bridge = BatchBridge()
-        let calls = [call("s1", "screenshot"), call("t1", "tap", tap), call("skills", "list_skills"), call("s2", "screenshot"), call("t2", "tap", tap)]
+        let calls = [call("s1", "screenshot"), call("t1", "tap", tap), skillCall(), call("s2", "screenshot"), call("t2", "tap", tap)]
         let agent = runner([calls, [call("s3", "screenshot")]], bridge: bridge)
         var answer = ""
         for try await event in agent.runStreamingTagged("synthetic") {
@@ -76,7 +80,7 @@ final class MultiToolTests: XCTestCase {
     }
     func testUnknownMiddleInputReturnsEveryResultAndFencesLaterInput() async throws {
         let bridge = BatchBridge(failInput: true)
-        let calls = [call("s1", "screenshot"), call("t1", "tap", tap), call("s2", "screenshot"), call("t2", "tap", tap), call("skills", "list_skills")]
+        let calls = [call("s1", "screenshot"), call("t1", "tap", tap), call("s2", "screenshot"), call("t2", "tap", tap), skillCall()]
         let result = try await runner([calls], bridge: bridge, errors: ["t1", "t2"]).run("synthetic")
         XCTAssertEqual(result, "batch finished")
         let events = await bridge.events
@@ -103,7 +107,7 @@ final class MultiToolTests: XCTestCase {
     }
     func testDeniedActionStopsRemainingBatchIncludingReadOnlyTools() async throws {
         let bridge = BatchBridge()
-        let calls = [call("s", "screenshot"), call("deny", "tap", tap), call("later", "screenshot"), call("skills", "list_skills")]
+        let calls = [call("s", "screenshot"), call("deny", "tap", tap), call("later", "screenshot"), skillCall()]
         let agent = runner([calls], bridge: bridge, approval: { _ in false })
         _ = try await agent.run("synthetic")
         let events = await bridge.events

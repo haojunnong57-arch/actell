@@ -134,7 +134,6 @@ struct ToolPresentation {
                 case "tap", "drag": receipt = "已确认送达；可见效果需要下一张截图核对"
                 case "wait": receipt = "等待结束，需要重新查看屏幕"
                 case "finish": receipt = String(result.result.prefix(1_000))
-                case "list_skills", "search_skills": receipt = "已返回当前启用技能的名称与摘要；正文按需读取"
                 case "load_skill": receipt = "已读取技能文档：" + (skillName(call) ?? "技能") + " / " + ((call.parameters["resource"]?.value as? String) ?? "SKILL.md")
                 default: receipt = "工具已返回"
                 }
@@ -152,8 +151,6 @@ struct ToolPresentation {
         case "drag": allowed = ["from_x", "from_y", "to_x", "to_y", "duration_ms", "purpose"]
         case "wait": allowed = ["duration_ms"]
         case "finish": allowed = ["summary"]
-        case "list_skills": allowed = []
-        case "search_skills": allowed = ["query"]
         case "load_skill": allowed = ["id", "revision", "resource", "offset"]
         default: return "未注册工具；不展示原始参数"
         }

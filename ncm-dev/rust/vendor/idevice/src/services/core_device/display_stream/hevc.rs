@@ -36,9 +36,9 @@ const MAX_NAL_UNIT_COUNT: usize = 256;
 const MAX_CODED_PIXEL_DIMENSION: u32 = 16_384;
 const MAX_CODED_PIXEL_COUNT: u64 = 128 * 1024 * 1024;
 
-// Apple's DisplayService appends this exact non-HEVC trailer to coded-slice
-// NAL units. `avconferenced` strips it before decode. Match the complete suffix
-// only, and only on VCL NAL units, so conforming streams are unchanged.
+// Observed DisplayService coded-slice trailer. Preserve this opaque metadata
+// for the consumer: its bytes include device-specific geometry and must not be
+// matched/stripped as a universal constant before geometry can be inspected.
 const DISPLAYSERVICE_NAL_TRAILER: [u8; 14] = [
     0x04, 0xf0, 0x0a, 0xc0, 0x00, 0x00, 0x03, 0x00, 0x00, 0x04, 0xec, 0x0a, 0xb0, 0x03,
 ];
@@ -582,12 +582,15 @@ fn validate_complete_nal(
         return Err(HevcDiscontinuity::MalformedPayload);
     }
 
-    let mut end = nal.len();
+    let end = nal.len();
     if is_vcl(nal_type(nal[0]))
         && nal.len() >= HEVC_NAL_HEADER_LEN + DISPLAYSERVICE_NAL_TRAILER.len()
         && nal.ends_with(&DISPLAYSERVICE_NAL_TRAILER)
     {
-        end -= DISPLAYSERVICE_NAL_TRAILER.len();
+        // Preserve metadata, but reject a NAL containing only header + trailer.
+        if end == HEVC_NAL_HEADER_LEN + DISPLAYSERVICE_NAL_TRAILER.len() {
+            return Err(HevcDiscontinuity::MalformedPayload);
+        }
     }
     if end <= HEVC_NAL_HEADER_LEN {
         return Err(HevcDiscontinuity::MalformedPayload);
@@ -1911,7 +1914,7 @@ mod tests {
     }
 
     #[test]
-    fn reassembles_fu_and_removes_the_exact_displayservice_slice_trailer() {
+    fn reassembles_fu_and_preserves_displayservice_geometry_for_the_consumer() {
         let mut assembler = HevcAccessUnitAssembler::new(PAYLOAD_TYPE, SSRC);
         synchronize(&mut assembler, 20);
         prime_parameter_sets(&mut assembler, 21);
@@ -1926,10 +1929,9 @@ mod tests {
         let output = access_units(push(&mut assembler, 24, 4, true, &last));
 
         assert_eq!(output.len(), 1);
-        assert_eq!(
-            output[0].bytes,
-            length_prefixed(&[nal(19, &[0xaa, 0xbb, 0xcc, 0xdd])])
-        );
+        let mut payload = vec![0xaa, 0xbb, 0xcc, 0xdd];
+        payload.extend_from_slice(&DISPLAYSERVICE_NAL_TRAILER);
+        assert_eq!(output[0].bytes, length_prefixed(&[nal(19, &payload)]));
     }
 
     #[test]

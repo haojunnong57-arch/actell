@@ -19,27 +19,52 @@ enum DeviceControlRoute: Sendable {
 
 @MainActor protocol NCMControlConnection: AnyObject {
     var ready: Bool { get }
+    var connectionFailure: String? { get }
     var running: Bool { get }
     var agentReserved: Bool { get }
     var controlSessionID: UUID { get }
     func agentCapture(owner: UUID, session: UUID) async throws -> Data
     func agentTap(owner: UUID, session: UUID, x: UInt16, y: UInt16, validate: () throws -> Void) async throws
     func agentDrag(owner: UUID, session: UUID, fromX: UInt16, fromY: UInt16, toX: UInt16, toY: UInt16, durationMS: UInt16, validate: () throws -> Void) async throws
+    func agentApplications(owner: UUID, session: UUID) async throws -> Data
+    func agentSystemAction(owner: UUID, session: UUID, name: String, text: String, arguments: [String], validate: () throws -> Void) async throws
     func retainConnection(owner: UUID)
+    func awaitControlRelease() async
     func releaseConnection(owner: UUID)
     func registerAgent(owner: UUID, session: UUID)
     func releaseAgent(owner: UUID, session: UUID)
 }
 
 extension NCMControlConnection {
+    var connectionFailure: String? { nil }
+    func agentApplications(owner: UUID, session: UUID) async throws -> Data { throw AppError.unavailable("当前连接不支持查询 App") }
+    func agentSystemAction(owner: UUID, session: UUID, name: String, text: String, arguments: [String], validate: () throws -> Void) async throws { throw AppError.unavailable("当前连接不支持此操作") }
+    func awaitControlRelease() async {}
     func retainConnection(owner: UUID) {}
     func releaseConnection(owner: UUID) {}
     func registerAgent(owner: UUID, session: UUID) {}
 }
 
 extension PairingFlow: NCMControlConnection {
+    var connectionFailure: String? { lastFailure }
+    func awaitControlRelease() async { await mediaLifetimeWait() }
+    func agentApplications(owner: UUID, session: UUID) async throws -> Data {
+        try await agentOperation(owner: owner, session: session) { try await $0.installedApplications() }
+    }
+    func agentSystemAction(owner: UUID, session: UUID, name: String, text: String, arguments: [String], validate: () throws -> Void) async throws {
+        try await agentOperation(owner: owner, session: session) { services in
+            if name == "home" || name == "type_text" { try await self.prepareAgentInput(services) }
+            try Task.checkCancellation(); try validate()
+            switch name {
+            case "home": try await services.home()
+            case "type_text": try await services.typeText(text)
+            case "launch_app": try await services.launchApplication(bundleID: text, arguments: arguments)
+            default: throw AppError.invalid("未注册的系统操作")
+            }
+        }
+    }
     func agentCapture(owner: UUID, session: UUID) async throws -> Data {
-        try await agentOperation(owner: owner, session: session) { try await $0.capturePNG() }
+        try await agentOperation(owner: owner, session: session) { try await self.prepareAgentInput($0); return try await $0.captureVideoJPEG() }
     }
     func agentTap(owner: UUID, session: UUID, x: UInt16, y: UInt16, validate: () throws -> Void) async throws {
         try await agentOperation(owner: owner, session: session) { services in
@@ -89,7 +114,7 @@ private final class NCMRunFence: @unchecked Sendable {
     private func check() throws {
         try fence.check()
         guard flow.ready else {
-            throw AppError.unavailable("手机操控未连接，请在设置 → 手机操控 → ESP32 控制中连接")
+            throw AppError.unavailable(flow.connectionFailure ?? "手机操控未连接，请在设置 → 手机操控 → ESP32 控制中连接")
         }
         if let session {
             guard flow.controlSessionID == session else {
@@ -153,6 +178,15 @@ private final class NCMRunFence: @unchecked Sendable {
         let session = try requireSession()
         try await perform { try await flow.agentDrag(owner: owner, session: session, fromX: UInt16(fromX), fromY: UInt16(fromY), toX: UInt16(toX), toY: UInt16(toY), durationMS: UInt16(durationMS), validate: { try self.check() }) }
     }
+    func installedApplications() async throws -> Data {
+        let session = try requireSession()
+        return try await perform { try await flow.agentApplications(owner: owner, session: session) }
+    }
+    func systemAction(name: String, text: String, arguments: [String], imageID: String) async throws {
+        try consumeImage(imageID, coordinates: [])
+        let session = try requireSession()
+        try await perform { try await flow.agentSystemAction(owner: owner, session: session, name: name, text: text, arguments: arguments, validate: { try self.check() }) }
+    }
     private func perform<T>(_ action: () async throws -> T) async throws -> T {
         do {
             try check()
@@ -173,7 +207,40 @@ private final class NCMRunFence: @unchecked Sendable {
     }
     func stop() async {
         fence.cancel(); imageID = nil; approvedImageID = nil; taskAuthorized = false
-        if let session { flow.releaseAgent(owner: owner, session: session) }
+        if let session {
+            flow.releaseAgent(owner: owner, session: session)
+            if flow.controlSessionID == session { await flow.awaitControlRelease() }
+        }
         flow.releaseConnection(owner: owner)
+    }
+}
+
+/// Owns asynchronous media cleanup independently of UI visibility. A revoked
+/// generation can never publish cleanup completion into a newer connection.
+@MainActor final class ControlMediaLifetime {
+    private(set) var active = false
+    private(set) var stopping = false
+    private var generation = UUID()
+    private var cleanup: Task<Void, Never>?
+    func didOpen() { active = true }
+    @discardableResult func finishIfIdle(hasUsers: Bool,
+        stop: @escaping @MainActor () async throws -> Void,
+        completed: @escaping @MainActor (Bool) -> Void) -> Bool {
+        guard active, !hasUsers, !stopping else { return false }
+        stopping = true
+        let epoch = generation
+        cleanup = Task { [weak self] in
+            var success = false
+            do { try Task.checkCancellation(); try await stop(); success = true } catch {}
+            guard let self, self.generation == epoch else { return }
+            self.active = false; self.stopping = false; self.cleanup = nil
+            completed(success)
+        }
+        return true
+    }
+    func wait() async { await cleanup?.value }
+    func revoke() {
+        generation = UUID(); active = false; stopping = false
+        cleanup?.cancel(); cleanup = nil
     }
 }

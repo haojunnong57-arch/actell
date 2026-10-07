@@ -86,7 +86,7 @@ struct AgentActivitySnapshot: Equatable {
         }
         // Suppress queued obsolete updates and never start after cancellation.
         guard latest[run] == snapshot else { return }
-        let content = ActivityContent(state: snapshot.state, staleDate: snapshot.staleDate)
+        let content = ActivityContent(state: snapshot.state, staleDate: snapshot.staleDate, relevanceScore: 100)
         if let activity = activities[run] {
             guard activity.activityState == .active || activity.activityState == .stale else {
                 BackgroundExecutionTrace.record("activity.skipped state=\(activity.activityState)")

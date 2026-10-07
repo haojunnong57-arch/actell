@@ -76,7 +76,7 @@ struct ToolInvocationView<Preview: View>: View {
 
     private var completedView: some View {
         VStack(alignment: .leading, spacing: 10) {
-            DisclosureGroup {
+            ConversationDisclosureGroup {
                 VStack(alignment: .leading, spacing: 6) {
                     if let arguments = configuration.tool.arguments {
                         Text("请求参数").font(.caption2).foregroundStyle(.tertiary)
@@ -99,7 +99,7 @@ struct ToolInvocationView<Preview: View>: View {
     }
 
     private var failedView: some View {
-        DisclosureGroup {
+        ConversationDisclosureGroup {
             VStack(alignment: .leading, spacing: 6) {
                 if let arguments = configuration.tool.arguments {
                     Text("请求参数").font(.caption2).foregroundStyle(.tertiary)
@@ -117,7 +117,7 @@ struct ToolInvocationView<Preview: View>: View {
 
     @ViewBuilder private var parameterDisclosure: some View {
         if let arguments = configuration.tool.arguments {
-            DisclosureGroup {
+            ConversationDisclosureGroup {
                 Text(arguments).font(.caption.monospaced()).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
             } label: {
@@ -144,7 +144,7 @@ struct ToolApprovalCard<Preview: View>: View {
             }.font(.body)
             Text(configuration.tool.detail).font(.subheadline).lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
-            DisclosureGroup(isExpanded: $detailsExpanded) {
+            ConversationDisclosureGroup(isExpanded: $detailsExpanded) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(configuration.tool.detail).font(.subheadline).textSelection(.enabled)

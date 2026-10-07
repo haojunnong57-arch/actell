@@ -7,16 +7,21 @@ import Combine
 /// Sources include SCK/USB health, a delivered system task, and active AVKit PiP.
 @MainActor protocol RunBackgroundLease: AnyObject {
     var expirationHandler: (() -> Void)? { get set }
+    var backgroundReady: Bool { get }
     func report(completed: Int, subtitle: String)
     func complete(success: Bool)
 }
+extension RunBackgroundLease { var backgroundReady: Bool { true } }
+
 @MainActor protocol RunBackgroundScheduler {
+    func setForeground(_ active: Bool)
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void) throws
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void,
                 failed: @escaping @MainActor () -> Void) throws
     func cancel(identifier: String)
 }
 extension RunBackgroundScheduler {
+    func setForeground(_ active: Bool) {}
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void,
                 failed: @escaping @MainActor () -> Void) throws { try submit(identifier: identifier, launched: launched) }
 }
@@ -208,18 +213,29 @@ extension RunCheckpointStorage {
                 self.pause("后台执行资格失效或到期；已暂停，请核对设备后手动继续")
             }
         }
-        backgroundStatus = "后台执行资格有效；设备工具仍需独立校验"
+        backgroundStatus = incoming.backgroundReady ? "后台执行资格有效；设备工具仍需独立校验" : "等待后台媒体实际开始播放；设备操作尚未发送"
         incoming.report(completed: checkpoint?.milestones.count ?? 0, subtitle: "等待实际模型响应或工具结果；总步骤未知")
     }
     func setForeground(_ active: Bool) {
         foreground = active
+        scheduler.setForeground(active)
         guard !active, checkpoint?.phase == .running else { return }
         if !hasLease { pause("离开前台时尚无有效后台片段；已暂停，需手动继续") }
         else if !activeToolBackgroundCapable { pause("当前设备工具尚未验证后台能力；已暂停，请返回前台核对") }
     }
+    /// Wait for an actual media receipt during the bounded foreground handoff.
+    /// A pending lease is neither background permission nor permission to dispatch.
+    func awaitExecution(generation: UUID, backgroundCapable: Bool) async throws {
+        while !foreground, hasLease, lease?.backgroundReady == false,
+              ownsRun, checkpoint?.generation == generation, checkpoint?.phase == .running {
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        try requireExecution(generation: generation, backgroundCapable: backgroundCapable)
+    }
     func requireExecution(generation: UUID, backgroundCapable: Bool) throws {
         guard ownsRun, checkpoint?.generation == generation, checkpoint?.phase == .running, storageHealthy else { throw AppError.stopped }
-        guard foreground || (hasLease && backgroundCapable) else {
+        guard foreground || (hasLease && lease?.backgroundReady == true && backgroundCapable) else {
             pause("此步骤需要前台或有效后台能力；已暂停，未自动重发")
             throw AppError.stopped
         }
@@ -253,7 +269,7 @@ extension RunCheckpointStorage {
     func toolFailed(callID: String, generation: UUID) {
         guard ownsRun, checkpoint?.generation == generation, checkpoint?.phase == .running else { return }
         if let i = checkpoint?.tools.firstIndex(where: { $0.callID == callID }), checkpoint?.tools[i].delivery == .dispatching {
-            if ["tap", "drag"].contains(checkpoint?.tools[i].name ?? "") {
+            if ["tap", "drag", "home", "launch_app", "type_text"].contains(checkpoint?.tools[i].name ?? "") {
                 checkpoint?.tools[i].delivery = .outcomeUnknown
                 pause("工具发送后未得到确认；结果未知，请核对设备，旧动作不会重放")
             } else {

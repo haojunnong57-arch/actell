@@ -1,8 +1,24 @@
 // Ported safety/transaction regression tests from 2509d7098fc8a3af4c62bd8fc20e911df4aa4933.
 import XCTest
+import AVFoundation
 import LLMProviderKit
 @testable import PhoneAgent
 
+@MainActor private final class FakeTaskAudioPlayback: TaskAudioPlayback {
+    var onStopped: (() -> Void)?
+    var canPlay = true
+    var starts = 0
+    var stops = 0
+    var holdStart = false
+    var pendingStarts: [CheckedContinuation<Bool, Never>] = []
+    func start() async throws -> Bool {
+        starts += 1
+        if holdStart { return await withCheckedContinuation { pendingStarts.append($0) } }
+        return canPlay
+    }
+    func stop() { stops += 1 }
+    func interrupt() { onStopped?() }
+}
 @MainActor private final class FakeLease: RunBackgroundLease {
     var expirationHandler: (() -> Void)?
     private(set) var completions: [Bool] = []
@@ -45,6 +61,115 @@ import LLMProviderKit
     private let token = UUID()
     private func tool(_ id: String = "tap") -> RunCheckpoint.Tool {
         .init(callID: id, name: "tap", parameterSummary: "{\"x\":1,\"y\":2}", argumentDigest: "digest")
+    }
+    private func settlePlayback() async {
+        for _ in 0..<20 { await Task.yield() }
+    }
+    func testStopBeforeAudioStartIsScheduledNeverActivatesPlayback() async {
+        let activity = PiPExecutionActivity(), audio = FakeTaskAudioPlayback()
+        let media = StatusPiPController(executionActivity: activity, audioPlayback: audio)
+        media.setBackgroundMode(.audio)
+        media.setTaskRunning(true)
+        media.setTaskRunning(false)
+        await settlePlayback()
+        XCTAssertEqual(audio.starts, 0)
+        XCTAssertFalse(media.audioActive)
+        XCTAssertFalse(activity.active)
+    }
+    func testDelayedAudioActivationCannotReviveStoppedOrNewerTask() async {
+        let activity = PiPExecutionActivity(), audio = FakeTaskAudioPlayback()
+        audio.holdStart = true
+        let media = StatusPiPController(executionActivity: activity, audioPlayback: audio)
+        media.setBackgroundMode(.audio)
+        media.setTaskRunning(true); await settlePlayback()
+        XCTAssertEqual(audio.pendingStarts.count, 1)
+        XCTAssertFalse(activity.active, "pending activation grants no background execution")
+        media.setTaskRunning(false)
+        media.setTaskRunning(true); await settlePlayback()
+        XCTAssertEqual(audio.pendingStarts.count, 2)
+        audio.pendingStarts.removeFirst().resume(returning: true)
+        await settlePlayback()
+        XCTAssertFalse(activity.active, "old activation must not grant the new generation")
+        audio.pendingStarts.removeFirst().resume(returning: true)
+        await settlePlayback()
+        XCTAssertTrue(activity.active)
+        media.setTaskRunning(false)
+        XCTAssertFalse(activity.active)
+    }
+    func testAudioPlaybackKeepsRunAfterSystemExpiryAndInterruptionRevokesIt() async throws {
+        let activity = PiPExecutionActivity(), primary = FakeScheduler(), audio = FakeTaskAudioPlayback()
+        let media = StatusPiPController(executionActivity: activity, audioPlayback: audio)
+        media.setBackgroundMode(.audio)
+        XCTAssertFalse(activity.active)
+        media.setTaskRunning(true); await settlePlayback()
+        XCTAssertTrue(media.audioActive); XCTAssertFalse(media.previewEnabled)
+        XCTAssertTrue(activity.active)
+        let lifecycle = RunLifecycleCoordinator(scheduler: PiPBackedRunScheduler(primary: primary, activity: activity), storage: MemoryRunCheckpointStore())
+        try lifecycle.begin(identity: identity, generation: token)
+        let system = primary.grant()
+        lifecycle.setForeground(false); media.setForeground(false)
+        system.expirationHandler?()
+        XCTAssertTrue(lifecycle.hasLease)
+        try lifecycle.requireExecution(generation: token, backgroundCapable: true)
+        audio.interrupt()
+        XCTAssertFalse(media.audioActive); XCTAssertFalse(activity.active)
+        XCTAssertEqual(lifecycle.checkpoint?.phase, .paused)
+        media.setForeground(true); media.setForeground(false)
+        XCTAssertEqual(audio.starts, 1, "interruption must not automatically resume playback/run")
+        media.setTaskRunning(false)
+    }
+    func testFailedAudioDoesNotGrantExecutionAndSelectionAppliesNextTask() async throws {
+        let activity = PiPExecutionActivity(), audio = FakeTaskAudioPlayback()
+        let media = StatusPiPController(executionActivity: activity, audioPlayback: audio)
+        media.setBackgroundMode(.audio); audio.canPlay = false
+        media.setTaskRunning(true); await settlePlayback()
+        XCTAssertFalse(activity.active); XCTAssertFalse(media.audioActive)
+        media.setBackgroundMode(.pictureInPicture)
+        XCTAssertEqual(media.playingMode, .audio)
+        media.setForeground(false); media.setForeground(true)
+        XCTAssertEqual(audio.starts, 1)
+        media.setTaskRunning(false)
+        XCTAssertGreaterThan(audio.stops, 0)
+        media.setBackgroundMode(.audio); audio.canPlay = true
+        media.setTaskRunning(true); await settlePlayback()
+        XCTAssertTrue(activity.active); XCTAssertEqual(audio.starts, 2)
+        media.stop()
+        XCTAssertFalse(activity.active); XCTAssertFalse(media.audioActive)
+        media.setForeground(false); media.setForeground(true)
+        XCTAssertEqual(audio.starts, 2, "explicit stop must not restart on scene changes")
+        media.setTaskRunning(false)
+        XCTAssertFalse(activity.active)
+    }
+    func testAudioOwnerSupportsMultipleRunsAndLatePlaybackCannotReviveStoppedRun() async throws {
+        let activity = PiPExecutionActivity(), primary = FakeScheduler(), audio = FakeTaskAudioPlayback()
+        let media = StatusPiPController(executionActivity: activity, audioPlayback: audio)
+        media.setBackgroundMode(.audio); media.setTaskRunning(true); await settlePlayback()
+        let scheduler = PiPBackedRunScheduler(primary: primary, activity: activity)
+        var first: (any RunBackgroundLease)?, second: (any RunBackgroundLease)?
+        try scheduler.submit(identifier: "audio-one", launched: { first = $0 })
+        try scheduler.submit(identifier: "audio-two", launched: { second = $0 })
+        var firstExpired = 0, secondExpired = 0
+        first?.expirationHandler = { firstExpired += 1 }
+        second?.expirationHandler = { secondExpired += 1 }
+        scheduler.cancel(identifier: "audio-one")
+        XCTAssertTrue(activity.active)
+        XCTAssertEqual(firstExpired, 0); XCTAssertEqual(secondExpired, 0)
+        media.setTaskRunning(false)
+        XCTAssertFalse(activity.active)
+        XCTAssertEqual(firstExpired, 0); XCTAssertEqual(secondExpired, 1)
+        // A new task/playback generation cannot revive either old lease.
+        media.setTaskRunning(true); await settlePlayback(); audio.interrupt()
+        XCTAssertEqual(firstExpired, 0); XCTAssertEqual(secondExpired, 1)
+        media.setTaskRunning(false)
+        scheduler.cancel(identifier: "audio-two")
+
+    }
+    func testSilentPCMIsDecodableOneSecondMonoAudio() throws {
+        let data = SilentTaskAudioPlayback.silentPCM()
+        let player = try AVAudioPlayer(data: data)
+        XCTAssertEqual(player.numberOfChannels, 1)
+        XCTAssertEqual(player.duration, 1, accuracy: 0.01)
+        XCTAssertTrue(data.dropFirst(44).allSatisfy { $0 == 0 })
     }
     func testReturningToForegroundBeforePiPStopsPreservesTaskAndRenewsSystemRequest() throws {
         let activity = PiPExecutionActivity(), owner = UUID(), primary = FakeScheduler()
@@ -183,10 +308,56 @@ import LLMProviderKit
         XCTAssertTrue(granted.completions.isEmpty)
         lifecycle.stop(message: "cleanup")
     }
+    func testDefaultMediaModesDoNotSubmitSystemRequests() throws {
+        for mode in BackgroundPlaybackMode.allCases {
+            let activity = PiPExecutionActivity(), owner = UUID(), system = FakeScheduler()
+            let scheduler = RunExecutionScheduler(continued: system, activity: activity)
+            scheduler.configure(context: nil, allowSystemProcessing: true)
+            let lifecycle = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
+            try lifecycle.begin(identity: identity, generation: token)
+            XCTAssertTrue(lifecycle.hasLease)
+            XCTAssertTrue(system.identifiers.isEmpty, mode.rawValue)
+            activity.update(owner: owner, active: true)
+            lifecycle.setForeground(false)
+            try lifecycle.requireExecution(generation: token, backgroundCapable: true)
+            activity.update(owner: owner, active: false)
+            XCTAssertEqual(lifecycle.checkpoint?.phase, .paused)
+            XCTAssertTrue(system.identifiers.isEmpty)
+        }
+    }
+    func testMediaHandoffWaitsForActualPlaybackAndNeverReplaysAfterStop() async throws {
+        let activity = PiPExecutionActivity(), owner = UUID()
+        let scheduler = MediaOnlyRunScheduler(activity: activity, handoffSeconds: 0.3)
+        let lifecycle = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
+        try lifecycle.begin(identity: identity, generation: token)
+        lifecycle.setForeground(false)
+        var dispatched = false
+        let waiter = Task { @MainActor in
+            try await lifecycle.awaitExecution(generation: token, backgroundCapable: true)
+            dispatched = true
+        }
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertFalse(dispatched)
+        activity.update(owner: owner, active: true)
+        try await waiter.value
+        XCTAssertTrue(dispatched)
+        lifecycle.stop(message: "stop")
+        activity.update(owner: owner, active: false); activity.update(owner: owner, active: true)
+        XCTAssertFalse(lifecycle.hasLease)
+        XCTAssertThrowsError(try lifecycle.requireExecution(generation: token, backgroundCapable: true))
+    }
+    func testMediaStartTimeoutPausesWithoutGrantingToolExecution() async throws {
+        let scheduler = MediaOnlyRunScheduler(activity: PiPExecutionActivity(), handoffSeconds: 0.04)
+        let lifecycle = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
+        try lifecycle.begin(identity: identity, generation: token)
+        lifecycle.setForeground(false)
+        do { try await lifecycle.awaitExecution(generation: token, backgroundCapable: true); XCTFail("no media") } catch {}
+        XCTAssertEqual(lifecycle.checkpoint?.phase, .paused)
+    }
     func testExecutionSourceIsExclusiveAndCancellationUsesOriginalOwner() throws {
         let continued = FakeScheduler(), scheduler = RunExecutionScheduler(continued: FakeScheduler())
         let routed = RunExecutionScheduler(continued: continued)
-        routed.configure(context: nil, allowSystemProcessing: true)
+        routed.configure(context: nil, allowSystemProcessing: true, useSystemProcessing: true)
         try routed.submit(identifier: "system", launched: { _ in })
         XCTAssertEqual(continued.identifiers, ["system"])
         routed.configure(context: nil, allowSystemProcessing: false)
@@ -359,6 +530,20 @@ import LLMProviderKit
         c.toolFailed(callID: "tap", generation: token)
         XCTAssertEqual(c.checkpoint?.tools[0].delivery, .outcomeUnknown)
         XCTAssertEqual(c.checkpoint?.phase, .paused)
+    }
+    func testNewSystemActionsPersistUnknownOutcomeAndNeverResumeTheirDispatch() throws {
+        for name in ["home", "launch_app", "type_text"] {
+            let scheduler = FakeScheduler(), store = MemoryRunCheckpointStore()
+            let lifecycle = RunLifecycleCoordinator(scheduler: scheduler, storage: store)
+            try lifecycle.begin(identity: identity, generation: token)
+            try lifecycle.prepare(.init(callID: name, name: name, parameterSummary: "{}", argumentDigest: "digest"), generation: token, backgroundCapable: true)
+            try lifecycle.dispatch(callID: name, generation: token, backgroundCapable: true)
+            lifecycle.toolFailed(callID: name, generation: token)
+            XCTAssertEqual(lifecycle.checkpoint?.tools[0].delivery, .outcomeUnknown)
+            XCTAssertEqual(lifecycle.checkpoint?.phase, .paused)
+            let recovered = RunLifecycleCoordinator(scheduler: scheduler, storage: store)
+            XCTAssertThrowsError(try recovered.dispatch(callID: name, generation: token, backgroundCapable: true))
+        }
     }
     func testAcknowledgementIsNotVisualObservation() throws {
         let scheduler = FakeScheduler(), store = MemoryRunCheckpointStore()

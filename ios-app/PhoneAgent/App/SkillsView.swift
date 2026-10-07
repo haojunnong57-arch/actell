@@ -23,6 +23,15 @@ struct SkillsView: View {
                 if let status { Text(status).font(.caption).accessibilityIdentifier("skillStatus") }
                 if let warning = store.warning { Text(warning).foregroundStyle(.orange) }
             }
+            if !store.builtinPackages.isEmpty {
+                Section("内置技能") {
+                    ForEach(store.builtinPackages) { skill in
+                        NavigationLink { SkillDetailView(skill: skill) } label: {
+                            VStack(alignment: .leading) { Text(skill.name); Text(skill.summary).font(.caption).foregroundStyle(.secondary) }
+                        }
+                    }
+                }
+            }
             if store.packages.isEmpty {
                 ContentUnavailableView("尚未导入技能", systemImage: "books.vertical", description: Text("导入不会自动开始任务或发送正文。"))
             } else {

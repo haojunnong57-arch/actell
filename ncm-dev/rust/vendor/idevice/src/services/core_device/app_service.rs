@@ -146,17 +146,24 @@ impl<R: ReadWrite> AppServiceClient<R> {
         internal_apps: bool,
         default_apps: bool,
     ) -> Result<Vec<AppListEntry>, IdeviceError> {
+        self.list_apps_mode(app_clips, removable_apps, hidden_apps, internal_apps, default_apps, false).await
+    }
+    pub async fn list_apps_mode(&mut self, app_clips: bool, removable_apps: bool, hidden_apps: bool, internal_apps: bool, default_apps: bool, streaming: bool) -> Result<Vec<AppListEntry>, IdeviceError> {
         let options = crate::plist!(dict {
             "includeAppClips": app_clips,
             "includeRemovableApps": removable_apps,
             "includeHiddenApps": hidden_apps,
             "includeInternalApps": internal_apps,
             "includeDefaultApps": default_apps,
+            "requireContainerAccess": false,
+            "includeAppGroupIdentifiers": false,
+            "includeContainerPaths": false,
         });
-        let res = self
-            .inner
-            .invoke_with_plist("com.apple.coredevice.feature.listapps", options)
-            .await?;
+        let res = if streaming {
+            self.inner.stream_with_plist("com.apple.coredevice.feature.streamapplist", options).await?
+        } else {
+            self.inner.invoke_with_plist("com.apple.coredevice.feature.listapps", options).await?
+        };
 
         let res = match res.as_array() {
             Some(a) => a,

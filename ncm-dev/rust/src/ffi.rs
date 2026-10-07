@@ -97,7 +97,7 @@ impl Event {
         }
     }
 }
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Request {
     id: u64,
     action: u32,
@@ -106,6 +106,7 @@ struct Request {
     end_x: u16,
     end_y: u16,
     duration: u16,
+    payload: Zeroizing<Vec<u8>>,
 }
 struct Receiver {
     pending: Option<Event>,
@@ -119,6 +120,8 @@ struct Entry {
     cancel: watch::Sender<bool>,
     ready: AtomicBool,
     done: AtomicBool,
+    video: Arc<crate::video::VideoMailbox>,
+    screen_allowed: bool,
 }
 static ENTRIES: OnceLock<Mutex<HashMap<u64, Arc<Entry>>>> = OnceLock::new();
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -205,6 +208,8 @@ fn launch(
         cancel,
         ready: AtomicBool::new(false),
         done: AtomicBool::new(false),
+        video: Arc::new(crate::video::VideoMailbox::default()),
+        screen_allowed: permissions & SCREEN != 0,
     });
     let id = NEXT.fetch_add(1, Ordering::SeqCst);
     if id == 0 {
@@ -249,6 +254,7 @@ fn launch(
                             return;
                         }
                     };
+                    session.video = worker_entry.video.clone();
                     let credit = Arc::new(Semaphore::new(1));
                     let names = session
                         .services()
@@ -307,6 +313,8 @@ fn launch_lockdown(
         cancel,
         ready: AtomicBool::new(false),
         done: AtomicBool::new(false),
+        video: Arc::new(crate::video::VideoMailbox::default()),
+        screen_allowed: false,
     });
     let id = NEXT.fetch_add(1, Ordering::SeqCst);
     {
@@ -443,10 +451,11 @@ pub unsafe extern "C" fn ncm_lockdown_start(
 }
 async fn execute(session: &mut Session, r: Request, permissions: u32) -> Event {
     let required = match r.action {
-        1 => 0,
+        1 | 11 => 0,
         2 => SCREEN,
         3 => MEDIA,
-        4 | 6 => INPUT,
+        4 | 6 | 7 | 9 | 10 => INPUT,
+        8 => VERIFY,
         _ => u32::MAX,
     };
     if permissions & required != required {
@@ -467,6 +476,9 @@ async fn execute(session: &mut Session, r: Request, permissions: u32) -> Event {
             .check_developer_readiness()
             .await
             .map(|_| Event::ok(r.id, 2, Vec::new())),
+        11 => session
+            .stop_touch_media()
+            .map(|_| Event::ok(r.id, 2, Vec::new())),
         2 => session
             .screenshot()
             .await
@@ -483,6 +495,32 @@ async fn execute(session: &mut Session, r: Request, permissions: u32) -> Event {
             .drag(r.x, r.y, r.end_x, r.end_y, r.duration)
             .await
             .map(|_| Event::ok(r.id, 2, Vec::new())),
+        7 => session.home().await.map(|_| Event::ok(r.id, 2, Vec::new())),
+        8 => session
+            .list_apps()
+            .await
+            .map(|apps| Event::ok(r.id, 11, apps)),
+        9 | 10 => {
+            let p: serde_json::Value =
+                serde_json::from_slice(&r.payload).expect("validated payload");
+            if r.action == 9 {
+                let args: Vec<String> = p["arguments"]
+                    .as_array()
+                    .expect("validated arguments")
+                    .iter()
+                    .map(|v| v.as_str().unwrap().to_owned())
+                    .collect();
+                session
+                    .launch_app(p["bundle_id"].as_str().unwrap(), &args)
+                    .await
+                    .map(|_| Event::ok(r.id, 2, Vec::new()))
+            } else {
+                session
+                    .type_text(p["text"].as_str().unwrap())
+                    .await
+                    .map(|_| Event::ok(r.id, 2, Vec::new()))
+            }
+        }
         _ => Err(Error {
             stage: Stage::Closed,
             cause: Cause::InvalidParameters,
@@ -493,8 +531,98 @@ async fn execute(session: &mut Session, r: Request, permissions: u32) -> Event {
         // Failed preparation has emitted no HID reports and retains the session.
         if r.action == 3 {
             event.header.kind = 10;
+        } else if r.action == 8 {
+            event.header.kind = 12;
         }
         event
+    })
+}
+/// # Safety
+/// `status` must be writable. Counters only, never packet bytes or credentials.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ncm_backend_video_get_status(
+    handle: u64,
+    status: *mut crate::video::VideoStatus,
+) -> i32 {
+    protect(|| {
+        if status.is_null() {
+            return INVALID;
+        }
+        let Some(entry) = get(handle) else {
+            return CLOSED;
+        };
+        if !entry.screen_allowed {
+            return NOT_READY;
+        }
+        if entry.done.load(Ordering::SeqCst) {
+            return CLOSED;
+        }
+        unsafe {
+            *status = entry.video.status();
+        }
+        0
+    })
+}
+/// Request one fresh keyframe on the already authorized video channel.
+#[unsafe(no_mangle)]
+pub extern "C" fn ncm_backend_video_refresh(handle: u64) -> i32 {
+    let Some(entry) = get(handle) else {
+        return CLOSED;
+    };
+    if !entry.screen_allowed {
+        return NOT_READY;
+    }
+    if entry.done.load(Ordering::SeqCst) {
+        return CLOSED;
+    }
+    entry.video.request_refresh();
+    0
+}
+/// # Safety
+/// The output header and optional byte buffer must be writable for capacity bytes.
+/// Independent bounded video channel; never consumes command receipts.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ncm_backend_video_poll(
+    handle: u64,
+    event: *mut EventHeader,
+    buffer: *mut u8,
+    capacity: usize,
+) -> i32 {
+    protect(|| {
+        if event.is_null() {
+            return INVALID;
+        }
+        let Some(entry) = get(handle) else {
+            return CLOSED;
+        };
+        if !entry.screen_allowed {
+            return NOT_READY;
+        }
+        if entry.done.load(Ordering::SeqCst) {
+            return CLOSED;
+        }
+        let (kind, size, data) = entry
+            .video
+            .poll(if buffer.is_null() { 0 } else { capacity });
+        unsafe {
+            *event = EventHeader {
+                kind,
+                size,
+                ..Default::default()
+            };
+        }
+        if kind == 0 {
+            return EMPTY;
+        }
+        let Some(data) = data else {
+            return SMALL;
+        };
+        if !data.is_empty() {
+            unsafe {
+                std::ptr::copy_nonoverlapping(data.as_ptr(), buffer, data.len());
+            }
+        }
+        0
     })
 }
 #[unsafe(no_mangle)]
@@ -546,7 +674,7 @@ pub unsafe extern "C" fn ncm_backend_start(
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn ncm_backend_submit(handle: u64, id: u64, action: u32, x: u16, y: u16) -> i32 {
-    if !(1..=5).contains(&action) {
+    if !(1..=5).contains(&action) && action != 7 && action != 8 && action != 11 {
         return INVALID;
     }
     submit_request(
@@ -559,6 +687,7 @@ pub extern "C" fn ncm_backend_submit(handle: u64, id: u64, action: u32, x: u16, 
             end_x: 0,
             end_y: 0,
             duration: 0,
+            payload: Zeroizing::new(Vec::new()),
         },
     )
 }
@@ -585,8 +714,69 @@ pub extern "C" fn ncm_backend_drag(
             end_x,
             end_y,
             duration,
+            payload: Zeroizing::new(Vec::new()),
         },
     )
+}
+fn valid_command(action: u32, bytes: &[u8]) -> bool {
+    if bytes.len() > 16 * 1024 {
+        return false;
+    }
+    let Ok(p) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return false;
+    };
+    let valid_text = |s: &str| !s.is_empty() && !s.contains('\0');
+    match action {
+        9 => {
+            p["bundle_id"].as_str().is_some_and(|s| {
+                valid_text(s)
+                    && s.len() <= 256
+                    && s.bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b".-_".contains(&c))
+            }) && p["arguments"].as_array().is_some_and(|a| {
+                a.len() <= 32
+                    && a.iter().all(|v| {
+                        v.as_str()
+                            .is_some_and(|s| s.len() <= 1024 && !s.contains('\0'))
+                    })
+            })
+        }
+        10 => p["text"]
+            .as_str()
+            .is_some_and(|s| crate::valid_input_text(s)),
+        _ => false,
+    }
+}
+/// # Safety
+/// Payload is a readable UTF-8 JSON buffer, copied synchronously and cleared on drop.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ncm_backend_command(
+    handle: u64,
+    id: u64,
+    action: u32,
+    payload: Bytes,
+) -> i32 {
+    protect(|| {
+        let Ok(data) = (unsafe { bytes(&payload, 16 * 1024) }) else {
+            return INVALID;
+        };
+        if !valid_command(action, data) {
+            return INVALID;
+        }
+        submit_request(
+            handle,
+            Request {
+                id,
+                action,
+                x: 0,
+                y: 0,
+                end_x: 0,
+                end_y: 0,
+                duration: 0,
+                payload: Zeroizing::new(data.to_vec()),
+            },
+        )
+    })
 }
 fn submit_request(handle: u64, request: Request) -> i32 {
     let id = request.id;
@@ -702,12 +892,78 @@ fn fixture_identity() -> ExistingIdentity {
         },
     }
 }
+// Public synthetic sample only; this export never exists in device archives.
+#[cfg(feature = "offline-fixtures")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ncm_test_start_video_burst(sample: Bytes, handle: *mut u64) -> i32 {
+    protect(|| {
+        let Ok(data) = (unsafe { bytes(&sample, 4096) }) else {
+            return INVALID;
+        };
+        if data.len() < 64 {
+            return INVALID;
+        }
+        let n = |offset: usize| u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+        let (width, height) = (n(40), n(44));
+        let lengths = [
+            n(48) as usize,
+            n(52) as usize,
+            n(56) as usize,
+            n(60) as usize,
+        ];
+        if n(36) != 1
+            || width == 0
+            || height == 0
+            || width > 256
+            || height > 256
+            || lengths.iter().any(|n| *n == 0)
+            || lengths.iter().sum::<usize>() + 64 != data.len()
+        {
+            return INVALID;
+        }
+        let mut offset = 64;
+        let mut fields = Vec::new();
+        for len in lengths {
+            fields.push(data[offset..offset + len].to_vec());
+            offset += len;
+        }
+        let params = idevice::core_device::display_stream::HevcParameterSets {
+            revision: 1,
+            pixel_width: width,
+            pixel_height: height,
+            video_parameter_set: fields[0].clone(),
+            sequence_parameter_set: fields[1].clone(),
+            picture_parameter_set: fields[2].clone(),
+        };
+        let unit = idevice::core_device::display_stream::HevcAccessUnit {
+            ssrc: 7,
+            rtp_timestamp: n(32),
+            first_sequence_number: 1,
+            last_sequence_number: 1,
+            parameter_set_revision: 1,
+            is_sync: true,
+            bytes: fields[3].clone(),
+        };
+        unsafe { start_media_fixture(handle, Some((unit, params))) }
+    })
+}
+
 // Synthetic ABI ownership fixture, compiled out of every device archive.
 #[cfg(feature = "offline-fixtures")]
 /// # Safety
 /// handle must be writable; no network or credentials are accessed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ncm_test_start_media_failure(handle: *mut u64) -> i32 {
+    unsafe { start_media_fixture(handle, None) }
+}
+#[cfg(feature = "offline-fixtures")]
+unsafe fn start_media_fixture(
+    handle: *mut u64,
+    burst: Option<(
+        idevice::core_device::display_stream::HevcAccessUnit,
+        idevice::core_device::display_stream::HevcParameterSets,
+    )>,
+) -> i32 {
     protect(|| {
         if handle.is_null() {
             return INVALID;
@@ -729,6 +985,8 @@ pub unsafe extern "C" fn ncm_test_start_media_failure(handle: *mut u64) -> i32 {
             cancel,
             ready: AtomicBool::new(true),
             done: AtomicBool::new(false),
+            video: Arc::new(crate::video::VideoMailbox::default()),
+            screen_allowed: burst.is_some(),
         });
         let id = NEXT.fetch_add(1, Ordering::SeqCst);
         registry().lock().unwrap().insert(id, entry.clone());
@@ -742,8 +1000,47 @@ pub unsafe extern "C" fn ncm_test_start_media_failure(handle: *mut u64) -> i32 {
                     if events.send(Event::ok(0, 1, b"[]".to_vec())).await.is_err() {
                         return;
                     }
+                    let mut fixture_media: Option<tokio::task::JoinHandle<()>> = None;
                     while let Some(request) = rx.recv().await {
                         let event = match request.action {
+                            2 => Event::failed(
+                                request.id,
+                                Error {
+                                    stage: Stage::ScreenshotConnection,
+                                    cause: Cause::Protocol,
+                                },
+                            ),
+                            3 if burst.is_some() => {
+                                if let Some(task) = fixture_media.take() {
+                                    task.abort();
+                                }
+                                let (unit, params) = burst.as_ref().unwrap();
+                                entry.video.begin_stream();
+                                for _ in 0..1000 {
+                                    entry.video.push(unit.clone(), params.clone());
+                                    let mut inter = unit.clone();
+                                    inter.is_sync = false;
+                                    entry.video.push(inter, params.clone());
+                                }
+                                let (mut inter, params) = (unit.clone(), params.clone());
+                                inter.is_sync = false;
+                                let media_entry = entry.clone();
+                                fixture_media = Some(tokio::spawn(async move {
+                                    loop {
+                                        tokio::time::sleep(std::time::Duration::from_millis(40))
+                                            .await;
+                                        media_entry.video.push(inter.clone(), params.clone());
+                                    }
+                                }));
+                                Event::ok(request.id, 2, Vec::new())
+                            }
+                            11 => {
+                                if let Some(task) = fixture_media.take() {
+                                    task.abort();
+                                }
+                                entry.video.reset();
+                                Event::ok(request.id, 2, Vec::new())
+                            }
                             3 => {
                                 let mut e = Event::failed(
                                     request.id,
@@ -805,6 +1102,43 @@ pub unsafe extern "C" fn ncm_test_start_loopback(port: u16, handle: *mut u64) ->
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn command_payload_is_bounded_typed_and_accepts_unicode() {
+        // ASCII, whitespace, and mixed Unicode all use the same paste command.
+        for text in ["ASCII 123!", "你好 ESP32 🌟", "\n\t ", "a"]
+            .iter()
+            .copied()
+        {
+            let payload = serde_json::to_vec(&serde_json::json!({"text": text})).unwrap();
+            assert!(super::valid_command(10, &payload));
+        }
+        for count in [8192, 8193] {
+            let payload =
+                serde_json::to_vec(&serde_json::json!({"text": "x".repeat(count)})).unwrap();
+            assert_eq!(super::valid_command(10, &payload), count == 8192);
+        }
+        assert!(super::valid_command(10, br#"{"text":"hello"}"#));
+        assert!(super::valid_command(
+            10,
+            "{\"text\":\"你好 🌟\"}".as_bytes()
+        ));
+        assert!(super::valid_command(
+            9,
+            br#"{"bundle_id":"example.fixture","arguments":["--resume","token"]}"#
+        ));
+        for invalid in [
+            br#"{"bundle_id":"example.fixture","arguments":"wrong"}"#.as_slice(),
+            br#"{"bundle_id":"bad/path","arguments":[]}"#,
+            br#"{"bundle_id":"example.fixture","arguments":[4]}"#,
+        ] {
+            assert!(!super::valid_command(9, invalid));
+        }
+        assert!(!super::valid_command(10, br#"{"text":"a\u0000b"}"#));
+        assert!(!super::valid_command(10, br#"{"text":""}"#));
+        assert!(!super::valid_command(10, &vec![b'x'; 16 * 1024 + 1]));
+        assert!(!super::valid_command(7, br#"{"text":"hello"}"#));
+    }
+
     static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     #[tokio::test]
     async fn pairing_persistence_ack_requires_exact_pending_state_and_rejects_replay() {
@@ -823,9 +1157,22 @@ mod tests {
             cancel,
             ready: AtomicBool::new(true),
             done: AtomicBool::new(false),
+            video: Arc::new(crate::video::VideoMailbox::default()),
+            screen_allowed: false,
         });
         let id = NEXT.fetch_add(1, Ordering::SeqCst);
         registry().lock().unwrap().insert(id, entry.clone());
+        let mut header = EventHeader::default();
+        assert_eq!(
+            unsafe { ncm_backend_video_poll(id, &mut header, std::ptr::null_mut(), 0) },
+            NOT_READY
+        );
+        assert_eq!(ncm_backend_video_refresh(id), NOT_READY);
+        let mut status = crate::video::VideoStatus::default();
+        assert_eq!(
+            unsafe { ncm_backend_video_get_status(id, &mut status) },
+            NOT_READY
+        );
         assert_eq!(pairing::ncm_pairing_ack(id, 2), NOT_READY);
         assert_eq!(pairing::ncm_pairing_ack(id, 1), 0);
         assert_eq!(pairing::ncm_pairing_ack(id, 1), NOT_READY);
@@ -908,12 +1255,27 @@ mod tests {
             cancel,
             ready: AtomicBool::new(true),
             done: AtomicBool::new(false),
+            video: Arc::new(crate::video::VideoMailbox::default()),
+            screen_allowed: true,
         });
         let id = NEXT.fetch_add(1, Ordering::SeqCst);
         registry().lock().unwrap().insert(id, entry);
         send.try_send(Event::ok(9, 4, vec![1, 2, 3]))
             .unwrap_or_else(|_| panic!("queue"));
         let mut h = EventHeader::default();
+        assert_eq!(
+            unsafe { ncm_backend_video_poll(id, &mut h, std::ptr::null_mut(), 0) },
+            EMPTY
+        );
+        assert_eq!(ncm_backend_video_refresh(id), 0);
+        let mut status = crate::video::VideoStatus::default();
+        assert_eq!(unsafe { ncm_backend_video_get_status(id, &mut status) }, 0);
+        assert_eq!(status.datagrams, 0);
+        assert_eq!(
+            unsafe { ncm_backend_video_get_status(id, std::ptr::null_mut()) },
+            INVALID
+        );
+
         assert_eq!(
             unsafe { ncm_backend_poll(id, &mut h, std::ptr::null_mut(), 0) },
             SMALL
@@ -949,6 +1311,8 @@ mod tests {
             cancel,
             ready: AtomicBool::new(true),
             done: AtomicBool::new(false),
+            video: Arc::new(crate::video::VideoMailbox::default()),
+            screen_allowed: false,
         });
         let id = NEXT.fetch_add(1, Ordering::SeqCst);
         registry().lock().unwrap().insert(id, entry);
@@ -988,6 +1352,8 @@ mod tests {
                 cancel,
                 ready: AtomicBool::new(true),
                 done: AtomicBool::new(false),
+                video: Arc::new(crate::video::VideoMailbox::default()),
+                screen_allowed: false,
             });
             let id = NEXT.fetch_add(1, Ordering::SeqCst);
             registry().lock().unwrap().insert(id, entry);

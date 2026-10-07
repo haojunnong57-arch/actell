@@ -9,11 +9,15 @@ protocol DeviceBridge: Sendable {
     func screenshot() async throws -> FrameImage
     func tap(x: Int, y: Int, imageID: String) async throws
     func drag(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMS: Int, imageID: String) async throws
+    func installedApplications() async throws -> Data
+    func systemAction(name: String, text: String, arguments: [String], imageID: String) async throws
     func cancelTransport()
     func stop() async
 }
 
 extension DeviceBridge {
+    func installedApplications() async throws -> Data { throw AppError.unavailable("当前通道不支持查询 App") }
+    func systemAction(name: String, text: String, arguments: [String], imageID: String) async throws { throw AppError.unavailable("当前通道不支持此操作") }
     var executionContext: ScreenUSBExecutionContext? { nil }
     func cancelTransport() {}
     func supportsBackgroundExecution(tool: String) async -> Bool { false }

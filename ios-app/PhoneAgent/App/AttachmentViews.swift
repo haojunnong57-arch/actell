@@ -1,4 +1,5 @@
 import SwiftUI
+import Photos
 
 struct AttachmentThumbnail: View {
     let attachment: StoredAttachment
@@ -54,7 +55,12 @@ private struct AttachmentPreview: View {
                 else { ProgressView() }
             }
             .navigationTitle(attachment.name).navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .primaryAction) {
+                    if let data, attachment.kind == .image { SaveScreenshotButton(data: data) }
+                }
+            }
             .task {
                 do { data = try await store.read(attachment, conversationID: conversationID) }
                 catch { failure = "本地文件丢失或暂不可访问；远程来源可回到消息重试，其他附件请重新选择。" }
@@ -117,5 +123,44 @@ private struct RemoteMessageImage: View {
             do { _ = try await presentation.cacheImage(url, messageID: message.id); cacheAvailable = true }
             catch { if !Task.isCancelled { failure = error.localizedDescription } }
         }
+    }
+}
+
+/// Save the original image bytes, rather than recompressing a rendered preview.
+struct SaveScreenshotButton: View {
+    let data: Data
+    @State private var saving = false
+    @State private var showResult = false
+    @State private var result = ""
+    var body: some View {
+        Button {
+            guard !saving else { return }
+            saving = true
+            let original = data
+            Task { @MainActor in
+                defer { saving = false }
+                var status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+                if status == .notDetermined { status = await PHPhotoLibrary.requestAuthorization(for: .addOnly) }
+                if status == .authorized || status == .limited {
+                    do {
+                        try await PHPhotoLibrary.shared().performChanges {
+                            let options = PHAssetResourceCreationOptions()
+                            options.originalFilename = original.starts(with: [0xff, 0xd8, 0xff]) ? "PhoneAgent-截图.jpg" : "PhoneAgent-截图.png"
+                            PHAssetCreationRequest.forAsset().addResource(with: .photo, data: original, options: options)
+                        }
+                        result = "已保存到相册"
+                    } catch { result = "保存失败，请重试" }
+                } else { result = "无法保存，请在系统设置中允许 PhoneAgent 添加照片" }
+                showResult = true
+            }
+        } label: {
+            if saving { ProgressView().controlSize(.small) }
+            else { Image(systemName: "square.and.arrow.down") }
+        }
+        .buttonStyle(.borderless)
+        .disabled(saving)
+        .accessibilityLabel("保存到相册")
+        .accessibilityIdentifier("saveScreenshotToPhotos")
+        .alert("保存截图", isPresented: $showResult) { Button("好", role: .cancel) {} } message: { Text(result) }
     }
 }

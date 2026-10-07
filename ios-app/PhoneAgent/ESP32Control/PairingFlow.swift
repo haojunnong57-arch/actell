@@ -11,7 +11,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     private let pairing = RemotePairingSession()
     private let backend = NativeDeveloperServices()
     private let client = NCMProbeClient()
-    private let store = RemotePairRecordStore(url: URL.applicationSupportDirectory.appending(path: "RemotePairing/identity.plist"))
+    private let store: RemotePairRecordStore
     private var service: NetService?
     private var generation = UUID()
     private(set) var controlSessionID = UUID()
@@ -23,6 +23,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     var agentReserved: Bool { !agentRuns.isEmpty || agentOwner != nil }
     private var registeredBackgroundTask = false
     private var mediaStarted = false
+    private let mediaLifetime = ControlMediaLifetime()
     private var job: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
     private var heartbeatEpoch = UUID()
@@ -36,19 +37,40 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     var ready = false
     var hasRecord = false
     var pin: String?
-    var message = "先开始系统配对；已有身份会自动保留"
+    var message = "请先完成系统配对"
     var image: UIImage?
+    private(set) var screenshotData: Data?
     var statusText: String {
         if pairingActive { return message }
         if running { return ready ? "正在处理操作" : "正在连接 ESP32" }
         if ready {
-            if lastFailure != nil { return "点击准备失败，截图仍可用" }
+            if lastFailure != nil { return "最近操作未成功" }
             return image == nil ? "截图与点击可用" : "截图已收到"
         }
-        if hasRecord { return lastFailure == nil ? "已配对，可连接 ESP32" : "连接未成功，请重新连接" }
+        if hasRecord { return lastFailure == nil ? "已配对，可连接 ESP32" : "连接未成功；若已在系统取消授权，请重新配对" }
         return message
     }
-    override init() { super.init(); hasRecord = store.exists }
+    override convenience init() {
+        self.init(store: RemotePairRecordStore(url: URL.applicationSupportDirectory.appending(path: "RemotePairing/identity.plist")))
+    }
+    init(store: RemotePairRecordStore) { self.store = store; super.init(); hasRecord = store.exists }
+
+    /// User explicitly requests new system authorization, even if a local identity remains.
+    func resetPairing() {
+        guard !running, !agentReserved else { return }
+        cancel()
+        do {
+            try store.remove(); hasRecord = false; lastFailure = nil; pin = nil
+            message = "请先完成系统配对"
+        } catch {
+            hasRecord = store.exists; message = "无法清除本地配对身份，请重试"; lastFailure = message
+        }
+    }
+    func pairAgain() {
+        guard !running, !agentReserved else { return }
+        resetPairing()
+        if !hasRecord { startPairing() }
+    }
 
     func registerBackgroundTask() {
         guard !registeredBackgroundTask else { return }
@@ -64,7 +86,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     func startPairing() {
         guard !running else { return }
         hasRecord = store.exists
-        guard !hasRecord else { message = "身份已保留，直接验证 ESP32 连接；无需重新配对"; return }
+        guard !hasRecord else { message = "请连接 ESP32"; return }
         guard registeredBackgroundTask else { message = "系统配对后台任务未注册，请重新打开 App"; return }
         guard #available(iOS 26.0, *) else { message = "系统交互配对需要 iOS 26 或更新版本的持续后台任务"; return }
         generation = UUID(); running = true; pairingActive = true; message = "正在申请配对后台任务，请等待入口就绪"
@@ -99,13 +121,13 @@ enum NCMControlError: Error { case unavailable(String), stopped }
                         self.service = service; service.publish()
                         self.message = "正在发布系统配对入口"
                     case .code(let value): self.pin = value; self.message = "在系统配对页面输入此 PIN"; continued.progress.completedUnitCount = 2
-                    case .persisted(let committed): self.message = committed ? "身份已保存，正在确认配对完成" : "已验证手机身份，正在保存配对"; continued.progress.completedUnitCount = 3
+                    case .persisted(let committed): self.message = committed ? "正在确认配对完成" : "正在完成配对"; continued.progress.completedUnitCount = 3
                     case .completed: self.message = "配对成功。回到 App，点击验证 ESP32 连接"; continued.progress.completedUnitCount = 4
                     }
                 })
                 success = true
-            } catch is CancellationError { guard generation == epoch else { return }; message = "配对已停止；已写入的身份会保留" }
-            catch { guard generation == epoch else { return }; message = "配对未完成。检查本地网络权限和系统配对页面；已写入的身份会保留" }
+            } catch is CancellationError { guard generation == epoch else { return }; message = "配对已停止" }
+            catch { guard generation == epoch else { return }; message = "配对未完成，请检查本地网络权限和系统配对页面" }
         }
     }
     func netServiceDidPublish(_ sender: NetService) {
@@ -122,14 +144,15 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         running = false; pairingActive = false; job = nil; hasRecord = store.exists
     }
     func cancel() {
+        mediaLifetime.revoke()
         operationLease?.complete(success: false); operationLease = nil
         stopHeartbeat()
         generation = UUID(); controlSessionID = UUID(); agentOwner = nil; agentRuns.removeAll(); agentQueue.removeAll()
         job?.cancel(); pairing.close(); service?.stop(); service = nil
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.taskID)
         if pairingActive { finishPairing(success: false) }
-        backend.close(); client.cancel(); ready = false; mediaStarted = false; image = nil; running = false; capturing = false; job = nil
-        message = "已停止；已保存的身份会保留"
+        backend.close(); client.cancel(); ready = false; mediaStarted = false; image = nil; screenshotData = nil; running = false; capturing = false; job = nil
+        message = "已停止"
     }
     func background() {
         isBackground = true
@@ -147,8 +170,9 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         guard !running, !agentReserved, store.exists else { return }
         let previousMaintenance = heartbeatTask
         stopHeartbeat()
+        mediaLifetime.revoke()
         generation = UUID(); controlSessionID = UUID(); let epoch = generation
-        running = true; ready = false; mediaStarted = false; image = nil; lastFailure = nil; backend.close()
+        running = true; ready = false; mediaStarted = false; image = nil; screenshotData = nil; lastFailure = nil; backend.close()
         beginOperationLease(epoch: epoch)
         job = Task { @MainActor in
             defer { if generation == epoch { finishOperationLease(); running = false; job = nil } }
@@ -165,7 +189,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
                 try Task.checkCancellation()
                 guard generation == epoch else { return }
                 guard let endpoint = discovery.endpoints?.first(where: { $0.service == "remotepairing" }) else {
-                    message = "ESP32 未发现手机 RemotePairing 服务。配对身份已保留，下一步需要定位 NCM 服务发现问题"; return
+                    message = "未发现手机服务，请检查 ESP32 连接"; return
                 }
                 message = "正在经 ESP32 验证身份并建立开发者隧道"
                 try await backend.connect(identity: identity, authorization: ExistingSessionAuthorization(verifyExistingIdentity: true, screen: true, screenVideoStream: true, input: true), discovery: discovery, endpoint: endpoint)
@@ -175,18 +199,18 @@ enum NCMControlError: Error { case unavailable(String), stopped }
             } catch { guard generation == epoch else { return }; backend.close(); message = failure(error); lastFailure = message }
         }
     }
+    #if DEBUG
+    func videoDiagnosticKeyframe() async -> Data? { await backend.videoDiagnosticKeyframe() }
+    #endif
     func capture() { operation(capturing: true) {
-        let png = try await self.backend.capturePNG()
+        try await self.prepareAgentInput(self.backend)
+        let png = try await self.backend.captureVideoJPEG()
         try Task.checkCancellation()
         guard let image = UIImage(data: png) else { throw NativeBackendError.malformedEvent }
-        self.image = image; self.message = "已收到手机截图"
+        self.screenshotData = png; self.image = image; self.message = "已收到手机截图"
     } }
     func tapCenter() { operation {
-        if !self.mediaStarted {
-            try await self.backend.startTouchMedia()
-            try Task.checkCancellation()
-            self.mediaStarted = true
-        }
+        try await self.prepareAgentInput(self.backend)
         _ = try await self.backend.tapDelivery(x: 32768, y: 32768)
         try Task.checkCancellation()
         self.message = "已发送屏幕中心点击，请观察手机确认实际效果"
@@ -214,7 +238,11 @@ enum NCMControlError: Error { case unavailable(String), stopped }
                 guard generation == epoch else { return }
                 if case NativeBackendError.touchPreparationFailure = error {
                     mediaStarted = false
-                    message = failure(error) + "。本次未发送点击，截图连接保留"
+                    message = failure(error) + "。本次未发送点击"
+                    lastFailure = message
+                } else if case NativeBackendError.screenshotFailure(let stage, let cause) = error {
+                    BackgroundExecutionTrace.record("screenshot.failed stage=\(stage) cause=\(cause) connectionRetained=true")
+                    message = failure(error)
                     lastFailure = message
                 } else {
                     stopHeartbeat(); ready = false; mediaStarted = false; backend.close()
@@ -251,12 +279,23 @@ enum NCMControlError: Error { case unavailable(String), stopped }
             let value = try await action(backend)
             try Task.checkCancellation()
             guard ready, controlSessionID == session, agentOwner == owner else { throw NCMControlError.stopped }
+            lastFailure = nil
             return value
         } catch {
             guard controlSessionID == session else { throw NCMControlError.stopped }
             if case NativeBackendError.touchPreparationFailure = error {
-                mediaStarted = false; message = failure(error) + "。本次未发送输入，截图连接保留"; lastFailure = message
+                mediaStarted = false; message = failure(error) + "。本次未发送输入"; lastFailure = message
                 throw NCMControlError.unavailable(message)
+            }
+            if case NativeBackendError.screenshotFailure(let stage, let cause) = error {
+                BackgroundExecutionTrace.record("screenshot.failed stage=\(stage) cause=\(cause) connectionRetained=true")
+                message = failure(error)
+                lastFailure = message
+                throw NCMControlError.unavailable(message)
+            }
+            if case NativeBackendError.applicationQueryFailure(let stage, let cause) = error {
+                BackgroundExecutionTrace.record("apps.query.failed stage=\(stage) cause=\(cause)")
+                throw NCMControlError.unavailable("查询已安装 App 失败，请稍后重试")
             }
             if error is CancellationError || (error as? NCMControlError) != nil {
                 cancel(); throw NCMControlError.stopped
@@ -272,12 +311,15 @@ enum NCMControlError: Error { case unavailable(String), stopped }
             try await services.startTouchMedia()
             try Task.checkCancellation()
             mediaStarted = true
+            mediaLifetime.didOpen()
         }
     }
     private func invalidateAgentSession() {
+        mediaLifetime.revoke()
         controlSessionID = UUID(); agentOwner = nil
         agentRuns.removeAll(); agentQueue.removeAll()
     }
+    func mediaLifetimeWait() async { await mediaLifetime.wait() }
     func retainConnection(owner: UUID) { connectionUsers.insert(owner) }
     func releaseConnection(owner: UUID) {
         connectionUsers.remove(owner)
@@ -290,21 +332,52 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         guard controlSessionID == session else { return }
         agentRuns.remove(owner); agentQueue.removeAll { $0 == owner }
         guard agentOwner == owner else {
+            finishControlMediaIfIdle()
             return
         }
-        // Cancellation during an operation revokes transport; normal completion
-        // only releases ownership, retaining the control connection in either scene.
+        // Partial/cancelled operations remain fatal. Completed runs release media
+        // only after the final registered controller finishes; queued runs share it.
         if running { cancel() } else {
             agentOwner = nil
+            finishControlMediaIfIdle()
         }
     }
+    private func finishControlMediaIfIdle() {
+        guard ready, !running, mediaStarted else { return }
+        let session = controlSessionID
+        let accepted = mediaLifetime.finishIfIdle(hasUsers: !agentRuns.isEmpty || agentOwner != nil,
+            stop: { [weak self] in
+                guard let self else { throw CancellationError() }
+                while self.maintenanceBusy {
+                    try await Task.sleep(for: .milliseconds(10))
+                    guard self.controlSessionID == session else { throw CancellationError() }
+                }
+                guard self.controlSessionID == session, self.ready else { throw CancellationError() }
+                try await self.backend.stopTouchMedia()
+            }, completed: { [weak self] success in
+                guard let self, self.controlSessionID == session else { return }
+                self.running = false; self.mediaStarted = false
+                if success {
+                    BackgroundExecutionTrace.record("control.mediaReleased connectionRetained=true")
+                    self.message = "屏幕控制已结束"
+                } else {
+                    self.cancel()
+                    self.message = "屏幕控制结束失败，请重新连接"
+                    self.lastFailure = self.message
+                }
+            })
+        if accepted { running = true }
+    }
+    /// Termination notification is best-effort; synchronous native handle close
+    /// revokes all App-owned transports without waiting for an async stop reply.
+    func applicationWillTerminate() { cancel() }
     private func beginOperationLease(epoch: UUID) {
         finishOperationLease()
         let lease = ExecutionTransitionLease()
         lease.expirationHandler = { [weak self] in
             guard let self, self.generation == epoch else { return }
             self.cancel()
-            self.message = "系统后台执行时间已到期，当前操作已停止；配对身份保留"
+            self.message = "后台执行已到期，操作已停止"
             self.lastFailure = self.message
         }
         lease.begin(); operationLease = lease
@@ -331,7 +404,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
                     self.maintenanceBusy = false
                 } catch {
                     guard self.heartbeatEpoch == epoch else { return }
-                    self.maintenanceBusy = false; self.ready = false; self.mediaStarted = false
+                    self.maintenanceBusy = false; self.ready = false; self.mediaStarted = false; self.running = false
                     self.backend.close(); self.invalidateAgentSession()
                     self.message = "连接保活失败：" + self.failure(error) + "；请重新连接 ESP32"
                     self.lastFailure = self.message
@@ -341,6 +414,10 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         }
     }
     private func failure(_ error: Error) -> String {
+        if case NativeBackendError.screenshotFailure(let stage, let cause) = error {
+            return failure(NativeBackendError.protocolFailure(stage: stage, cause: cause))
+        }
+
         if case NativeBackendError.touchPreparationFailure(let stage, let cause) = error {
             let labels: [UInt32: String] = [10:"视频服务可用性", 11:"触控服务可用性", 13:"视频接收端口", 14:"连接视频服务", 15:"请求视频会话", 16:"解析视频协商回复", 17:"接收有效视频包", 18:"连接触控服务"]
             let reasons: [UInt32: String] = [1:"协议错误", 2:"超时", 3:"参数无效", 4:"服务缺失", 5:"尚未就绪"]
@@ -348,14 +425,15 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         }
         if case NativeBackendError.protocolFailure(let stage, let cause) = error {
             if stage == 19 || stage == 20 {
-                return "截图\(stage == 19 ? "服务连接" : "请求与接收")失败（\(cause == 2 ? "超时" : "协议错误")）；身份已保留"
+                let reasons: [UInt32: String] = [1:"协议错误", 2:"超时", 3:"参数无效", 4:"服务缺失", 5:"尚未就绪", 8:"超时，未收到视频数据", 9:"超时，未收到协商匹配的视频包", 10:"超时，视频包未组成完整帧", 11:"超时，未取得新的视频画面", 12:"超时，视频画面超过接收大小限制"]
+                return "截图\(stage == 19 ? "服务连接" : "请求与接收")失败（\(reasons[cause] ?? "原因 \(cause)")）"
             }
-            let labels: [UInt32: String] = [1:"配对身份", 2:"ESP32 转发连接", 3:"手机身份认证", 4:"动态隧道入口", 5:"隧道 TLS", 6:"远程服务列表", 7:"开发者模式", 8:"开发者镜像", 9:"截图", 10:"屏幕视频会话", 11:"点击发送", 12:"会话关闭"]
+            let labels: [UInt32: String] = [1:"配对身份", 2:"ESP32 转发连接", 3:"手机身份认证", 4:"动态隧道入口", 5:"隧道 TLS", 6:"远程服务列表", 7:"开发者模式", 8:"开发者镜像", 9:"截图", 10:"屏幕视频会话", 11:"输入发送", 12:"会话关闭", 21:"App 服务"]
             let reasons: [UInt32: String] = [1:"协议错误", 2:"超时", 3:"参数无效", 4:"服务缺失", 5:"尚未就绪", 6:"屏幕会话失效", 7:"发送结果未知"]
-            return "\(labels[stage] ?? "协议")失败（\(reasons[cause] ?? "原因 \(cause)")）；身份已保留"
+            return "\(labels[stage] ?? "协议")失败（\(reasons[cause] ?? "原因 \(cause)")）"
         }
-        if error is CancellationError { return "已停止，身份已保留" }
-        return "连接失败，请检查 ESP32 固件、NCM 接口和本地网络权限；身份已保留"
+        if error is CancellationError { return "已停止" }
+        return "连接失败，请检查 ESP32 固件、NCM 接口和本地网络权限"
     }
     #if DEBUG
     private var backgroundProbeStarted = false
@@ -452,7 +530,7 @@ struct PairingSection: View {
     }
     private var showsDetail: Bool {
         (flow.running && !flow.ready) || flow.lastFailure != nil ||
-        (!flow.hasRecord && flow.message != "先开始系统配对；已有身份会自动保留")
+        (!flow.hasRecord && flow.message != "请先完成系统配对")
     }
     var body: some View {
         Section {
@@ -474,11 +552,15 @@ struct PairingSection: View {
                 }
                 Spacer(minLength: 0)
                 HStack(spacing: 8) {
-                    if flow.ready || (!flow.running && !flow.agentReserved) {
-                        Button(flow.ready ? "重新连接" : flow.hasRecord ? "连接" : "配对") {
+                    if !flow.ready && !flow.running && !flow.agentReserved {
+                        Button(flow.hasRecord ? "连接" : "配对") {
                             if flow.hasRecord { flow.verify() }
                             else { flow.startPairing() }
                         }.disabled(flow.running || flow.agentReserved)
+                    }
+                    if !flow.ready && flow.hasRecord && !flow.running && !flow.agentReserved {
+                        Button("重新配对") { flow.pairAgain() }
+                            .accessibilityIdentifier("pairAgain")
                     }
                     if flow.running || flow.ready || flow.agentReserved {
                         Button("停止") { flow.cancel() }
@@ -497,8 +579,16 @@ struct PairingSection: View {
                 Button("点击验证", action: showTouchTest).disabled(flow.running || flow.agentReserved)
             }
             if let image = flow.image {
-                Section("截图") {
+                Section {
                     Image(uiImage: image).resizable().scaledToFit().accessibilityLabel("手机截图")
+                } header: {
+                    HStack {
+                        Text("截图")
+                        Spacer()
+                        if let data = flow.screenshotData {
+                            SaveScreenshotButton(data: data).disabled(flow.capturing)
+                        }
+                    }
                 }
             }
         }

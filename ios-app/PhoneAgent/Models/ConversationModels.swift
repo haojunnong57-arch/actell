@@ -45,8 +45,6 @@ struct ToolStep: Codable, Sendable, Equatable {
     var skillName: String?
     var symbol: String {
         switch name {
-        case "list_skills": return "books.vertical"
-        case "search_skills": return "text.book.closed"
         case "load_skill": return "book.closed"
         default: return "wrench.and.screwdriver"
         }
@@ -56,10 +54,12 @@ struct ToolStep: Codable, Sendable, Equatable {
         case "screenshot": return "查看屏幕"
         case "tap": return "点击"
         case "drag": return "拖动"
-        case "wait": return "等待画面更新"
+        case "home": return "返回主屏幕"
+        case "list_apps": return "查询 App"
+        case "launch_app": return "启动 App"
+        case "type_text": return "输入文本"
+        case "wait": return "等待"
         case "finish": return "结束本轮"
-        case "list_skills": return "查看可用技能"
-        case "search_skills": return "搜索技能"
         case "load_skill": return "加载技能" + (skillName.map { " · " + $0 } ?? "")
         default: return name
         }

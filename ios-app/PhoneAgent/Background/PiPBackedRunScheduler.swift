@@ -1,7 +1,8 @@
 import Foundation
 
-/// Tracks actual AVKit start/stop receipts. A requested or merely visible inline
-/// preview does not qualify. Multiple runners share the one app-level window.
+/// Tracks actual media playback receipts: AVKit PiP or a playing audio loop.
+/// An inline preview or active audio session alone does not qualify.
+/// Multiple runners share the one app-level media source.
 @MainActor final class PiPExecutionActivity {
     static let shared = PiPExecutionActivity()
     private var owners: Set<UUID> = []
@@ -19,7 +20,7 @@ import Foundation
     func removeObserver(_ token: UUID) { observers.removeValue(forKey: token) }
 }
 
-/// System processing and an actually active PiP are independent sources. Losing
+/// System processing and actual selected media playback are independent sources. Losing
 /// one source cannot revoke the whole run while the other remains available.
 @MainActor final class PiPBackedRunScheduler: RunBackgroundScheduler {
     private let primary: any RunBackgroundScheduler
@@ -81,7 +82,7 @@ import Foundation
         deliverIfAvailable()
     }
     func primaryEnded() {
-        BackgroundExecutionTrace.record("execution.systemEnded pip=\(activity.active) delivered=\(delivered)")
+        BackgroundExecutionTrace.record("execution.systemEnded media=\(activity.active) delivered=\(delivered)")
         let old = primary; primary = nil
         old?.expirationHandler = nil; old?.complete(success: false)
         activityChanged()
@@ -104,6 +105,75 @@ import Foundation
         observer = nil
         let old = primary; primary = nil
         old?.expirationHandler = nil; old?.complete(success: success)
+    }
+}
+
+/// Media-only execution: no BGTaskScheduler request and no UIApplication
+/// background task. The foreground lease allows at most five seconds for AVKit
+/// to start during scene transition; dispatch waits for actual playback.
+@MainActor final class MediaOnlyRunScheduler: RunBackgroundScheduler {
+    private let activity: PiPExecutionActivity
+    private let handoffSeconds: Double
+    private var foreground = true
+    private var leases: [String: MediaOnlyRunLease] = [:]
+    init(activity: PiPExecutionActivity = .shared, handoffSeconds: Double = 5) {
+        self.activity = activity; self.handoffSeconds = handoffSeconds
+    }
+    func setForeground(_ active: Bool) {
+        foreground = active
+        for lease in Array(leases.values) { lease.setForeground(active) }
+    }
+    func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void) throws {
+        leases.removeValue(forKey: identifier)?.complete(success: false)
+        let lease = MediaOnlyRunLease(activity: activity, foreground: foreground, handoffSeconds: handoffSeconds)
+        leases[identifier] = lease
+        launched(lease)
+        lease.setForeground(foreground)
+        BackgroundExecutionTrace.record("execution.mediaOnly registered=true ready=\(lease.backgroundReady)")
+    }
+    func cancel(identifier: String) { leases.removeValue(forKey: identifier)?.complete(success: false) }
+}
+
+@MainActor private final class MediaOnlyRunLease: RunBackgroundLease {
+    var expirationHandler: (() -> Void)?
+    var backgroundReady: Bool { !completed && activity.active }
+    private let activity: PiPExecutionActivity
+    private let handoffSeconds: Double
+    private var foreground: Bool
+    private var completed = false
+    private var observer: UUID?
+    private var handoff: Task<Void, Never>?
+    init(activity: PiPExecutionActivity, foreground: Bool, handoffSeconds: Double) {
+        self.activity = activity; self.foreground = foreground; self.handoffSeconds = handoffSeconds
+        observer = activity.observe { [weak self] active in
+            guard let self, !self.completed else { return }
+            if active { self.handoff?.cancel(); self.handoff = nil }
+            else if !self.foreground { self.expire() }
+        }
+    }
+    func setForeground(_ active: Bool) {
+        guard !completed else { return }
+        foreground = active
+        handoff?.cancel(); handoff = nil
+        guard !active, !backgroundReady else { return }
+        handoff = Task { [weak self, handoffSeconds] in
+            do { try await Task.sleep(for: .seconds(handoffSeconds)) } catch { return }
+            guard let self, !self.foreground, !self.backgroundReady else { return }
+            self.expire()
+        }
+    }
+    private func expire() {
+        guard !completed else { return }
+        BackgroundExecutionTrace.record("execution.mediaOnly ended=true")
+        let handler = expirationHandler
+        complete(success: false); handler?()
+    }
+    func report(completed: Int, subtitle: String) {} // Progress is owned by our Live Activity.
+    func complete(success: Bool) {
+        guard !completed else { return }
+        completed = true; expirationHandler = nil
+        handoff?.cancel(); handoff = nil
+        if let observer { activity.removeObserver(observer) }; observer = nil
     }
 }
 

@@ -83,6 +83,9 @@ def generate():
             ref = add("Licenses", "PBXFileReference", lastKnownFileType="folder", path="Licenses", sourceTree="SOURCE_ROOT")
             children.append(ref)
             resources.append(add("LicensesBuild", "PBXBuildFile", fileRef=ref))
+            ref = add("BuiltinSkills", "PBXFileReference", lastKnownFileType="folder", path="PhoneAgent/BuiltinSkills", sourceTree="SOURCE_ROOT")
+            children.append(ref)
+            resources.append(add("BuiltinSkillsBuild", "PBXBuildFile", fileRef=ref))
         group = add(name + "Group", "PBXGroup", name=name, children=children, sourceTree="<group>")
         groups.append(group)
         product = add(name + "Product", "PBXFileReference", explicitFileType="wrapper.application" if extension == "app" else "wrapper.cfbundle",

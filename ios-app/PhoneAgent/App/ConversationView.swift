@@ -55,14 +55,14 @@ struct ConversationView: View {
                                 } else if session.messages.isEmpty { welcome(session.mode) }
                                 ForEach(session.messages) { message in
                                     messageView(message).id(message.id)
-                                        .onScrollVisibilityChange(threshold: 0.01) { visible in
-                                            guard message.id == session.messages.last?.id else { return }
-                                            lastMessageVisible = visible
-                                            if userScrolling { followLatest = visible }
-                                        }
+
                                 }
                                 if running && presentation.pendingApproval == nil { HStack(spacing: 8) { ProgressView().controlSize(.small); Text(presentation.status).font(.caption).foregroundStyle(.secondary) } }
                                 Color.clear.frame(height: 1).id("latest")
+                                    .onScrollVisibilityChange(threshold: 0.01) { visible in
+                                        lastMessageVisible = visible
+                                        if userScrolling { followLatest = visible }
+                                    }
                             }.padding(.horizontal, 20).padding(.vertical, 12).frame(maxWidth: 780).frame(maxWidth: .infinity)
                         }
                         .accessibilityIdentifier("conversationMessages")
@@ -74,7 +74,7 @@ struct ConversationView: View {
                         .scrollPosition($scrollPosition, anchor: .top)
                         .onScrollPhaseChange { old, phase, context in
                             userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
-                            if phase == .idle && (old == .tracking || old == .interacting || old == .decelerating) {
+                            if phase == .idle && (old == .interacting || old == .decelerating) {
                                 followLatest = lastMessageVisible || session.messages.isEmpty
                                 if deferredViewportShift != 0 {
                                     let geometry = context.geometry
@@ -134,6 +134,9 @@ struct ConversationView: View {
                 .onChange(of: draft) { _, text in presentation.saveDraft(text) }
             } else { ContentUnavailableView("会话已删除", systemImage: "bubble.left") }
         }
+        .environment(\.conversationDisclosureChanged, {
+            followLatest = false
+        })
     }
     private var modelPicker: some View {
         Menu {
@@ -287,14 +290,15 @@ struct ConversationView: View {
     }
     @ViewBuilder private func toolPreview(_ item: ToolPresentation) -> some View {
         if !item.attachments.isEmpty, item.approval == nil {
-            DisclosureGroup {
+            ConversationDisclosureGroup {
                 ForEach(item.attachments) { attachment in
                     AttachmentThumbnail(attachment: attachment, store: presentation.attachments, conversationID: presentation.sessionID)
                 }
             } label: { Text("查看本地截图").accessibilityIdentifier("toolScreenshot-result") }
                 .font(.footnote).tint(.secondary)
         } else if let image = item.image, let uiImage = UIImage(data: image.png) {
-            DisclosureGroup {
+            ConversationDisclosureGroup {
+                HStack { Spacer(); SaveScreenshotButton(data: image.png) }
                 Image(uiImage: uiImage).resizable().scaledToFit().frame(maxHeight: 280)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .accessibilityLabel(image.isDemo ? "演示合成屏幕，不是真机截图" : "当前步骤的设备截图")

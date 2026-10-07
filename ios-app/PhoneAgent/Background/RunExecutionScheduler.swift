@@ -7,17 +7,22 @@ import Foundation
     private let continued: any RunBackgroundScheduler
     private let continuedWithPiP: any RunBackgroundScheduler
     private let foregroundOnly = ForegroundOnlyScheduler()
+    private let mediaOnly: MediaOnlyRunScheduler
     private var selected: any RunBackgroundScheduler
     private var owners: [String: any RunBackgroundScheduler] = [:]
-    init(continued: any RunBackgroundScheduler = ContinuedProcessingScheduler()) {
+    init(continued: any RunBackgroundScheduler = ContinuedProcessingScheduler(), activity: PiPExecutionActivity = .shared) {
+        mediaOnly = MediaOnlyRunScheduler(activity: activity)
         self.continued = continued
         continuedWithPiP = PiPBackedRunScheduler(primary: continued)
         selected = ForegroundOnlyScheduler()
     }
-    func configure(context: ScreenUSBExecutionContext?, allowSystemProcessing: Bool) {
+    func configure(context: ScreenUSBExecutionContext?, allowSystemProcessing: Bool, useSystemProcessing: Bool = false) {
         screen.context = context
         if let context { selected = context.backgroundEnabled ? screen : foregroundOnly }
-        else { selected = allowSystemProcessing ? continuedWithPiP : foregroundOnly }
+        else { selected = allowSystemProcessing ? (useSystemProcessing ? continuedWithPiP : mediaOnly) : foregroundOnly }
+    }
+    func setForeground(_ active: Bool) {
+        mediaOnly.setForeground(active)
     }
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void) throws {
         try submit(identifier: identifier, launched: launched, failed: {})

@@ -112,7 +112,7 @@ pub const SCREEN_FLS: &[u8] = b"FLS;VRAE:0;SW:1;";
 /// So we're using a different on than Device Hub, but this seems to stop screen tearing,
 /// so we'll use this one instead.
 pub const SCREEN_HEVC_FLS: &str =
-    "FLS;MS:-1;LF:-1;LTR;CABAC;POS:0;EOD:1;HTS:2;RR:3;AR:16/9,5/8;XR:16/9,5/8;";
+    "FLS;MS:-1;LF:-1;LTR;CABAC;POS:0;EOD:1;HTS:2;RR:3;AR:16/9,5/8;XR:16/9,5/8;SW:1;";
 
 pub const NEGOTIATOR_MODE_COREDEVICE_SCREEN: i64 = 5;
 pub const NEGOTIATOR_MODE_COREDEVICE_AUDIO: i64 = 6;

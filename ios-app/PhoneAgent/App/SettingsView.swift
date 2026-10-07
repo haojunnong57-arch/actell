@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var model: AgentViewModel
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(BackgroundPlaybackMode.defaultsKey) private var backgroundMode = BackgroundPlaybackMode.defaultMode.rawValue
     @State private var clear = false
     @State private var clearAssets = false
     @State private var assetStatus = ""
@@ -18,6 +19,11 @@ struct SettingsView: View {
                     NavigationLink { ESP32ControlSettingsView() } label: {
                         Text("ESP32 控制")
                     }.accessibilityIdentifier("esp32ControlSettings")
+                }
+                Section("后台执行") {
+                    Picker("执行模式", selection: $backgroundMode) {
+                        ForEach(BackgroundPlaybackMode.allCases) { mode in Text(mode.title).tag(mode.rawValue) }
+                    }.accessibilityIdentifier("backgroundPlaybackMode")
                 }
                 Section("扩展能力") {
                     NavigationLink { SkillsView(model: model, store: model.skills) } label: {

@@ -226,11 +226,11 @@ struct SkillFixtureProvider: LLMProvider {
     private func response(_ request: LLMRequest) throws -> LLMResponse {
         let results = request.messages.filter { $0.role == .tool }
         let call: LLMToolCall
-        if results.isEmpty { call = .init(id: "fixture-skill-list", name: "list_skills", arguments: "{}") }
-        else if results.count == 1 {
-            guard let start = results[0].content.firstIndex(of: "{"),
-                  let object = try JSONSerialization.jsonObject(with: Data(results[0].content[start...].utf8)) as? [String: Any],
-                  let skill = (object["skills"] as? [[String: String]])?.first,
+        if results.isEmpty {
+            let system = request.messages.filter { $0.role == .system }.map(\.content).joined(separator: "\n")
+            guard let metadata = system.components(separatedBy: "\n").first(where: { $0.hasPrefix("[{") }),
+                  let skills = try JSONSerialization.jsonObject(with: Data(metadata.utf8)) as? [[String: String]],
+                  let skill = skills.first(where: { $0["name"] == "Synthetic Guide" }) ?? skills.first,
                   let id = skill["id"], let revision = skill["revision"] else { throw AppError.invalid("合成夹具未找到已启用技能") }
             call = .init(id: "fixture-skill-load", name: "load_skill", arguments: String(decoding: try JSONEncoder().encode(["id": id, "revision": revision]), as: UTF8.self))
         } else {

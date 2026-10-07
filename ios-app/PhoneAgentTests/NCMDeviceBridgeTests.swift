@@ -1,13 +1,24 @@
 import XCTest
+import ImageIO
+import CoreImage
+import CoreVideo
 import UIKit
 import LLMProviderKit
 @testable import PhoneAgent
 
 @MainActor private final class NCMConnectionSpy: NCMControlConnection {
     var ready = true
+    var connectionFailure: String?
+    var holdRelease = false
+    var releaseGate: CheckedContinuation<Void, Never>?
+    func awaitControlRelease() async {
+        if holdRelease { await withCheckedContinuation { releaseGate = $0 } }
+    }
     var running = false
     var agentReserved = false
     var controlSessionID = UUID()
+    var systemActions: [String] = []
+    var appQueries = 0
     var taps = 0
     var drags: [UInt16] = []
     var releases = 0
@@ -16,6 +27,13 @@ import LLMProviderKit
     var png: Data = UIGraphicsImageRenderer(size: CGSize(width: 10, height: 20), format: {
         let format = UIGraphicsImageRendererFormat(); format.scale = 1; return format
     }()).pngData { context in UIColor.blue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 10, height: 20)) }
+    func agentApplications(owner: UUID, session: UUID) async throws -> Data {
+        appQueries += 1
+        return Data("[{\"name\":\"Fixture\",\"bundle_id\":\"example.fixture\"}]".utf8)
+    }
+    func agentSystemAction(owner: UUID, session: UUID, name: String, text: String, arguments: [String], validate: () throws -> Void) async throws {
+        try validate(); systemActions.append(name)
+    }
     func registerAgent(owner: UUID, session: UUID) { reservations += 1 }
     func agentCapture(owner: UUID, session: UUID) async throws -> Data { captures += 1; return png }
     func agentTap(owner: UUID, session: UUID, x: UInt16, y: UInt16, validate: () throws -> Void) async throws { try validate(); taps += 1 }
@@ -35,6 +53,315 @@ import LLMProviderKit
 }
 
 @MainActor final class NCMDeviceBridgeTests: XCTestCase {
+    @MainActor func testPredictiveVideoFrameUpdatesScreenshotWithoutInputOrNewKeyframe() async throws {
+        // Synthetic green IDR followed by blue P-frame, encoded with libx265.
+        var first = Data(base64Encoded: "AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAQAAAEAAAABgAAAAGAAAACkAAAAHAAAAGwAAAEABDAH//wFgAAADAJAAAAMAAAMAHpKAkEIBAQFgAAADAJAAAAMAAAMAHqAggYWWSpJMrwFoCAAAAwAIAAADAAhARAHBcrQiQAAAABcoAa8TgOUyUf/ySo/+t9X+gGtACCMdhw==")!
+        let second = Data(base64Encoded: "AgAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAACQXwEAAAAAAEAAAABgAAAAGAAAACkAAAAHAAAAIAAAAEABDAH//wFgAAADAJAAAAMAAAMAHpKAkEIBAQFgAAADAJAAAAMAAAMAHqAggYWWSpJMrwFoCAAAAwAIAAADAAhARAHBcrQiQAAAABwCAdAJfik2BHDwBOmDhifhmQd71Nsf/55oTwLA")!
+        let original = try NCMVideoSample(first)
+        let nalOffset = 64 + original.parameters.reduce(0) { $0 + $1.count }
+        first[nalOffset + 3] += 14
+        first.append(contentsOf: [0,64,0,96,0,0,3,0,0,0,62,0,94,3])
+        var size = UInt32(original.bytes.count + 14).littleEndian
+        withUnsafeBytes(of: &size) { first.replaceSubrange(60..<64, with: $0) }
+        XCTAssertFalse(try NCMVideoSample(second).sync)
+        let decoder = NCMVideoDecoder()
+        try await decoder.consume(first)
+        let initial = try await decoder.jpeg(notBefore: .now.advanced(by: .seconds(-1)))
+        let green = try XCTUnwrap(initial)
+        try await Task.sleep(for: .milliseconds(1100))
+        try await decoder.consume(second)
+        let updated = try await decoder.jpeg(notBefore: NCMVideoFreshness().minimumReceipt(at: .now))
+        let blue = try XCTUnwrap(updated)
+        XCTAssertNotEqual(green, blue, "A P-frame must update the screenshot without input or another keyframe")
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(blue as CFData, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(image.width,62); XCTAssertEqual(image.height,94, "Content geometry persists when later P-frames omit the trailer")
+    }
+    func testDisplayServiceTrailerDeclaresCanvasAndContentWithoutExternalScreenSize() throws {
+        func picture(_ suffix: [UInt8]) -> Data {
+            let nal: [UInt8] = [0x26, 1, 0xaa, 0xbb] + suffix
+            let n = UInt32(nal.count).bigEndian
+            var data = withUnsafeBytes(of: n) { Data($0) }; data.append(contentsOf: nal); return data
+        }
+        // Existing captured upstream fixture, previously hardcoded as a suffix to discard.
+        let observed: [UInt8] = [0x04,0xf0,0x0a,0xc0,0,0,3,0,0,0x04,0xec,0x0a,0xb0,3]
+        let parsed = try NCMDisplayPicture(picture(observed), codedWidth: 1264, codedHeight: 2752)
+        XCTAssertEqual(parsed.visibleWidth,1260); XCTAssertEqual(parsed.visibleHeight,2736)
+        XCTAssertEqual(parsed.bytes, Data([0,0,0,4,0x26,1,0xaa,0xbb]))
+        let phone: [UInt8] = [0x04,0xa0,0x0a,0x10,0,0,3,0,0,0x04,0x9b,0x09,0xfc,3]
+        let current = try NCMDisplayPicture(picture(phone), codedWidth: 1184, codedHeight: 2576)
+        XCTAssertEqual(current.visibleWidth,1179); XCTAssertEqual(current.visibleHeight,2556)
+        // A coincidental suffix from another canvas must remain untouched.
+        let mismatch = try NCMDisplayPicture(picture(phone), codedWidth: 1280, codedHeight: 2592)
+        XCTAssertNil(mismatch.visibleWidth); XCTAssertEqual(mismatch.bytes, picture(phone))
+        var unknown = phone; unknown[4] = 1
+        XCTAssertNil(try NCMDisplayPicture(picture(unknown), codedWidth: 1184, codedHeight: 2576).visibleWidth)
+        XCTAssertThrowsError(try NCMDisplayPicture(Data([0,0,0,20,1]), codedWidth:1184, codedHeight:2576))
+    }
+    func testPreferredApertureOverridesFullFrameAndKeepsOffsets() throws {
+        var optional: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(kCFAllocatorDefault, 128, 128, kCVPixelFormatType_32BGRA,
+            nil, &optional), kCVReturnSuccess)
+        let buffer = try XCTUnwrap(optional)
+        let aperture = [kCVImageBufferCleanApertureWidthKey: 66,
+                        kCVImageBufferCleanApertureHeightKey: 98,
+                        kCVImageBufferCleanApertureHorizontalOffsetKey: -15,
+                        kCVImageBufferCleanApertureVerticalOffsetKey: -9] as CFDictionary
+        // Confirm offset interpretation against CoreVideo itself, then provide
+        // only PreferredCleanAperture (ordinary clean rect remains full size).
+        CVBufferSetAttachment(buffer, kCVImageBufferCleanApertureKey, aperture, .shouldPropagate)
+        let expected = CVImageBufferGetCleanRect(buffer)
+        XCTAssertEqual(expected, CGRect(x: 16, y: 24, width: 66, height: 98))
+        CVBufferRemoveAttachment(buffer, kCVImageBufferCleanApertureKey)
+        CVBufferSetAttachment(buffer, kCVImageBufferPreferredCleanApertureKey, aperture, .shouldPropagate)
+        XCTAssertEqual(CVImageBufferGetCleanRect(buffer), CGRect(x: 0, y: 0, width: 128, height: 128))
+        XCTAssertEqual(try NCMVideoImage.visibleRect(buffer: buffer, width: 128, height: 128,
+            formatAperture: CGRect(x: 0, y: 0, width: 128, height: 128)), expected)
+        // Invalid preferred geometry must never crop arbitrary pixels.
+        CVBufferSetAttachment(buffer, kCVImageBufferPreferredCleanApertureKey,
+            [kCVImageBufferCleanApertureWidthKey: 999, kCVImageBufferCleanApertureHeightKey: 98] as CFDictionary, .shouldPropagate)
+        XCTAssertEqual(try NCMVideoImage.visibleRect(buffer: buffer, width: 128, height: 128),
+            CGRect(x: 0, y: 0, width: 128, height: 128))
+    }
+    func testScreenshotCropsAlignedPaddingAndProducesOpaqueJPEG() throws {
+        var optional: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(kCFAllocatorDefault, 128, 128, kCVPixelFormatType_32BGRA,
+            [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &optional), kCVReturnSuccess)
+        let buffer = try XCTUnwrap(optional)
+        let context = CIContext()
+        let visible = CGRect(x: 0, y: 30, width: 66, height: 98)
+        let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0)).cropped(to: CGRect(x: 0, y: 0, width: 128, height: 128))
+        let green = CIImage(color: CIColor(red: 0, green: 1, blue: 0)).cropped(to: visible)
+        context.render(green.composited(over: black), to: buffer)
+        let rect = try NCMVideoImage.visibleRect(buffer: buffer, width: 66, height: 98)
+        XCTAssertEqual(rect, visible)
+        let jpeg = try NCMVideoImage.jpeg(buffer: buffer, rect: rect, context: context)
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(jpeg as CFData, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(image.width, 66); XCTAssertEqual(image.height, 98)
+        // All four corners must be actual picture pixels, not right/bottom allocation padding.
+        var rgba = [UInt8](repeating: 0, count: 66 * 98 * 4)
+        try rgba.withUnsafeMutableBytes { bytes in
+            let bitmap = try XCTUnwrap(CGContext(data: bytes.baseAddress, width: 66, height: 98,
+                bitsPerComponent: 8, bytesPerRow: 66 * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            bitmap.draw(image, in: CGRect(x: 0, y: 0, width: 66, height: 98))
+        }
+        for pixel in [0, 65, 97 * 66, 98 * 66 - 1] {
+            XCTAssertGreaterThan(rgba[pixel * 4 + 1], 240)
+            XCTAssertEqual(rgba[pixel * 4 + 3], 255)
+        }
+        XCTAssertThrowsError(try NCMVideoImage.visibleRect(buffer: buffer, width: 129, height: 98))
+    }
+    func testScreenshotRespectsDeclaredApertureOffset() throws {
+        var optional: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(kCFAllocatorDefault, 128, 128, kCVPixelFormatType_32BGRA,
+            nil, &optional), kCVReturnSuccess)
+        let buffer = try XCTUnwrap(optional)
+        let rect = try NCMVideoImage.visibleRect(buffer: buffer, width: 66, height: 98,
+            formatAperture: CGRect(x: 16, y: 6, width: 66, height: 98))
+        XCTAssertEqual(rect, CGRect(x: 16, y: 24, width: 66, height: 98))
+    }
+    func testScreenshotTimeoutReasonDistinguishesTransportAssemblyAndFreshness() {
+        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 0, rtp: 0, frames: 0, overflows: 0), 8)
+        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 0, frames: 0, overflows: 0), 9)
+        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 4, frames: 0, overflows: 0), 10)
+        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 0), 11)
+        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 1), 12)
+        XCTAssertEqual(NCMVideoFreshness.timeoutCause(datagrams: 4, rtp: 4, frames: 1, overflows: 1, initialOverflows: 1), 11, "Historical overload must not label a later screenshot failure")
+    }
+    @MainActor func testVideoSnapshotFreshnessIsIndependentOfInputHistory() async throws {
+        let bytes = Data(base64Encoded: "AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAACQXwEAAQAAAEAAAABgAAAAGAAAACkAAAAHAAAAGgAAAEABDAH//wFgAAADAJAAAAMAAAMAHpWYCUIBAQFgAAADAJAAAAMAAAMAHqAggYWWVmkkyvAWgIAAAAMAgAAAAwCERAHBcrQiQAAAABYoAa8TgOUyUf/aKP+n1f6Aa0AIIx2H")!
+        let decoder = NCMVideoDecoder()
+        try await decoder.consume(bytes)
+        let freshness = NCMVideoFreshness()
+        let recent = try await decoder.jpeg(notBefore: freshness.minimumReceipt(at: .now))
+        XCTAssertNotNil(recent, "A recent complete frame need not arrive after the screenshot call")
+        let repeated = try await decoder.jpeg(notBefore: freshness.minimumReceipt(at: .now))
+        XCTAssertNotNil(repeated, "Video snapshots must not depend on any input event")
+        let stale = try await decoder.jpeg(notBefore: NCMVideoFreshness().minimumReceipt(at: .now.advanced(by: .seconds(2))))
+        XCTAssertNil(stale, "Old idle frames must not be returned as current screenshots")
+    }
+    @MainActor func testHEVCConformanceCropProducesExactVisibleScreenshotDimensions() async throws {
+        let decoder = NCMVideoDecoder()
+        let began = ContinuousClock.now
+        try await decoder.consume(Data(base64Encoded: "AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAACQXwEAAQAAAEIAAABiAAAAGAAAACsAAAAHAAAAJwAAAEABDAH//wFgAAADAJAAAAMAAAMAHpWYCUIBAQFgAAADAJAAAAMAAAMAHqAkgackmWVmkkyvAWgIAAADAAgAAAMACEBEAcFytCJAAAAAIygBrxOA5TJR//JKj/631f6Aa0AIRUTVT4gVgwAAAwAHGETA")!)
+        let output = try await decoder.jpeg(notBefore: began)
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(try XCTUnwrap(output) as CFData, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(image.width, 66); XCTAssertEqual(image.height, 98)
+    }
+    func testHEVCDecodeProducesJPEGAndResetRejectsPreviousFrame() async throws {
+        // Synthetic 64x96 green frame, generated with FFmpeg/libx265; no device pixels.
+        let bytes = Data(base64Encoded: "AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAACQXwEAAQAAAEAAAABgAAAAGAAAACkAAAAHAAAAGgAAAEABDAH//wFgAAADAJAAAAMAAAMAHpWYCUIBAQFgAAADAJAAAAMAAAMAHqAggYWWVmkkyvAWgIAAAAMAgAAAAwCERAHBcrQiQAAAABYoAa8TgOUyUf/aKP+n1f6Aa0AIIx2H")!
+        let sample = try NCMVideoSample(bytes)
+        XCTAssertEqual(sample.width, 64); XCTAssertEqual(sample.height, 96)
+        XCTAssertTrue(sample.sync)
+        let decoder = NCMVideoDecoder()
+        let began = ContinuousClock.now
+        try await decoder.consume(bytes)
+        let output = try await decoder.jpeg(notBefore: began)
+        let jpeg = try XCTUnwrap(output)
+        XCTAssertTrue(jpeg.starts(with: [0xff, 0xd8, 0xff]))
+        XCTAssertEqual(FrameImage(id: "video", png: jpeg, width: 64, height: 96, capturedAt: Date(), isDemo: false).mimeType, "image/jpeg")
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(jpeg as CFData, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(image.width, 64); XCTAssertEqual(image.height, 96)
+        let future = try await decoder.jpeg(notBefore: ContinuousClock.now)
+        XCTAssertNil(future, "a previous frame must not satisfy a later screenshot")
+        await decoder.reset()
+        let cleared = try await decoder.jpeg(notBefore: began)
+        XCTAssertNil(cleared)
+        var malformed = bytes; malformed.removeLast()
+        XCTAssertThrowsError(try NCMVideoSample(malformed))
+    }
+    func testExplicitPairingResetClearsStoredIdentityAndRevokesConnection() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = RemotePairRecordStore(url: directory.appending(path: "identity.plist"))
+        // Even an invalid/stale local record must have a recovery path.
+        try Data("stale-fixture".utf8).write(to: store.url)
+        let flow = PairingFlow(store: store)
+        XCTAssertTrue(flow.hasRecord)
+        flow.ready = true; flow.lastFailure = "fixture failure"
+        let session = flow.controlSessionID
+        flow.running = true; flow.resetPairing()
+        XCTAssertTrue(store.exists, "Never reset during an operation")
+        flow.running = false; flow.resetPairing()
+        XCTAssertFalse(store.exists); XCTAssertFalse(flow.hasRecord); XCTAssertFalse(flow.ready)
+        XCTAssertNil(flow.lastFailure); XCTAssertNotEqual(session, flow.controlSessionID)
+        flow.resetPairing() // idempotent, idle and no network request
+        XCTAssertFalse(flow.running)
+    }
+    func testBridgeCompletionWaitsForOwnedMediaCleanupBeforeReturning() async throws {
+        let connection = NCMConnectionSpy(), bridge = try NCMDeviceBridge(flow: connection)
+        _ = try await bridge.screenshot()
+        connection.holdRelease = true
+        var completed = false
+        let stop = Task { await bridge.stop(); completed = true }
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(connection.releases, 1)
+        XCTAssertFalse(completed)
+        XCTAssertNotNil(connection.releaseGate)
+        connection.releaseGate?.resume()
+        await stop.value
+        XCTAssertTrue(completed)
+        XCTAssertTrue(connection.ready)
+        // A normal chat bridge never acquired device control and must not wait
+        // for cleanup owned by a different control run.
+        connection.releaseGate = nil
+        let chat = try NCMDeviceBridge(flow: connection)
+        completed = false
+        let chatStop = Task { await chat.stop(); completed = true }
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertTrue(completed)
+        connection.releaseGate?.resume()
+        await chatStop.value
+    }
+    func testControlMediaCleanupWaitsForLastOwnerAndCannotCompleteIntoNewGeneration() async {
+        let lifetime = ControlMediaLifetime()
+        lifetime.didOpen()
+        var stops = 0, completions = 0
+        var receipt: CheckedContinuation<Void, Never>?
+        XCTAssertFalse(lifetime.finishIfIdle(hasUsers: true, stop: { stops += 1 }, completed: { _ in completions += 1 }))
+        XCTAssertTrue(lifetime.active)
+        XCTAssertTrue(lifetime.finishIfIdle(hasUsers: false, stop: {
+            stops += 1
+            await withCheckedContinuation { receipt = $0 }
+        }, completed: { _ in completions += 1 }))
+        XCTAssertFalse(lifetime.finishIfIdle(hasUsers: false, stop: { stops += 1 }, completed: { _ in completions += 1 }))
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(stops, 1); XCTAssertTrue(lifetime.stopping)
+        lifetime.revoke(); lifetime.didOpen()
+        receipt?.resume()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertTrue(lifetime.active)
+        XCTAssertFalse(lifetime.stopping)
+        XCTAssertEqual(completions, 0, "old cleanup must not alter a newer control session")
+        XCTAssertTrue(lifetime.finishIfIdle(hasUsers: false, stop: {}, completed: { success in
+            XCTAssertTrue(success); completions += 1
+        }))
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(lifetime.active); XCTAssertEqual(completions, 1)
+    }
+    func testControlMediaCleanupFailureIsReportedAndTerminationRevokesAllOwners() async {
+        let lifetime = ControlMediaLifetime()
+        lifetime.didOpen()
+        var result: Bool?
+        XCTAssertTrue(lifetime.finishIfIdle(hasUsers: false, stop: { throw NativeBackendError.closed }, completed: { result = $0 }))
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(result, false); XCTAssertFalse(lifetime.active)
+        let flow = PairingFlow(), owner = UUID()
+        flow.ready = true
+        let session = flow.controlSessionID
+        flow.registerAgent(owner: owner, session: session)
+        flow.background()
+        XCTAssertTrue(flow.ready)
+        flow.applicationWillTerminate()
+        XCTAssertFalse(flow.ready); XCTAssertFalse(flow.agentReserved)
+        XCTAssertNotEqual(flow.controlSessionID, session)
+    }
+    func testScreenshotFailureRetainsFlowGenerationButUncertainInputRevokesIt() async throws {
+        let flow = PairingFlow(), owner = UUID()
+        flow.ready = true
+        let session = flow.controlSessionID
+        flow.registerAgent(owner: owner, session: session)
+        do {
+            let _: Void = try await flow.agentOperation(owner: owner, session: session) { _ in
+                throw NativeBackendError.screenshotFailure(stage: 19, cause: 1)
+            }
+            XCTFail("expected screenshot failure")
+        } catch {}
+        XCTAssertTrue(flow.ready)
+        XCTAssertEqual(flow.controlSessionID, session)
+        XCTAssertFalse(flow.running)
+        XCTAssertTrue(flow.lastFailure?.contains("截图服务连接失败") == true)
+        let value = try await flow.agentOperation(owner: owner, session: session) { _ in 42 }
+        XCTAssertEqual(value, 42)
+        XCTAssertNil(flow.lastFailure)
+        do {
+            let _: Void = try await flow.agentOperation(owner: owner, session: session) { _ in
+                throw NativeBackendError.protocolFailure(stage: 11, cause: 7)
+            }
+            XCTFail("expected uncertain input")
+        } catch {}
+        XCTAssertFalse(flow.ready)
+        XCTAssertNotEqual(flow.controlSessionID, session)
+        XCTAssertTrue(flow.lastFailure?.contains("发送结果未知") == true)
+    }
+    func testDisconnectedToolPreservesSpecificConnectionFailure() async throws {
+        let connection = NCMConnectionSpy()
+        connection.ready = false
+        connection.connectionFailure = "连接保活失败：隧道已关闭"
+        let bridge = try NCMDeviceBridge(flow: connection)
+        do { _ = try await bridge.screenshot(); XCTFail("disconnected") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("连接保活失败：隧道已关闭")) }
+        XCTAssertEqual(connection.captures, 0)
+        await bridge.stop()
+    }
+    func testApplicationQueryNeedsNoFrameButStopAndReconnectStillFenceIt() async throws {
+        let connection = NCMConnectionSpy(), bridge = try NCMDeviceBridge(flow: connection)
+        _ = try await bridge.installedApplications()
+        XCTAssertEqual(connection.appQueries, 1)
+        connection.controlSessionID = UUID()
+        do { _ = try await bridge.installedApplications(); XCTFail("reconnected query") } catch {}
+        XCTAssertEqual(connection.appQueries, 1)
+        await bridge.stop()
+    }
+    func testNewActionsRequireApprovalConsumeImageAndCannotReplay() async throws {
+        for name in ["home", "launch_app", "type_text"] {
+            let connection = NCMConnectionSpy(), bridge = try NCMDeviceBridge(flow: connection)
+            let frame = try await bridge.screenshot()
+            do { try await bridge.systemAction(name: name, text: "example.fixture", arguments: [], imageID: frame.id); XCTFail("unapproved action") } catch {}
+            XCTAssertTrue(connection.systemActions.isEmpty)
+            try await bridge.acceptApproval(imageID: frame.id)
+            try await bridge.systemAction(name: name, text: "example.fixture", arguments: [], imageID: frame.id)
+            do { try await bridge.systemAction(name: name, text: "example.fixture", arguments: [], imageID: frame.id); XCTFail("replay") } catch {}
+            XCTAssertEqual(connection.systemActions, [name])
+            await bridge.stop()
+        }
+    }
     func testBackgroundKeepsIdleAuthenticatedSession() {
         let flow = PairingFlow()
         flow.ready = true

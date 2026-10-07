@@ -47,6 +47,38 @@ impl<R: ReadWrite> CoreDeviceServiceClient<R> {
         Ok(Self { inner: client })
     }
 
+    /// Bounded collection of CoreDevice protocol-v2 side-channel batches.
+    /// Caller supplies an overall deadline; malformed/error streams fail closed.
+    pub async fn stream_with_plist(&mut self, feature: &str, input: plist::Dictionary) -> Result<plist::Value, IdeviceError> {
+        let mut proxy = xpc::Dictionary::new();
+        proxy.insert("sideChannel".into(), XPCObject::Uuid(uuid::Uuid::new_v4()));
+        let mut wrapped = xpc::Dictionary::new();
+        wrapped.insert("actualInput".into(), plist::Value::Dictionary(input).into());
+        wrapped.insert("streamProxy".into(), proxy.into());
+        let mut req = xpc::Dictionary::new();
+        req.insert("CoreDevice.CoreDeviceDDIProtocolVersion".into(), XPCObject::Int64(2));
+        req.insert("CoreDevice.coreDeviceVersion".into(), create_xpc_version_from_string(CORE_SERVICE_VERSION).into());
+        req.insert("CoreDevice.deviceIdentifier".into(), XPCObject::String(uuid::Uuid::new_v4().to_string()));
+        req.insert("CoreDevice.invocationIdentifier".into(), XPCObject::String(uuid::Uuid::new_v4().to_string()));
+        req.insert("CoreDevice.featureIdentifier".into(), XPCObject::String(feature.into()));
+        req.insert("CoreDevice.action".into(), xpc::Dictionary::new().into());
+        req.insert("CoreDevice.input".into(), wrapped.into());
+        self.inner.send_object(req, true).await?;
+        let mut rows = Vec::new();
+        for _ in 0..4096 {
+            // Streaming pushes are unsolicited root-channel messages, unlike invoke replies.
+            let reply = self.inner.recv_root().await?;
+            let status = reply.as_dictionary().and_then(|d| d.get("CoreDevice.XPCMessageKey.sideChannelStatus")).and_then(plist::Value::as_dictionary)
+                .ok_or(CoreDeviceError::MalformedField("sideChannelStatus"))?;
+            if status.contains_key("receivedError") { return Err(CoreDeviceError::MalformedField("receivedError").into()); }
+            if status.contains_key("finishStreaming") { return Ok(plist::Value::Array(rows)); }
+            let elements = status.get("pushing").and_then(plist::Value::as_dictionary).and_then(|d| d.get("elements")).and_then(plist::Value::as_array)
+                .ok_or(CoreDeviceError::MalformedField("elements"))?;
+            if rows.len() + elements.len() > 4096 { return Err(CoreDeviceError::MalformedField("app count").into()); }
+            rows.extend(elements.iter().cloned());
+        }
+        Err(CoreDeviceError::MalformedField("stream batch count").into())
+    }
     pub async fn invoke_with_plist(
         &mut self,
         feature: impl Into<String>,

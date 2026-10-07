@@ -5,6 +5,7 @@
 mod ffi;
 mod media;
 mod relay;
+mod video;
 pub use relay::RelayConnector;
 pub mod lockdown;
 mod png;
@@ -12,7 +13,10 @@ mod transport;
 pub use idevice::remote_pairing::{RpPairingFile, VerifiedPeerIdentity};
 use idevice::{
     RemoteXpcClient, RsdService,
-    core_device::{ImageFormat, ScreenCaptureServiceClient},
+    core_device::{
+        AppServiceClient, ButtonState, HardwareButton, ImageFormat, IndigoHidClient,
+        PasteboardServiceClient, ScreenCaptureServiceClient,
+    },
     remote_pairing::{RemotePairingClient, RpPairingSocket, connect_tls_psk_tunnel_native},
     rsd::RsdHandshake,
     services::mobile_image_mounter::ImageMounter,
@@ -48,6 +52,7 @@ pub enum Stage {
     TouchService,
     ScreenshotConnection,
     ScreenshotResponse,
+    Applications,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -71,6 +76,9 @@ impl std::fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+pub(crate) fn valid_input_text(text: &str) -> bool {
+    !text.is_empty() && text.len() <= 8192 && !text.contains('\0')
+}
 fn error(stage: Stage, cause: Cause) -> Error {
     Error { stage, cause }
 }
@@ -138,6 +146,8 @@ pub struct Session {
     _rsd_control: Option<RemoteXpcClient<StreamHandle>>,
     prepared: bool,
     media: Option<media::Media>,
+    indigo: Option<IndigoHidClient<Box<dyn idevice::ReadWrite>>>,
+    video: std::sync::Arc<video::VideoMailbox>,
     valid: bool,
 }
 impl Session {
@@ -193,6 +203,8 @@ impl Session {
             _rsd_control: Some(rsd_control),
             prepared: false,
             media: None,
+            indigo: None,
+            video: std::sync::Arc::new(video::VideoMailbox::default()),
             valid: true,
         })
     }
@@ -295,7 +307,18 @@ impl Session {
         if self.media.is_some() {
             return Err(error(Stage::Media, Cause::InvalidParameters));
         }
-        self.media = Some(media::Media::start(&mut self.adapter, &mut self.handshake).await?);
+        self.media = Some(
+            media::Media::start(&mut self.adapter, &mut self.handshake, self.video.clone()).await?,
+        );
+        Ok(())
+    }
+    /// Release only this controller's media/HID streams and decoder bytes.
+    /// No global stopAll; retained authentication can serve the next task.
+    pub fn stop_touch_media(&mut self) -> Result<(), Error> {
+        self.check()?;
+        self.media.take();
+        self.indigo.take();
+        self.video.reset();
         Ok(())
     }
     /// No replay on timeout/uncertain release. A negotiated screen session must belong to
@@ -346,10 +369,126 @@ impl Session {
             }
         }
     }
+    pub async fn list_apps(&mut self) -> Result<Vec<u8>, Error> {
+        self.require("com.apple.coredevice.appservice", Stage::Applications)?;
+        let mut client = bounded(
+            Stage::Applications,
+            AppServiceClient::connect_rsd(&mut self.adapter, &mut self.handshake),
+        )
+        .await?;
+        let streaming = self
+            .handshake
+            .services
+            .get("com.apple.coredevice.appservice")
+            .and_then(|s| s.features.as_ref())
+            .is_some_and(|f| {
+                f.iter()
+                    .any(|name| name == "com.apple.coredevice.feature.streamapplist")
+            });
+        let apps = bounded(
+            Stage::Applications,
+            client.list_apps_mode(false, true, false, false, true, streaming),
+        )
+        .await?;
+        let rows: Vec<_> = apps.into_iter().map(|a| serde_json::json!({"name": a.name, "bundle_id": a.bundle_identifier, "version": a.version})).collect();
+        serde_json::to_vec(&rows).map_err(|_| error(Stage::Applications, Cause::Protocol))
+    }
+    pub async fn launch_app(&mut self, bundle: &str, arguments: &[String]) -> Result<(), Error> {
+        self.require("com.apple.coredevice.appservice", Stage::Applications)?;
+        let mut client = bounded(
+            Stage::Applications,
+            AppServiceClient::connect_rsd(&mut self.adapter, &mut self.handshake),
+        )
+        .await?;
+        let args: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        let mut guard = OperationGuard(Some(self.owner.0.clone()));
+        // Never terminate an existing app just to apply launch arguments.
+        bounded(
+            Stage::Applications,
+            client.launch_application(bundle, &args, false, false, None, None, None),
+        )
+        .await
+        .map_err(|_| error(Stage::Applications, Cause::DeliveryUncertain))?;
+        guard.0 = None;
+        Ok(())
+    }
+    pub async fn home(&mut self) -> Result<(), Error> {
+        self.require("com.apple.coredevice.hid.indigo", Stage::Input)?;
+        if self.media.is_none() {
+            return Err(error(Stage::Input, Cause::MediaInactive));
+        }
+        if self.indigo.is_none() {
+            self.indigo = Some(
+                bounded(
+                    Stage::Input,
+                    IndigoHidClient::connect_rsd(&mut self.adapter, &mut self.handshake),
+                )
+                .await?,
+            );
+        }
+        let client = self.indigo.as_mut().unwrap();
+        let mut guard = OperationGuard(Some(self.owner.0.clone()));
+        bounded(Stage::Input, async {
+            client
+                .send_hardware_button(HardwareButton::Home, ButtonState::Down)
+                .await?;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            client
+                .send_hardware_button(HardwareButton::Home, ButtonState::Up)
+                .await
+        })
+        .await
+        .map_err(|_| error(Stage::Input, Cause::DeliveryUncertain))?;
+        guard.0 = None;
+        Ok(())
+    }
+    pub async fn type_text(&mut self, text: &str) -> Result<(), Error> {
+        // Always paste the complete string: physical typing is input-method dependent
+        // and registering a virtual keyboard can suppress the software keyboard.
+        if !valid_input_text(text) {
+            return Err(error(Stage::Input, Cause::InvalidParameters));
+        }
+        if self.media.is_none() {
+            return Err(error(Stage::Input, Cause::MediaInactive));
+        }
+        self.require("com.apple.coredevice.pasteboardservice", Stage::Input)?;
+        self.require("com.apple.coredevice.hid.indigo", Stage::Input)?;
+        let mut pasteboard = bounded(
+            Stage::Input,
+            PasteboardServiceClient::connect_rsd(&mut self.adapter, &mut self.handshake),
+        )
+        .await?;
+        if self.indigo.is_none() {
+            self.indigo = Some(
+                bounded(
+                    Stage::Input,
+                    IndigoHidClient::connect_rsd(&mut self.adapter, &mut self.handshake),
+                )
+                .await?,
+            );
+        }
+        let keyboard = self.indigo.as_mut().unwrap();
+        // Paste the entire text once, including ASCII. No virtual keyboard service.
+        // Do not read the previous clipboard or retry pending paste consent.
+        let mut guard = OperationGuard(Some(self.owner.0.clone()));
+        bounded(Stage::Input, async {
+            pasteboard.set_text(text, "general").await?;
+            keyboard.send_keyboard(0xe3, ButtonState::Down).await?;
+            keyboard.send_keyboard(0x19, ButtonState::Down).await?;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            keyboard.send_keyboard(0x19, ButtonState::Up).await?;
+            keyboard.send_keyboard(0xe3, ButtonState::Up).await
+        })
+        .await
+        .map_err(|_| error(Stage::Input, Cause::DeliveryUncertain))?;
+        guard.0 = None;
+        Ok(())
+    }
     fn invalidate(&mut self) {
         self.valid = false;
         self.prepared = false;
         self.media.take();
+        self.indigo.take();
         self.owner.0.close();
         self._rsd_control.take();
         self._control.take();
@@ -559,11 +698,18 @@ mod tests {
             _rsd_control: None,
             prepared: true,
             media: None,
+            indigo: None,
+            video: std::sync::Arc::new(video::VideoMailbox::default()),
             valid: true,
         };
         let result =
             tokio::time::timeout(Duration::from_secs(2), session.start_touch_media()).await;
         assert!(!matches!(result, Ok(Ok(()))));
+        assert!(session.stop_touch_media().is_ok());
+        assert!(
+            session.stop_touch_media().is_ok(),
+            "owned media release is idempotent"
+        );
         assert!(session.media.is_none());
         assert!(session.prepared);
         assert!(
