@@ -197,6 +197,7 @@ import ActivityKit
         try await waitUntil { !model.stopping && handle.ended.last == .stopped }
         XCTAssertEqual(model.activitySnapshot?.state.phase, .stopped)
         XCTAssertEqual(model.sessions.conversation(id)?.phase, .stopped)
+        XCTAssertNil(model.activityNavigation, "A cancelled completion must not navigate back")
     }
     private func waitUntil(_ condition: @escaping () -> Bool) async throws {
         for _ in 0..<200 {

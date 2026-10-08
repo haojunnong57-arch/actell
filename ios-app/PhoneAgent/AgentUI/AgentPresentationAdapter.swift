@@ -24,14 +24,18 @@ struct ToolPresentation {
     private let navigationModel: AgentViewModel
     let sessionID: UUID
     private var subscriptions = Set<AnyCancellable>()
+    @Published private(set) var activityNavigation: ActivityNavigation?
 
     init(model: AgentViewModel, sessionID: UUID) {
         self.navigationModel = model; self.model = model.executionModel(for: sessionID); self.sessionID = sessionID
         self.model.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
+        model.$activityNavigation
+            .map { $0.flatMap { $0.route.sessionID == sessionID ? $0 : nil } }
+            .removeDuplicates()
+            .sink { [weak self] in self?.activityNavigation = $0 }.store(in: &subscriptions)
         model.sessions.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
     }
 
-    var activityNavigation: ActivityNavigation? { model.activityNavigation.flatMap { $0.route.sessionID == sessionID ? $0 : nil } }
     var session: AgentConversation? { model.sessions.conversation(sessionID) }
     var activeRun: RunIdentity? { model.ownedRun.flatMap { $0.conversationID == sessionID ? $0 : nil } }
     var backgroundStatus: String { model.backgroundStatus }

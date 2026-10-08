@@ -121,3 +121,11 @@ App 和扩展均写入 `com.ja1chen.PhoneAgent / ActivityLifecycle` 系统日志
 - 后续活动文案调整通过 311 项核心测试（`.build/validation/core.iNcg0a/Tests.xcresult`）及无签名 iPhoneOS 构建；主 App 和扩展的构建产物 `CFBundleDisplayName` 均为“执言”。按用户要求，这次文案调整未安装或验证真机。
 - 卡片间距修复通过 311 项核心测试（`.build/validation/core.nqQ8OC/Tests.xcresult`）及无签名 iPhoneOS 构建。最终样式的两个模拟器 UI 用例通过（`.build/validation/spacing-final.2X293d/Tests.xcresult`），覆盖标题空白处／箭头连续单击展开收起、长思考与工具展开时保留滚动位置；未使用真机。
 - 完成更新收尾顺序：新增测试在修复前确定性失败（`.build/validation/activity-order-before.GgXZ1C/Tests.xcresult`），修复后的 12 项 LiveActivity 测试全部通过，含更新等待与等待期间主动停止的两个新增用例；无签名 iPhoneOS 构建通过。完整核心回归共 319 项，318 通过，1 项 `SessionCommandTests.testAuthenticationAndForegroundPolicy` 失败，原因是工作区另有 Siri 启动 Intent 改为 `alwaysAllowed`，该测试仍断言 `requiresLocalDeviceAuthentication`；本次未改动这项策略或测试（`.build/validation/core.liagvP/Tests.xcresult`）。按用户要求未安装或测试真机。
+
+## 临时完成返回与会话吸底（2026-10-08）
+
+在实时活动最终状态问题继续待查期间，正常完成一轮后发布对应会话的导航事件，进入会话末尾。后台完成时，在释放本轮控制所有权之前，通过已经认证的 NCM AppService 启动本 App（使用当前 Bundle ID，不终止现有进程，不传入任务参数）。返回失败不改变已完成结果，不重试输入；失败、主动停止与到期中断不触发完成返回。连接不可用或其他任务持有设备时，跳过前台启动，不为普通对话重新连接或阻塞另一轮；导航事件仍保留，回到 App 时显示目标会话。原采集/HID/TLS 路线不新增启动能力。
+
+活动入口原本默认定位到这一轮第一条消息，审批链接定位到工具消息；非空的历史跳转状态又会跳过会话的初次吸底。现在所有会话入口都定位到末尾，仍保留审批链接的归属与失效校验。展示适配器直接订阅 App 所有者的导航事件，同一会话反复点击活动也产生一次新的滚动请求；初始路由同样处理。新增的导航滚动请求只在进入或显式跳转时执行。隔离模拟器进一步复现：浏览历史后，以末尾占位视图 ID 定位虽收到调用却未移动位置；现统一更新原生 ScrollPosition 的底边目标，不依赖末尾视图是否仍被懒加载列表保留。进入历史阅读时清除该程序目标，保留手动滚动、回弹、卡片展开和键盘偏移行为。
+
+按用户最新要求，本次只进行本地验证，没有安装到手机或执行真机返回测试。322 项默认核心测试和 4 项定向 UI 用例全部通过，覆盖设备释放前启动、启动失败仍完成、其他任务设备所有权、停止与连接代际隔离、worker 完成通知 App 所有者、重复活动跳转、列表重入、桌面活动入口，以及键盘开合／历史阅读／卡片展开。最终无签名 iPhoneOS 构建通过。证据：`.build/conversation-return/final-tests.log` 与 `final-unsigned-build.log`；真机实际唤回效果待后续验证，固件无需更新。

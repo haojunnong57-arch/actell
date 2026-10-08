@@ -80,6 +80,37 @@ import XCTest
         }
         capture("reasoning-single-tap-collapse")
     }
+    func testConversationEntryAndRepeatedActivityLinksScrollToLatest() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-composer-history", "--ui-test-conversation-navigation"]
+        app.launch(); app.staticTexts["新会话"].firstMatch.tap()
+        let scroll = app.scrollViews["conversationMessages"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 5))
+        let route = try XCTUnwrap(URL(string: try XCTUnwrap(scroll.value as? String)))
+        let tail = app.staticTexts["滚动验收最后一条消息"]
+        func assertAtBottom() {
+            capture("conversation-navigation-position")
+            let visible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in tail.isHittable }, object: app)
+            XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 5), .completed)
+        }
+        assertAtBottom()
+        for _ in 0..<2 {
+            scroll.swipeDown(); scroll.swipeDown()
+            XCTAssertFalse(tail.isHittable, "History remains freely scrollable")
+            XCUIDevice.shared.system.open(route)
+            assertAtBottom()
+        }
+        scroll.swipeDown(); scroll.swipeDown()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.staticTexts["新会话"].firstMatch.tap()
+        assertAtBottom()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCUIDevice.shared.press(.home)
+        XCUIDevice.shared.system.open(route)
+        assertAtBottom()
+        capture("conversation-entry-at-latest")
+    }
     func testDeviceControlsAndSettingsDoNotStartAnything() {
         let app = launch()
         XCTAssertFalse(app.buttons["openProviders"].exists)

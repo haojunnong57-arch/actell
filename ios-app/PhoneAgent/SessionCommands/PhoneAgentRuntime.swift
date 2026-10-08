@@ -111,6 +111,9 @@ import Foundation
             }
             if arguments.contains("--ui-test-composer-history") {
                 let id = sessions.create(mode: .live)
+                if arguments.contains("--ui-test-conversation-navigation"), let run = sessions.begin(in: id, query: "新会话") {
+                    sessions.finish(run, phase: .completed, summary: "")
+                }
                 for index in 0..<30 {
                     sessions.addNotice("滚动验收 \(index)\n保持键盘开合前后的底部可见内容\n这是仅用于 UI 验收的本地记录", in: id)
                 }

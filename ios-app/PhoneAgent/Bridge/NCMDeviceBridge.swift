@@ -30,6 +30,7 @@ enum DeviceControlRoute: Sendable {
     func agentDrag(owner: UUID, session: UUID, fromX: UInt16, fromY: UInt16, toX: UInt16, toY: UInt16, durationMS: UInt16, validate: () throws -> Void) async throws
     func agentApplications(owner: UUID, session: UUID) async throws -> Data
     func agentSystemAction(owner: UUID, session: UUID, name: String, text: String, arguments: [String], validate: () throws -> Void) async throws
+    func canActivateApplication(owner: UUID, session: UUID) -> Bool
     func retainConnection(owner: UUID)
     func awaitControlRelease() async
     func releaseConnection(owner: UUID)
@@ -38,6 +39,7 @@ enum DeviceControlRoute: Sendable {
 }
 
 extension NCMControlConnection {
+    func canActivateApplication(owner: UUID, session: UUID) -> Bool { !running && !agentReserved }
     var connectionStopID: UUID? { nil }
     func connectIfNeeded() throws {
         guard ready else { throw NCMControlError.unavailable(connectionFailure ?? "ESP32 未连接") }
@@ -246,6 +248,17 @@ private final class NCMRunFence: @unchecked Sendable {
         }
         let session = try requireSession()
         try await perform { try await flow.agentSystemAction(owner: owner, session: session, name: name, text: text, arguments: arguments, validate: { try self.check() }) }
+    }
+    /// Completion handoff uses the existing authenticated app service. It does
+    /// not capture a frame, reconnect, or wait behind another task's control lease.
+    func bringApplicationToForeground(bundleID: String) async throws -> Bool {
+        try Task.checkCancellation(); try fence.check()
+        guard flow.ready, flow.canActivateApplication(owner: owner, session: session ?? flow.controlSessionID) else { return false }
+        let session = try requireSession()
+        try await perform {
+            try await flow.agentSystemAction(owner: owner, session: session, name: "launch_app", text: bundleID, arguments: [], validate: { try self.check() })
+        }
+        return true
     }
     private func perform<T>(_ action: () async throws -> T) async throws -> T {
         do {

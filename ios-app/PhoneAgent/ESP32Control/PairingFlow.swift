@@ -343,6 +343,10 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         agentRuns.removeAll(); agentQueue.removeAll()
     }
     func mediaLifetimeWait() async { await mediaLifetime.wait() }
+    func canActivateApplication(owner: UUID, session: UUID) -> Bool {
+        ready && controlSessionID == session && !running &&
+            (agentOwner == owner || (agentOwner == nil && agentQueue.isEmpty))
+    }
     func retainConnection(owner: UUID) { connectionUsers.insert(owner) }
     func releaseConnection(owner: UUID) {
         connectionUsers.remove(owner)

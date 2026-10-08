@@ -34,7 +34,7 @@ struct ConversationView: View {
         Group {
             if let session {
                 VStack(spacing: 0) {
-                    ScrollViewReader { proxy in
+                    Group {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 12) {
                                 if presentation.awaitingTaskConfirmation {
@@ -62,7 +62,7 @@ struct ConversationView: View {
                             }.padding(.horizontal, 20).padding(.vertical, 12).frame(maxWidth: 780).frame(maxWidth: .infinity)
                         }
                         .accessibilityIdentifier("conversationMessages")
-                        .accessibilityValue(viewportDiagnostic)
+                        .accessibilityValue(scrollDiagnostic)
                         .scrollDismissesKeyboard(.interactively)
                         .simultaneousGesture(TapGesture().onEnded { focused = false })
                         .scrollEdgeEffectStyle(.soft, for: .bottom)
@@ -88,27 +88,30 @@ struct ConversationView: View {
                                 if userScrolling {
                                     deferredViewportShift += shift
                                 } else if followLatest {
-                                    proxy.scrollTo("latest", anchor: .bottom)
+                                    scrollPosition.scrollTo(edge: .bottom)
                                 } else {
                                     scrollPosition.scrollTo(y: max(0, old.contentOffset.y + new.contentInsets.top + shift))
                                 }
                             } else if followLatest && !userScrolling && old.contentSize != new.contentSize {
-                                proxy.scrollTo("latest", anchor: .bottom)
+                                scrollPosition.scrollTo(edge: .bottom)
                             }
                         }
-                        .onChange(of: session.messages) { _, _ in if followLatest && !userScrolling { proxy.scrollTo("latest", anchor: .bottom) } }
-                        .onChange(of: presentation.approvalID) { _, _ in if followLatest && !userScrolling { proxy.scrollTo("latest", anchor: .bottom) } }
-                        .task {
-                            guard presentation.activityNavigation == nil else { return }
-                            followLatest = true
-                            await Task.yield()
-                            proxy.scrollTo("latest", anchor: .bottom)
+                        .onChange(of: session.messages) { _, _ in if followLatest && !userScrolling { scrollPosition.scrollTo(edge: .bottom) } }
+                        .onChange(of: presentation.approvalID) { _, _ in if followLatest && !userScrolling { scrollPosition.scrollTo(edge: .bottom) } }
+                        .onChange(of: followLatest) { _, follows in
+                            // Drop a programmatic target when reading history,
+                            // leaving layout changes and bounce under user control.
+                            if !follows { scrollPosition = ScrollPosition() }
                         }
                         .task(id: presentation.activityNavigation?.id) {
-                            guard let navigation = presentation.activityNavigation, let target = navigation.messageID else { return }
-                            followLatest = false
+                            // Every entry and repeated deep link targets the tail.
+                            // Use the scroll view's bound edge, which remains
+                            // addressable when LazyVStack has unloaded the tail.
+                            followLatest = true
+                            deferredViewportShift = 0
                             await Task.yield()
-                            proxy.scrollTo(target, anchor: .center)
+                            guard !Task.isCancelled else { return }
+                            scrollPosition.scrollTo(edge: .bottom)
                         }
 
                     }
@@ -133,6 +136,15 @@ struct ConversationView: View {
         .environment(\.conversationDisclosureChanged, {
             followLatest = false
         })
+    }
+    private var scrollDiagnostic: String {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-conversation-navigation"),
+           let session, let runID = session.messages.first(where: { $0.runID != nil })?.runID {
+            return AgentActivityRoute(sessionID: session.id, runID: runID).url.absoluteString
+        }
+        #endif
+        return viewportDiagnostic
     }
     private var modelPicker: some View {
         Menu {

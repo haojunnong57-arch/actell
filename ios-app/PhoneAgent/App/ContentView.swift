@@ -77,7 +77,7 @@ struct ContentView: View {
             }
         }
         #endif
-        .onChange(of: model.activityNavigation) { _, destination in
+        .onChange(of: model.activityNavigation, initial: true) { _, destination in
             guard let destination else { return }
             panel = nil
             path = [destination.route.sessionID]

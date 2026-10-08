@@ -17,6 +17,9 @@ import LLMProviderKit
     var running = false
     var agentReserved = false
     var controlSessionID = UUID()
+    var activationError: AppError?
+    var launchedBundles: [String] = []
+    var launchReleaseCounts: [Int] = []
     var systemActions: [String] = []
     var appQueries = 0
     var taps = 0
@@ -52,6 +55,10 @@ import LLMProviderKit
     }
     func agentSystemAction(owner: UUID, session: UUID, name: String, text: String, arguments: [String], validate: () throws -> Void) async throws {
         try validate(); systemActions.append(name)
+        if name == "launch_app" {
+            launchedBundles.append(text); launchReleaseCounts.append(releases)
+            if let activationError { throw activationError }
+        }
     }
     func registerAgent(owner: UUID, session: UUID) { reservations += 1 }
     func agentCapture(owner: UUID, session: UUID) async throws -> Data { captures += 1; if let captureError { throw captureError }; return png }
@@ -72,6 +79,78 @@ import LLMProviderKit
 }
 
 @MainActor final class NCMDeviceBridgeTests: XCTestCase {
+    func testCompletionActivationDoesNotCaptureReconnectOrCrossStopOrAnotherOwner() async throws {
+        let connection = NCMConnectionSpy(), bridge = try NCMDeviceBridge(flow: connection)
+        let activated = try await bridge.bringApplicationToForeground(bundleID: "com.ja1chen.PhoneAgent")
+        XCTAssertTrue(activated)
+        XCTAssertEqual(connection.launchedBundles, ["com.ja1chen.PhoneAgent"])
+        XCTAssertEqual(connection.captures, 0); XCTAssertEqual(connection.connectionAttempts, 0)
+        connection.agentReserved = true
+        let busy = try await bridge.bringApplicationToForeground(bundleID: "com.ja1chen.PhoneAgent")
+        XCTAssertFalse(busy)
+        connection.agentReserved = false; connection.ready = false
+        let absent = try await bridge.bringApplicationToForeground(bundleID: "com.ja1chen.PhoneAgent")
+        XCTAssertFalse(absent)
+        XCTAssertEqual(connection.connectionAttempts, 0)
+        connection.ready = true; connection.controlSessionID = UUID()
+        do { _ = try await bridge.bringApplicationToForeground(bundleID: "com.ja1chen.PhoneAgent"); XCTFail("Old generation activated") } catch {}
+        await bridge.stop()
+        do { _ = try await bridge.bringApplicationToForeground(bundleID: "com.ja1chen.PhoneAgent"); XCTFail("Stopped task activated") } catch {}
+        XCTAssertEqual(connection.launchedBundles.count, 1)
+    }
+    func testBackgroundCompletionReturnsCorrectConversationBeforeReleaseEvenIfActivationFails() async throws {
+        for activationFails in [false, true] {
+            let connection = NCMConnectionSpy()
+            if activationFails { connection.activationError = .timeout }
+            let bridge = try NCMDeviceBridge(flow: connection)
+            let lifecycle = RunLifecycleCoordinator(scheduler: NCMTestScheduler(), storage: MemoryRunCheckpointStore())
+            let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+                runServices: AgentRunServices(provider: DisconnectedChatProvider(requestsScreenshot: false), bridge: bridge), lifecycle: lifecycle)
+            let id = model.createConversation(mode: .live)
+            XCTAssertTrue(model.send("test", in: id, cloudConsent: true))
+            let run = try XCTUnwrap(model.ownedRun)
+            let other = model.createConversation(mode: .live)
+            model.selectConversation(other)
+            model.setForeground(false)
+            for _ in 0..<200 {
+                if !model.running { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertFalse(model.running)
+            XCTAssertEqual(model.sessions.conversation(id)?.phase, .completed)
+            XCTAssertEqual(model.activityNavigation?.route.sessionID, id)
+            XCTAssertEqual(model.activityNavigation?.route.runID, run.runID)
+            XCTAssertNil(model.activityNavigation?.messageID)
+            XCTAssertEqual(connection.launchedBundles, [Bundle.main.bundleIdentifier!])
+            XCTAssertEqual(connection.launchReleaseCounts, [0], "Activate before closing the device lease")
+            XCTAssertEqual(connection.captures, 0)
+            XCTAssertEqual(connection.releases, 1)
+        }
+    }
+
+    func testWorkerCompletionPublishesNavigationOnAppOwner() async throws {
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+            runServicesFactory: { _ in AgentRunServices(provider: DisconnectedChatProvider(requestsScreenshot: false), bridge: UnavailableBridge()) })
+        let first = model.createConversation(mode: .live)
+        let workerID = model.createConversation(mode: .live)
+        let worker = model.executionModel(for: workerID)
+        let presentation = AgentPresentationAdapter(model: model, sessionID: workerID)
+        XCTAssertTrue(model.send("test", in: workerID, cloudConsent: true))
+        model.selectConversation(first)
+        for _ in 0..<200 {
+            if !worker.running { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(model.sessions.conversation(workerID)?.phase, .completed)
+        XCTAssertEqual(model.activityNavigation?.route.sessionID, workerID)
+        XCTAssertEqual(model.activityNavigation?.id, worker.activityNavigation?.id)
+        XCTAssertEqual(presentation.activityNavigation?.id, model.activityNavigation?.id)
+        let previous = model.activityNavigation?.id
+        XCTAssertTrue(model.openActivityURL(try XCTUnwrap(model.activityNavigation?.route.url)))
+        XCTAssertNotEqual(model.activityNavigation?.id, previous, "Repeated links issue another scroll request")
+        XCTAssertEqual(presentation.activityNavigation?.id, model.activityNavigation?.id)
+    }
+
     func testTransportStopIsToolErrorWhileExplicitRunStopRemainsCancellation() async throws {
         let connection = NCMConnectionSpy()
         let bridge = try NCMDeviceBridge(flow: connection)
@@ -652,6 +731,8 @@ import LLMProviderKit
         flow.registerAgent(owner: b, session: session)
         flow.registerAgent(owner: c, session: session)
         _ = try await flow.agentOperation(owner: a, session: session) { _ in 1 }
+        XCTAssertTrue(flow.canActivateApplication(owner: a, session: session))
+        XCTAssertFalse(flow.canActivateApplication(owner: b, session: session), "Completion must not take another run's device lease")
         flow.background()
         XCTAssertTrue(flow.ready)
         var secondEntered = false, thirdEntered = false

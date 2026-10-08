@@ -682,6 +682,24 @@ struct AgentRunServices {
         publishActivity(phase == .completed ? .completed : .blocked)
         await liveActivities.waitForPendingUpdates()
         guard generation == token else { return }
+        if phase == .completed, let identity = runIdentity {
+            // Publish the destination before activation so scene restoration
+            // opens this task, including when another conversation is visible.
+            let navigation = ActivityNavigation(route: AgentActivityRoute(sessionID: identity.conversationID, runID: identity.runID), messageID: nil)
+            activityNavigation = navigation
+            if appOwner !== self { appOwner.activityNavigation = navigation }
+            if !foreground, protectedDataAvailable, let bundleID = Bundle.main.bundleIdentifier {
+                do {
+                    let activated = try await bridge.bringApplicationToForeground(bundleID: bundleID)
+                    BackgroundExecutionTrace.record("run.returnToConversation activated=\(activated) run=\(identity.runID)")
+                } catch {
+                    // Returning to the UI is best effort; a completed task stays
+                    // completed and no device action is retried.
+                    BackgroundExecutionTrace.record("run.returnToConversation failed run=\(identity.runID)")
+                }
+            }
+            guard generation == token else { return }
+        }
         lifecycle.finish(success: phase == .completed)
         screenExecutionContext?.revoke()
         await coordinator?.stop()

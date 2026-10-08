@@ -13,11 +13,13 @@ protocol DeviceBridge: Sendable {
     func systemActionContext() async throws -> String
     func authorizeSystemAction(authorizationID: String, taskScoped: Bool) async throws
     func systemAction(name: String, text: String, arguments: [String], imageID: String) async throws
+    func bringApplicationToForeground(bundleID: String) async throws -> Bool
     func cancelTransport()
     func stop() async
 }
 
 extension DeviceBridge {
+    func bringApplicationToForeground(bundleID: String) async throws -> Bool { false }
     func systemActionContext() async throws -> String { throw AppError.unavailable("当前通道不支持独立系统操作") }
     func authorizeSystemAction(authorizationID: String, taskScoped: Bool) async throws { throw AppError.unavailable("当前通道不支持独立系统操作") }
     func installedApplications() async throws -> Data { throw AppError.unavailable("当前通道不支持查询 App") }
