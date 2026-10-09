@@ -1,25 +1,101 @@
-# iOS Use · PhoneAgent + ESP32 USB Device
+# iOS Use · PhoneAgent
 
-当前主路径：iOS 27 主 App 默认经 VPN 回环调用 CoreDevice 服务获取截图并执行点击/拖动，也支持 ESP32 NCM 路线。入口为“设置 → 手机操控 → 连接模式 / 连接与验证”；首页和消息页不再显示设备入口，设置内的控制入口保留。原 ScreenCaptureKit/PA3 USB HID 与 TLS 链路保留，由 `DeviceControlRoute` 预留切换，暂不添加开关。各会话可并行执行，离开页面不停止；NCM 后台任务复用系统调度，无需启动录屏。同一手机的控制任务按整轮排队。系统资格到期、锁屏或连接故障仍会停止任务。模型服务商在“设置 → 服务商”管理。会话支持选择 OpenAI Chat Completions 兼容服务商与模型。
+English | [简体中文](README.zh-CN.md)
 
-VPN 回环为连接模式首项及未保存偏好时的默认值，已有显式选择保留。需先开启支持本机数据包回注的外部 VPN（已使用 LocalDevVPN 验证）；App 不安装或管理 VPN。控制页可编辑接口与对端 IPv4 地址，默认 `10.7.1.1` / `10.7.0.1`，保存后重新连接生效。两条路线共用配对身份，切换会释放旧会话与动作授权；新配对授权名称为「执言」。真机已验证截图、实际点击和媒体释放，详情与边界见 [VPN 回环模式](docs/ncm-coredevice/LOCALDEVVPN.md)。
+**A vibe-coded project in its early technical prototype stage, shared to explore ideas.** PhoneAgent (执言) explores how an agent running on an iPhone can call CoreDevice services to capture the screen and perform taps and drags. The current default uses an external VPN loopback route without an ESP32; ESP32-S3 USB NCM forwarding is also available. Production readiness and reliable long-running background execution are not guaranteed.
 
-后台媒体模式在“设置 → 后台执行 → 执行模式”选择音频或画中画，默认音频，选择从下一轮任务生效。画中画继续播放状态样本帧，仅任务执行且进入后台时展示；音频模式在任务开始时播放一秒静音 PCM 的循环，为切后台做准备，不创建画中画窗口。这两个模式默认不申请 BGContinuedProcessingTask 或 UIApplication 后台任务，任务进度由自定义 Live Activity 展示。切后台时最多等待五秒媒体实际启动，等待期间不发送设备操作，超时暂停；任务停止、锁屏或音频中断会释放相应媒体来源，不自动重启或重放任务。该机制不能承诺系统永不挂起/终止 App。当前新增音频实现只做本地模拟器与构建验证，尚未真机验证。
+The app uses [SwiftAgentKit](https://github.com/ayman3000/SwiftAgentKit), [LLMProviderKit](https://github.com/ayman3000/LLMProviderKit), and [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui). Its developer-services backend reuses the patched version of [idevice](https://github.com/jkcoxson/idevice) used by [Device Hub](https://github.com/JaviSoto/device-hub-ios), with protocol references from [pymobiledevice3](https://github.com/doronz88/pymobiledevice3). The reuse boundaries are described below.
 
-NCM 视频继续使用系统 VideoToolbox 解码和默认 Core Image JPEG 转换。2026-10-07 的隔离对照确认：切后台可能使原解码会话失效，但在后台重新创建的硬件会话可正常解码，故已移除实验性的 libde265 依赖和强制软件渲染。视频反馈使用认证协商返回的动态端口。进一步真机对照查明：静止屏幕会停止产帧，PLI/FIR 不强制重新采集；截图已改用请求后的发送端进度报告确认完整画面，移除一秒年龄限制。原 RCTL 固定尾值被 iOS 解释为 60001 kbps，导致 S3 链路发送端缓冲不足、序号缺口；现将 S3 协商上限和接收带宽声明统一为 2000 kbps。修复后连续 7 次截图通过（含后台静止计算器和切换设置），2764 个视频包无序号缺口，输出均为 1179 × 2556。详见 [根因与对照证据](docs/ncm-coredevice/VIDEO-GEOMETRY.md#refresh-and-sequence-gap-root-causes-2026-10-07)。
+## From ESP32 peripherals to CoreDevice
 
-NCM 默认截图继续复用视频帧并编码 JPEG，不调用独立 PNG 截图服务、不关联输入历史。接收端保留关键帧及其后续 P 帧，队列限制 64 帧 / 8 MiB，新关键帧可替换旧积压；溢出或断流时丢弃引用链并请求关键帧。App 在工作队列持续解码，截图只在内部取最新完整画面、按需编码 JPEG，停止控制会话时取消接收任务并释放解码器。视频协商现开启 SW:1，优先解析流内有效画面区域（已捕获 flag-2 内容矩形），并保留按 displayId 查询对端 DeviceInfoService 的后备路径；每帧校验显示范围与 SPS 画布匹配后，裁去右/底部填充再编码 JPEG，不缩放。不使用本机屏幕尺寸、机型表或按颜色猜边。旧固定 14 字节帧尾假设不适用；现按 RBSP 解析已观察的 flag-2/flag-3 格式，处理跨片段数据的转义边界。几何日志只在尺寸变化时记录数值。保存相册使用返回的原始图片；截图失败保留认证隧道，不自动重放输入。原 CoreDevice PNG 截图 API 保留但不自动回退。ESP32 仍只转发数据。最后一个操控任务结束后释放本 App 的视频/HID 服务；其他操控任务运行或排队时不提前释放，切后台不关闭。退出通知关闭本 App 连接。系统取消配对不会自动删除本地身份，可显式重新配对。2026-10-07 已在真实 ESP32 链路多轮连续截图成功，修改前尺寸为 1184 × 2576，SPS 无裁剪窗；设备信息服务主屏为 1179 × 2556，现已接入逐帧裁剪，真机连续三张输出 1179 × 2556；底部填充移除，原始码流已有的最右侧一列暗像素保留。详见 [视频几何诊断](docs/ncm-coredevice/VIDEO-GEOMETRY.md)。
+The initial idea was to emulate peripherals such as keyboards and mice with an ESP32, control the iPhone through its standard peripheral support, and eventually expose a standard MCP interface for other agents. Exploration revealed limitations: inefficient Chinese text entry through keyboard/mouse input, demanding hardware requirements for USB-C DP Alt Mode capture, and app-based screen recording occupying the recording channel. The current approach therefore uses CoreDevice services for screen capture and touch input.
 
+The ESP32-S3 currently provides USB NCM networking, discovery, and restricted bidirectional data forwarding. The app handles pairing identities, authentication, and control protocols; iPhone system services provide the screen content and execute touch input. CoreDevice access also allows exploration of a local connection through Network Extension, so an ESP32 is not required for that route. The app now supports VPN loopback, verified with LocalDevVPN, sharing the same pairing identity and CoreDevice backend. This repository does not implement or manage its own Network Extension. A standard MCP interface remains planned and is not implemented.
 
-- [本次待办评估、实现与验证](docs/PROJECT-TODOS.md)
-- [后台 CPU 终止与工具回执恢复诊断](docs/BACKGROUND-RUN-RECOVERY.md)
-- [屏幕流停止与任务完成提醒](docs/CONTROL-SESSION-TEARDOWN.md)
-- [iOS 构建与测试](ios-app/README.md)
-- [NCM 开发者服务与主工程整合](docs/ncm-coredevice/MAIN-INTEGRATION.md) · [NCM 路线](docs/ncm-coredevice/README.md)
-- [PA3 协议](docs/usb-device/PROTOCOL.md) · [常连基线记录](docs/usb-device/PERSISTENT-USB.md)
-- [板级硬件资料](docs/hardware/ESP32-S3-USB.md)
-- [历史文档与非核心测试归档](archives/README.md) · [第三方来源](THIRD_PARTY.md)
+## Current capabilities and limits
 
-`ios-app/` 是 App；`firmware-device/` 是当前 NCM/HID 固件；`tests/usb_device/` 为生产 C 代码的本机协议夹具。旧 Host `firmware/`、测试和来源清单保留，默认工作不需要阅读它们。`ncm-dev/` 提供共用 Swift/C/Rust 协议库和 Probe，主 App 与生产固件已复用；`app-only` 仅为外部参考。
+- Supports OpenAI Chat Completions-compatible providers and models, using the `screenshot`, `tap`, `drag`, and `wait` tools to execute tasks. Manage providers under Settings → Providers. Native Anthropic/Gemini support currently covers model discovery only.
+- Imports Markdown/TXT skill packages and reads their text on demand; importing does not execute scripts. Supports conversation history, image attachments, tool approval, and manual stopping. Control tasks for the same phone are queued by whole agent turn, and actions with uncertain outcomes are not automatically replayed.
+- Control sessions continuously receive a display stream, decode it with VideoToolbox, and cache the latest complete frame. The screenshot tool takes an image from that stream, removes padding, and encodes it as JPEG; it does not call the system's separate screenshot service for each request by default. Each call still waits for a newly decoded frame or a sender progress report received after the request begins to confirm that the cached image is complete. The wait can take up to eight seconds; this does not mean immediately returning any old cached frame. The standalone PNG screenshot implementation remains available in the source, but is not an automatic fallback.
+- The ESP32 route has recorded real screenshots and increases in a test button's tap counter. In an iPhone 15 Pro test on 2026-10-09, the VPN loopback route reused the pairing identity, produced a 1179 × 2556 screenshot, increased the actual tap counter from 0 to 1, and confirmed media release. Complete model-driven tasks, dragging, and sustained background execution over VPN loopback still require separate acceptance testing.
+- Audio and picture-in-picture modes are available for background execution, but system suspension, termination, screen locking, or connection failures can still stop tasks. Background reliability has not been broadly validated. The older ScreenCaptureKit/PA3 USB HID and TLS implementations remain in the repository; there is currently no switch to select the older route.
 
-用户已验证 ESP32 NCM 截图与中央触摸计数增加；主任务的 NCM 真机闭环及拖动效果仍待验收。旧 PA3 链路也已有 USB PING、本机截图和 HID 输入记录。不同链路的历史证据不能互相替代；最新范围见各整合和验证记录。
+These statements reflect the current source and validation records in the project. Results from different routes, devices, and historical stages are not interchangeable. See [project tasks and validation](docs/PROJECT-TODOS.md), [video geometry and frame completeness](docs/ncm-coredevice/VIDEO-GEOMETRY.md), and [VPN loopback setup and validation](docs/ncm-coredevice/LOCALDEVVPN.md).
+
+## Setup and running
+
+The current minimum deployment target is **iOS 27**, and builds use **Xcode 27**. Configure your own valid signing for a physical device; the unsigned build below only produces artifacts and cannot be installed directly. Model-driven tasks require your own compatible provider, model, and credentials. Screenshots and explicitly sent attachments are transmitted to the selected model.
+
+Prerequisites for device control:
+
+1. Enable Developer Mode on the iPhone and allow local network access for the app. Follow the app's pairing flow and complete trust/PIN pairing in the system UI. Both routes share the RemotePairing identity stored in the app sandbox.
+2. Prepare a matching Personalized Developer Disk Image (DDI), usually through Xcode. The current backend only checks Developer Mode and image availability; it does not download, personalize, or mount the image. This repository does not include Apple developer images, and initial setup cannot be guaranteed to work entirely without a Mac.
+3. Choose a route under Settings → Phone Control → Connection Mode, then open Connection & Validation to connect, capture a screenshot, and verify an actual tap:
+   - **VPN loopback (default, no ESP32 required):** Enable a VPN on the same iPhone that supports reinjecting local packets; this has been verified with [LocalDevVPN](https://github.com/jkcoxson/LocalDevVPN). Edit the interface and peer addresses on the control screen. Their defaults are `10.7.1.1` and `10.7.0.1`, respectively, and must match the external VPN configuration. The app does not install, start, or stop the VPN. See the [route documentation](docs/ncm-coredevice/LOCALDEVVPN.md).
+   - **ESP32 NCM:** Use an ESP32-S3 with native USB Device support and a data cable. Install the current NCM firmware and connect its native USB port to the iPhone. Verify USB roles, board wiring, and power against the actual hardware. See the [firmware documentation](firmware-device/README.md) and [hardware notes](docs/hardware/ESP32-S3-USB.md).
+4. Add a provider in Settings and create a conversation. Regular chat does not require a device connection; control tools still check identity, connection, and authorization when executing. The control route cannot be switched during execution.
+
+### Build
+
+Run all commands below from the repository root. The scripts reuse a local toolchain and are not ready-to-use installers:
+
+- The Rust package uses edition 2024. By default, the script points to the Rust 1.95.0 toolchain in the adjacent `app-only` directory; set `NCM_RUST_TOOLCHAIN` to your actual toolchain directory. Install the `aarch64-apple-ios` and `aarch64-apple-ios-sim` targets and prepare the dependency cache. Backend builds use `--offline --locked`, with the Cargo cache under `.build/ncm-cargo`. See [Cargo.lock](ncm-dev/rust/Cargo.lock) for versions.
+- Firmware uses ESP-IDF 5.5.5. Set `IDF_PATH` and `IDF_TOOLS_PATH` to an installed environment as needed. Component versions are pinned by the [manifest](firmware-device/main/idf_component.yml) and lockfile.
+- The Xcode project is checked in. After adding source files, regenerate it with `python3 ios-app/scripts/generate_xcode_project.py`. Allow Swift Package Manager to resolve dependencies on the first build. An Xcode build phase generates the Rust static library for the current platform.
+
+```sh
+# Unsigned iPhoneOS build; does not install or change signing
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+  -project ios-app/PhoneAgent.xcodeproj -scheme PhoneAgent \
+  -destination 'generic/platform=iOS' -derivedDataPath .build/DeviceBuild \
+  -clonedSourcePackagesDirPath .build/SourcePackages \
+  CODE_SIGNING_ALLOWED=NO build
+
+# ESP32 route: build NCM firmware only; does not flash automatically
+bash tools/build_usb_device.sh ncm
+```
+
+To install on a physical device, select signing and the device in Xcode, then run. See the [iOS documentation](ios-app/README.md) for additional app configuration and build commands using cached dependencies. Firmware artifacts are under `.build/device-ncm/`; verify the serial port and hardware before flashing.
+
+### Validation
+
+```sh
+CC=clang bash tools/test_usb_device.sh
+bash ios-app/scripts/test_core.sh <isolated-simulator-UDID>
+RUN_UI_TESTS=1 bash ios-app/scripts/test_core.sh <isolated-simulator-UDID>
+```
+
+Protocol tests use loopback networking. App tests use synthetic models and temporary storage, and do not replace physical-device acceptance testing. UI tests add test images and files to the specified isolated simulator. Coverage for core protocols, one-time authorization, session isolation, no replay of uncertain outcomes, checkpoint migration, and stop/release behavior remains in the default target.
+
+## Dependencies and sources
+
+| Project | Current usage |
+| --- | --- |
+| [SwiftAgentKit](https://github.com/ayman3000/SwiftAgentKit) | Local source snapshot of the agent core and macros, with iOS storage compatibility patches; does not include the upstream MCP module |
+| [LLMProviderKit](https://github.com/ayman3000/LLMProviderKit) / [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui) | Swift Package dependencies for model calls and Markdown message rendering, respectively |
+| [idevice](https://github.com/jkcoxson/idevice) / [Device Hub](https://github.com/JaviSoto/device-hub-ios) | Reuses the patched idevice source and PNG validator pinned by Device Hub, with local adaptations; does not integrate the entire Device Hub app |
+| [ManifoldKit](https://github.com/ManifoldKit/ManifoldKit) | Selected and adapted tool-call presentation components, not a package dependency on the entire framework |
+| [ESP-IDF](https://github.com/espressif/esp-idf/tree/v5.5.5), [esp_tinyusb](https://github.com/espressif/esp-usb), [TinyUSB](https://github.com/hathach/tinyusb) | ESP32 firmware toolchain and USB components; pinned to ESP-IDF 5.5.5, esp_tinyusb 2.2.0, and TinyUSB 0.21.0~2 |
+| [pymobiledevice3](https://github.com/doronz88/pymobiledevice3) | Protocol schema reference and selective translation; pinned reference files support offline tests. It is not a Python service running on the phone or ESP32 |
+| [LocalDevVPN](https://github.com/jkcoxson/LocalDevVPN) | Verified external VPN loopback implementation; its Network Extension implementation is not copied into this repository |
+
+Other direct and transitive Rust dependencies are listed in [Cargo.toml](ncm-dev/rust/Cargo.toml) and [Cargo.lock](ncm-dev/rust/Cargo.lock). Pinned Swift versions are in [Package.resolved](ios-app/PhoneAgent.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved). [idevice_pair](https://github.com/jkcoxson/idevice_pair) and [rPlayHub](https://github.com/rPlayAI/rPlayHub) are protocol research references, not current runtime dependencies. Historical USB Host sources likewise do not imply dependencies of the current NCM backend.
+
+Existing license and attribution records are in [LICENSE](LICENSE), [THIRD_PARTY.md](THIRD_PARTY.md), [iOS licenses](ios-app/Licenses/), [SwiftAgentKit snapshot notes](ios-app/Vendor/SwiftAgentKit/README.md), [ManifoldKit extraction notes](ios-app/Vendor/ManifoldPresentation/README.md), and [CoreDevice reuse boundaries](docs/ncm-coredevice/REUSE.md).
+
+## Repository layout and further reading
+
+| Path | Purpose |
+| --- | --- |
+| `ios-app/` | PhoneAgent app, tests, and project generation scripts |
+| `firmware-device/` | Current USB Device NCM firmware and retained HID mode |
+| `ncm-dev/` | Shared Swift/C/Rust CoreDevice backend, protocol modules, and standalone probes |
+| `tests/usb_device/` | Local test fixtures for the production USB Device protocol |
+| `tools/` | Build and validation scripts |
+| `docs/` | Current route documentation, diagnostics, and validation records; read historical descriptions in their dated context |
+| `archives/` | Historical documentation and archived non-core tests |
+| `firmware/` | Retained older USB Host experiments, not the current default firmware |
+
+- [Main project integration](docs/ncm-coredevice/MAIN-INTEGRATION.md) · [System pairing records](docs/ncm-coredevice/PAIRING.md)
+- [Background execution diagnostics](docs/BACKGROUND-RUN-RECOVERY.md) · [Control session stop and release](docs/CONTROL-SESSION-TEARDOWN.md)
+- [PA3 protocol](docs/usb-device/PROTOCOL.md) · [Historical archive index](archives/README.md)
