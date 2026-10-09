@@ -104,7 +104,7 @@ UI 提供协议/基础地址/密钥、获取/取消/刷新、缓存搜索选择�
 - PA3 C 的 ASan/UBSan 协议／HID 夹具及 25 项本机 TCP 测试再次通过（`.build/final-protocol-tests.log`）；12 项 wire-contract 通过（`.build/final-wire-tests.log`）。固件源码未修改，不需本次升级。
 - Xcode 附加诊断仍受本机默认 xcrun 路径影响，不能找到 simctl；测试结果为成功，截图以显式 DEVELOPER_DIR 导出。未更改系统 Xcode 选择或签名。
 - 原 Page 有效实现及后续模型发现、输入区、共享附件存储、图片历史、原生附件发送、技能、缓存重试分别有本地提交。`Conversion error` 仍需真机原始调用栈；真实服务商／跨 App HID 闭环／iCloud 文件提供器，以及可选归档测试、旧 Host 全量未验收。Anthropic/Gemini 仍仅支持模型发现，未宣称原生推理可用。
-- 历史私有 Library 交接包保留；暂停快照移到 [归档](../archives/history/handoffs/2026-10-05-project-todos.md)，不覆盖恢复开发后的状态。未启动云端执行或额度监控。当前额度不可读，未声称已触及 5%。
+- 历史私有 Library 交接包保留；本地暂停／交接快照已移除，不覆盖恢复开发后的状态。未启动云端执行或额度监控。当前额度不可读，未声称已触及 5%。
 
 ## B1：同一响应内多个工具（用户明确确认后）
 

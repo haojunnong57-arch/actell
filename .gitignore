@@ -54,3 +54,18 @@ firmware-device/build/
 /ncm-dev/**/screen*.png
 /ncm-dev/**/screen*.hevc
 /ncm-dev/rust/target/
+
+# Keep captured screens and their manifests local; retain app assets and test fixtures.
+/docs/**/*.png
+/docs/**/*.jpg
+/docs/**/*.jpeg
+/ios-app/docs/**/*.png
+/ios-app/docs/**/*.jpg
+/archives/history/**/*.png
+/archives/history/**/*.jpg
+/archives/history/**/*.jpeg
+
+# Removed source bundles and local handoff snapshots.
+/archives/PhoneAgent-iOS-source.zip
+/archives/esp32-iphone-coredevice-protocol-v0.3.tar.gz
+**/handoffs/

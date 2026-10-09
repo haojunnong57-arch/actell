@@ -47,13 +47,13 @@
 
 全部来自已通过的定向测试，均已目视检查；原始图片没有裁剪或重绘。使用 DEBUG 离线 fixture，图中的任务和屏幕均为合成演示。真实模型会话样式用于验证生产入口，不表示调用过真实模型。
 
-- [草稿已保存，尚未开始](siri-validation/siri-01-persisted-draft.png)
-- [退出进程后恢复到同一草稿](siri-validation/siri-02-cold-route.png)
-- [确认任务后仍需批准工具](siri-validation/siri-03-tool-approval-still-required.png)
-- [拒绝后原轮次结束](siri-validation/siri-04-denied.png)
-- [前台 Intent.perform 打开草稿](siri-validation/siri-05-warm-intent.png)
-- [忙碌时原审批保留](siri-validation/siri-06-busy-keeps-approval.png)
-- [停止旧 run 后打开延期草稿](siri-validation/siri-07-deferred-draft.png)
+- 草稿已保存，尚未开始（截图已移除）
+- 退出进程后恢复到同一草稿（截图已移除）
+- 确认任务后仍需批准工具（截图已移除）
+- 拒绝后原轮次结束（截图已移除）
+- 前台 Intent.perform 打开草稿（截图已移除）
+- 忙碌时原审批保留（截图已移除）
+- 停止旧 run 后打开延期草稿（截图已移除）
 
 来源、设备、测试名称和 SHA-256 清单（本地文件 `siri-validation/screenshots.json`，已忽略）。
 

@@ -96,10 +96,10 @@ UI 用例为：会话列表→会话→查看参数和合成截图→批准→�
 
 11 张原始 PNG 来自最终成功结果包，均为离线脚本及合成画面。来源用例与 SHA-256 见 [manifest.json](agent-ui-screenshots/manifest.json)。已实际查看截图，核对导航、公开回复、审批、参数、截图展开、结果、拒绝/停止的文字与布局。
 
-- [会话首页](agent-ui-screenshots/01-conversation-home.png) · [会话列表](agent-ui-screenshots/04-conversation-list.png)
-- [审批与可见停止按钮](agent-ui-screenshots/02-chat-approval.png) · [真实调用参数](agent-ui-screenshots/02a-real-tool-parameters.png) · [合成截图](agent-ui-screenshots/02b-synthetic-screenshot.png)
-- [最终结果](agent-ui-screenshots/03-chat-result.png) · [拒绝](agent-ui-screenshots/07-denied.png) · [停止](agent-ui-screenshots/08-stopped.png)
-- [设置入口](agent-ui-screenshots/05-settings.png) · [控制调试](agent-ui-screenshots/06-control-debug.png) · [离开调试后中断](agent-ui-screenshots/09-debug-exit-interrupted.png)
+- 会话首页（截图已移除） · 会话列表（截图已移除）
+- 审批与可见停止按钮（截图已移除） · 真实调用参数（截图已移除） · 合成截图（截图已移除）
+- 最终结果（截图已移除） · 拒绝（截图已移除） · 停止（截图已移除）
+- 设置入口（截图已移除） · 控制调试（截图已移除） · 离开调试后中断（截图已移除）
 
 首次 UI 回归暴露了停止图标前景/背景同色，以及迟到 tool-start 覆盖审批等待文案的问题，均已修复。测试也改为定位展开标题、滚动到可点击位置并等动画结束后取证；没有删掉失败断言。最后修正初始 inactive 阶段不应把空闲页面标为“已中断”。完整用例随后再次通过。截图中展开较长参数/图片时需滚动查看；手动浏览历史后自动跟随暂停，点击向下按钮回到最新消息，最终结果截图已走此流程。
 

@@ -59,11 +59,11 @@
 
 实际模拟器原始截图，已逐项目视检查。数据均为离线演示；通知中心截图不代表真机已经锁定或认证通过。
 
-- [App 内待确认](live-activity-screenshots/live-activity-01-pending-in-app.png)
-- [紧凑灵动岛：中断](live-activity-screenshots/live-activity-01b-interrupted-compact.png)
-- [长按展开灵动岛](live-activity-screenshots/live-activity-01c-interrupted-expanded.png)
-- [通知中心低敏卡片](live-activity-screenshots/live-activity-02-interrupted-notification-center.png)
-- [深链回到原轮次](live-activity-screenshots/live-activity-03-linked-history.png)
+- App 内待确认（截图已移除）
+- 紧凑灵动岛：中断（截图已移除）
+- 长按展开灵动岛（截图已移除）
+- 通知中心低敏卡片（截图已移除）
+- 深链回到原轮次（截图已移除）
 
 [来源与 SHA-256 清单](live-activity-screenshots/manifest.json)对应原始 xcresult。首次系统“允许实时活动”前，紧凑岛可能还不显示；测试只处理模拟器内本 App 的显示许可，不涉及签名、凭据或开发者能力授权。
 

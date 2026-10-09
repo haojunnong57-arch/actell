@@ -67,7 +67,7 @@ UI 历史继续使用完全文件保护；锁屏期间历史写入可能失败�
 
 最终结果与可复现命令见 验证摘要（本地文件 `background-runs/validation.txt`，已忽略）。新增 `RunLifecycleTests` 和 `BackgroundRunIntegrationTests` 使用 fake lease/model/ESP，并通过真实 SwiftAgentKit run loop 测试：申请拒绝、submit != lease、无租约暂停、工具能力门禁、过期/停止、重复/迟到回调、新 run 隔离、审批等待/拒绝/设备变更、进度冻结/超时、模型断网、dispatch 失联、磁盘失败、恢复不重放、completion 一次。ModelStreamTests 另验证 SSE 心跳不释放工具或响应。
 
-UI 截图：[等待审批且片段已结束](background-runs/waiting-approval.png)。这是 Simulator 的离线合成演示界面，与 ESP 的远程截图工具无关。
+UI 截图：等待审批且片段已结束（截图已移除）。这是 Simulator 的离线合成演示界面，与 ESP 的远程截图工具无关。
 
 复现（参数必须是已启动的 simulator UDID）：
 

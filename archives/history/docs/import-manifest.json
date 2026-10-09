@@ -3,6 +3,7 @@
   "archives": [
     {
       "path": "archives/PhoneAgent-iOS-source.zip",
+      "removed_from_repository": true,
       "library_file_id": "libfile_41f5d3e188988191a0712d42c21da5a8",
       "version": 2,
       "bytes": 54367,
@@ -10,6 +11,7 @@
     },
     {
       "path": "archives/esp32-iphone-coredevice-protocol-v0.3.tar.gz",
+      "removed_from_repository": true,
       "library_file_id": "libfile_7db76be09f0c8191886db04b4e553b4e",
       "version": 2,
       "bytes": 362648,
