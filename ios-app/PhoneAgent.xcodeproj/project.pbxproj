@@ -113,6 +113,8 @@
 		FD371D0E34BEE2874EA7281F /* SwiftAgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = CDF64BC031F1B5C9F069ED47 /* SwiftAgentKit */; };
 		FD5C6539F68A51889A137CDE /* PhoneAgent/Status/AgentStatusSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C881FC710C45193DBE50ECD /* PhoneAgent/Status/AgentStatusSnapshot.swift */; };
 		FFAE2EC9AE5ECAE5BD09D6EE /* PhoneAgent/ESP32Control/PairingFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3491E407C9BA0BFA9486E133 /* PhoneAgent/ESP32Control/PairingFlow.swift */; };
+		DFA98F0930F968FF82B6305F /* ../ncm-dev/PhoneAgentNCM/Sources/PhoneAgentNCM/LocalVPNDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26235B7FAC0EC2C78AAD4009 /* ../ncm-dev/PhoneAgentNCM/Sources/PhoneAgentNCM/LocalVPNDiscovery.swift */; };
+		EA445E5B2317C8978E9A9C5A /* PhoneAgentTests/DeviceControlRouteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E2F2E3FD3A91908F440DD7F /* PhoneAgentTests/DeviceControlRouteTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -256,6 +258,8 @@
 		F24D73DC116942FF937BCAB8 /* Shared/AgentActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/AgentActivityAttributes.swift; sourceTree = SOURCE_ROOT; };
 		F6B755ABE7391EEA7A6D428B /* PhoneAgent/Bridge/TLSBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneAgent/Bridge/TLSBridge.swift; sourceTree = SOURCE_ROOT; };
 		FCCFC6C83D055F4B07F2D465 /* PhoneAgentTests/ReasoningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneAgentTests/ReasoningTests.swift; sourceTree = SOURCE_ROOT; };
+		26235B7FAC0EC2C78AAD4009 /* ../ncm-dev/PhoneAgentNCM/Sources/PhoneAgentNCM/LocalVPNDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../ncm-dev/PhoneAgentNCM/Sources/PhoneAgentNCM/LocalVPNDiscovery.swift"; sourceTree = SOURCE_ROOT; };
+		2E2F2E3FD3A91908F440DD7F /* PhoneAgentTests/DeviceControlRouteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PhoneAgentTests/DeviceControlRouteTests.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -300,6 +304,7 @@
 		01C9D5910E626DA35A0A8FDF /* PhoneAgentTests */ = {
 			isa = PBXGroup;
 			children = (
+				2E2F2E3FD3A91908F440DD7F /* PhoneAgentTests/DeviceControlRouteTests.swift */,
 				B1C6BD4ADEB0BB2BDF4A6D91 /* PhoneAgentTests/AgentPresentationTests.swift */,
 				871F830C55A3C2AE85A4C6A5 /* PhoneAgentTests/AttachmentSendingTests.swift */,
 				D5A80AF9F57D9BBEA837F0C9 /* PhoneAgentTests/AttachmentStoreTests.swift */,
@@ -327,6 +332,7 @@
 		0BFD595BCD020595427B3001 /* PhoneAgent */ = {
 			isa = PBXGroup;
 			children = (
+				26235B7FAC0EC2C78AAD4009 /* ../ncm-dev/PhoneAgentNCM/Sources/PhoneAgentNCM/LocalVPNDiscovery.swift */,
 				8F8355D89D025B99C0374C30 /* PhoneAgent/Agent/AgentViewModel.swift */,
 				BBB418CC025ECF7C8F6F4777 /* PhoneAgent/Agent/DeviceTools.swift */,
 				EAB7DF5E0D294A2A76FFBEB0 /* PhoneAgent/Agent/ModelDiscovery.swift */,
@@ -647,6 +653,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DFA98F0930F968FF82B6305F /* ../ncm-dev/PhoneAgentNCM/Sources/PhoneAgentNCM/LocalVPNDiscovery.swift in Sources */,
 				3A63C56C1146913C500545F7 /* PhoneAgent/Agent/AgentViewModel.swift in Sources */,
 				52280C3606C0FFD5808D35F4 /* PhoneAgent/Agent/DeviceTools.swift in Sources */,
 				941E05D1105851A9D81EAB45 /* PhoneAgent/Agent/ModelDiscovery.swift in Sources */,
@@ -725,6 +732,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EA445E5B2317C8978E9A9C5A /* PhoneAgentTests/DeviceControlRouteTests.swift in Sources */,
 				EED32CB403AAFD20E1DA950B /* PhoneAgentTests/AgentPresentationTests.swift in Sources */,
 				AF1DFEF4EFDB70FC6B7D7786 /* PhoneAgentTests/AttachmentSendingTests.swift in Sources */,
 				1C235E9509AC364EB3607A7D /* PhoneAgentTests/AttachmentStoreTests.swift in Sources */,

@@ -699,6 +699,55 @@ pub unsafe extern "C" fn ncm_backend_start(
         }
     })
 }
+/// Start through the default VPN loopback interface; authorization and identity
+/// validation are identical to the S3 path. Port comes from local Bonjour only.
+/// # Safety
+/// raw and handle must reference readable/writable C values for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ncm_local_vpn_start(
+    interface_index: u32,
+    pairing_port: u16,
+    permissions: u32,
+    raw: *const Identity,
+    handle: *mut u64,
+) -> i32 {
+    unsafe { ncm_local_vpn_start_configured(interface_index, pairing_port, permissions,
+        0x0a070101, 0x0a070001, raw, handle) }
+}
+/// # Safety
+/// Same pointer contract as ncm_local_vpn_start; addresses are host integers in address order.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ncm_local_vpn_start_configured(
+    interface_index: u32, pairing_port: u16, permissions: u32,
+    local_ipv4: u32, peer_ipv4: u32, raw: *const Identity, handle: *mut u64,
+) -> i32 {
+    protect(|| {
+        if raw.is_null() || handle.is_null() {
+            return INVALID;
+        }
+        unsafe { *handle = 0 };
+        if permissions & VERIFY == 0 || permissions & !15 != 0 {
+            return INVALID;
+        }
+        let id = match unsafe { identity(&*raw) } {
+            Ok(id) => id,
+            Err(e) => return e,
+        };
+        let connector =
+            match crate::local_vpn::LocalVPNConnector::configured(interface_index, pairing_port,
+                std::net::Ipv4Addr::from(local_ipv4), std::net::Ipv4Addr::from(peer_ipv4)) {
+                Ok(c) => c,
+                Err(_) => return INVALID,
+            };
+        match launch(connector, id, permissions) {
+            Ok(id) => {
+                unsafe { *handle = id };
+                0
+            }
+            Err(e) => e,
+        }
+    })
+}
 #[unsafe(no_mangle)]
 pub extern "C" fn ncm_backend_submit(handle: u64, id: u64, action: u32, x: u16, y: u16) -> i32 {
     if !(1..=5).contains(&action) && action != 7 && action != 8 && action != 11 {

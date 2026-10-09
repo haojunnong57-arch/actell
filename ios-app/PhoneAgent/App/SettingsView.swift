@@ -4,6 +4,7 @@ struct SettingsView: View {
     @ObservedObject var model: AgentViewModel
     @Environment(\.dismiss) private var dismiss
     @AppStorage(BackgroundPlaybackMode.defaultsKey) private var backgroundMode = BackgroundPlaybackMode.defaultMode.rawValue
+    @State private var control = PairingFlow.shared
     @State private var clear = false
     @State private var clearAssets = false
     @State private var assetStatus = ""
@@ -16,8 +17,13 @@ struct SettingsView: View {
                     }.accessibilityIdentifier("openProviders")
                 }
                 Section("手机操控") {
+                    Picker("连接模式", selection: Binding(get: { control.route }, set: { _ = control.selectRoute($0) })) {
+                        Text(DeviceControlRoute.vpnLoopback.title).tag(DeviceControlRoute.vpnLoopback)
+                        Text(DeviceControlRoute.ncmDeveloper.title).tag(DeviceControlRoute.ncmDeveloper)
+                    }.disabled(model.hasBusySessions || !control.canChangeRoute)
+                        .accessibilityIdentifier("deviceControlMode")
                     NavigationLink { ESP32ControlSettingsView() } label: {
-                        Text("ESP32 控制")
+                        Text("连接与验证")
                     }.accessibilityIdentifier("esp32ControlSettings")
                 }
                 Section("后台执行") {

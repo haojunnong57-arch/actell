@@ -8,13 +8,13 @@ struct DeviceControlsView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if DeviceControlRoute.current == .ncmDeveloper {
+                if DeviceControlRoute.current != .localCaptureUSB {
                     ESP32ControlSettingsView()
                 } else {
                     legacyControls
                 }
             }
-            .navigationTitle(DeviceControlRoute.current == .ncmDeveloper ? "ESP32 控制" : "设备控制").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(DeviceControlRoute.current != .localCaptureUSB ? DeviceControlRoute.current.controlTitle : "设备控制").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } } }
         }
     }

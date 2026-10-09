@@ -9,6 +9,11 @@ import Darwin
     @Environment(\.scenePhase) private var scenePhase
     init() {
         PhoneAgentShortcuts.updateAppShortcutParameters()
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--local-vpn-probe") {
+            _ = PairingFlow.shared.selectRoute(.vpnLoopback)
+        }
+        #endif
         PairingFlow.shared.registerBackgroundTask()
     }
     var body: some Scene {
@@ -16,7 +21,8 @@ import Darwin
             ContentView(model: model, statusPiP: statusPiP, commands: PhoneAgentRuntime.shared.commands)
                 .overlay {
                     #if DEBUG
-                    if ProcessInfo.processInfo.arguments.contains("--ncm-video-geometry-probe") { NCMVideoGeometryProbeView(statusPiP: statusPiP) }
+                    if ProcessInfo.processInfo.arguments.contains("--local-vpn-probe") { LocalVPNProbeView() }
+                    else if ProcessInfo.processInfo.arguments.contains("--ncm-video-geometry-probe") { NCMVideoGeometryProbeView(statusPiP: statusPiP) }
                     else if ProcessInfo.processInfo.arguments.contains("--ncm-tools-probe") { NCMToolsProbeView(statusPiP: statusPiP) }
                     #endif
                 }
@@ -100,6 +106,72 @@ import Darwin
 }
 
 #if DEBUG
+/// Explicit on-device acceptance: one screenshot, one tap on this harmless
+/// counter, then another screenshot. No user history or external app is touched.
+private struct LocalVPNProbeView: View {
+    @State private var count = 0
+    @State private var target = CGRect.zero
+    @State private var status = "正在验证 VPN 回环"
+    @State private var started = false
+    var body: some View {
+        ZStack {
+            Color(uiColor: .systemBackground).ignoresSafeArea()
+            Button { count += 1 } label: {
+                VStack { Text("VPN 回环 点击目标"); Text("实际触摸：\(count)").font(.largeTitle) }
+                    .frame(width: 270, height: 160)
+            }.buttonStyle(.borderedProminent)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { target = $0 }
+            VStack { Text("免 ESP32 真机验证").font(.title2); Spacer(); Text(status).font(.footnote).multilineTextAlignment(.center) }.padding()
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task { await run() }
+    }
+    @MainActor private func run() async {
+        guard !started else { return }; started = true
+        let flow = PairingFlow.shared
+        let url = URL.documentsDirectory.appending(path: "local-vpn-probe.log")
+        var records: [String] = []
+        func record(_ line: String) {
+            records.append(Date().ISO8601Format() + " " + line)
+            try? records.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+            status = line
+        }
+        record("start route=\(flow.route.rawValue) paired=\(flow.hasRecord)")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(90))
+        if !flow.ready && !flow.running { flow.verify() }
+        while flow.running && !flow.ready && ContinuousClock.now < deadline {
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+        }
+        guard flow.ready else { record("connection failed: \(flow.lastFailure ?? flow.message)"); return }
+        record("authenticated CoreDevice ready")
+        var control: NCMDeviceBridge?
+        do {
+            let bridge = try NCMDeviceBridge(flow: flow); control = bridge
+            let frame = try await bridge.screenshot()
+            try frame.png.write(to: URL.documentsDirectory.appending(path: "local-vpn-before.jpg"))
+            record("screenshot \(frame.width)x\(frame.height) bytes=\(frame.png.count)")
+            guard !target.isEmpty, let screen = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first?.screen else {
+                throw AppError.invalid("点击目标尚未布局")
+            }
+            let x = Int((target.midX / screen.bounds.width * 65535).rounded())
+            let y = Int((target.midY / screen.bounds.height * 65535).rounded())
+            let baseline = count
+            try await bridge.authorizeTaskInput(imageID: frame.id)
+            try await bridge.tap(x: x, y: y, imageID: frame.id)
+            try await Task.sleep(for: .seconds(1))
+            record("tap delivered; actual counter \(baseline)->\(count)")
+            let after = try await bridge.screenshot()
+            try after.png.write(to: URL.documentsDirectory.appending(path: "local-vpn-after.jpg"))
+            await bridge.stop(); control = nil
+            let released = flow.ready && !flow.running && flow.lastFailure == nil && flow.message == "屏幕控制已结束"
+            record("media release confirmed=\(released)")
+            record(count == baseline + 1 && released ? "PASS screenshot + actual touch + media release" : "FAIL touch or media release not confirmed; input will not replay")
+        } catch {
+            if let control { await control.stop() }
+            record("failed: \(String(describing: error)); \(flow.lastFailure ?? flow.message)")
+        }
+    }
+}
+
 private func processCPUSecondsForProbe() -> Double {
     var usage = rusage()
     guard getrusage(RUSAGE_SELF, &usage) == 0 else { return -1 }

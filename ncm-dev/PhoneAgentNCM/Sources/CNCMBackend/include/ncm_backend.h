@@ -58,6 +58,11 @@ uint32_t ncm_backend_abi(void);
 int32_t ncm_pairing_start(uint32_t consent,uint64_t *handle);
 int32_t ncm_pairing_ack(uint64_t handle,uint32_t state);
 int32_t ncm_backend_start(const ncm_config *,const ncm_identity *,uint64_t *handle);
+/* VPN loopback default utun 10.7.1.1 -> 10.7.0.1. No default route fallback.
+ * pairing_port must be freshly discovered on this phone. Same permissions/identity. */
+int32_t ncm_local_vpn_start(uint32_t interface_index,uint16_t pairing_port,uint32_t permissions,const ncm_identity *,uint64_t *handle);
+/* Explicit IPv4 values in address order: 10.7.1.1 = 0x0a070101 (host integer). */
+int32_t ncm_local_vpn_start_configured(uint32_t interface_index,uint16_t pairing_port,uint32_t permissions,uint32_t local_ipv4,uint32_t peer_ipv4,const ncm_identity *,uint64_t *handle);
 /* Ordinary Lockdown, independent of RemotePairing. Caller-selected plist bytes
  * and expected UDID; permissions must be exactly NCM_ALLOW_EXISTING_VERIFY.
  * Ready event 2 means StartSession + pinned mutual TLS completed (no RSD/DDI).

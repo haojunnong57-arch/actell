@@ -136,3 +136,10 @@ UI 提供协议/基础地址/密钥、获取/取消/刷新、缓存搜索选择�
 - **231 项核心 + 16 项 UI 全部通过，0 失败**：`.build/validation/core.PdT8cE/Tests.xcresult` 及同目录 `test.log`。包括既有停止／授权／隔离／迁移、模型、附件和技能回归。
 - 最终 iPhoneOS 无签名构建成功：`.build/b1-b6-device-build.log`，没有编译警告。UI 日志仍有基线已有的“Modifying state during view update”警告（旧 `.build/validation/core.dGj1mk/test.log` 同样存在）；Xcode 附加 simctl 诊断失败也仍存在，未把这两项误报为本次新增或已修的 Conversion error。
 - 本轮没有固件或 USB wire 变更，未重跑已通过的 C/TCP/wire 夹具；可选归档／旧 Host 全量、真实服务商字段与签名兼容、真实多动作 HID／断线释放及跨 App 闭环未验收。未请求真实密钥、安装真机、刷写、合并或推送；主线原有签名改动与其他 worktree 保持原状。
+
+
+## 2026-10-09：VPN 回环免 ESP32 模式
+
+已新增 VPN 回环连接模式，作为首个选项及未保存偏好时的默认值；已有显式 ESP32 选择保留。两条路线共用 App 内系统配对身份与 CoreDevice 后端，切换或保存地址配置会释放旧会话并撤销旧截图/动作授权，运行中禁止修改。接口与对端 IPv4 可编辑，默认 10.7.1.1 / 10.7.0.1，发现或绑定失败不回落其他通道。新配对广播和协议中的授权名称为「执言」。
+
+iPhone 15 Pro 真机已通过：复用已有身份、CoreDevice 认证、1179 × 2556 截图、真实点击计数 0 → 1、对端确认媒体释放；更新已安装并正常启动。最新默认 App 326 项、Swift/C/Rust 链路 40 项、Rust 45 + 176 项及 PA3 TCP 25 项通过；模式与地址 UI 用例通过。证据、测试入口及剩余拖动/后台验收边界见 [VPN 回环模式](ncm-coredevice/LOCALDEVVPN.md)。

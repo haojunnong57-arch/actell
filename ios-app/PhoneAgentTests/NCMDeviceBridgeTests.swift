@@ -808,7 +808,7 @@ private struct DisconnectedChatProvider: LLMProvider {
             return LLMResponse(text: "", finishReason: .toolCalls,
                 toolCalls: [LLMToolCall(id: "screen", name: "screenshot", arguments: "{}")], request: request, providerName: Self.name)
         }
-        if requestsScreenshot && result?.content.contains("等待 ESP32 连接超时") != true {
+        if requestsScreenshot && result?.content.contains("等待手机操控连接超时") != true {
             throw AppError.invalid("模型未收到设备工具的连接错误")
         }
         return LLMResponse(text: "正常回复", finishReason: .stop, request: request, providerName: Self.name)

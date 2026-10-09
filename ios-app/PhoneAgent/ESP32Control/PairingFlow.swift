@@ -11,6 +11,32 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     private let pairing = RemotePairingSession()
     private let backend = NativeDeveloperServices()
     private let client = NCMProbeClient()
+    private let localDiscovery = LocalVPNDiscovery()
+    private(set) var route: DeviceControlRoute
+    private let defaults: UserDefaults
+    private static let vpnConfigurationKey = "vpnLoopbackConfiguration"
+    private(set) var vpnConfiguration: VPNLoopbackConfiguration
+    func saveVPNConfiguration(localAddress: String, peerAddress: String) throws {
+        guard canChangeRoute else { throw NCMControlError.unavailable("请先停止当前操控，再修改连接配置") }
+        let configuration = try VPNLoopbackConfiguration(localAddress: localAddress, peerAddress: peerAddress)
+        guard configuration != vpnConfiguration else { return }
+        cancel()
+        vpnConfiguration = configuration
+        defaults.set(["localAddress": configuration.localAddress, "peerAddress": configuration.peerAddress], forKey: Self.vpnConfigurationKey)
+        lastFailure = nil
+        message = "配置已保存，请重新连接"
+    }
+    var canChangeRoute: Bool { !running && !agentReserved && connectionUsers.isEmpty && !mediaLifetime.stopping }
+    @discardableResult func selectRoute(_ selected: DeviceControlRoute) -> Bool {
+        guard selected != .localCaptureUSB, canChangeRoute else { return false }
+        guard selected != route else { return true }
+        cancel()
+        route = selected
+        defaults.set(selected.rawValue, forKey: DeviceControlRoute.defaultsKey)
+        lastFailure = nil
+        message = hasRecord ? "已切换，请连接验证" : "请先完成系统配对"
+        return true
+    }
     private let store: RemotePairRecordStore
     private var service: NetService?
     private var generation = UUID()
@@ -43,18 +69,24 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     private(set) var screenshotData: Data?
     var statusText: String {
         if pairingActive { return message }
-        if running { return ready ? "正在处理操作" : "正在连接 ESP32" }
+        if running { return ready ? "正在处理操作" : "正在连接 \(route.connectionName)" }
         if ready {
             if lastFailure != nil { return "最近操作未成功" }
             return image == nil ? "截图与点击可用" : "截图已收到"
         }
-        if hasRecord { return lastFailure == nil ? "已配对，可连接 ESP32" : "连接未成功；若已在系统取消授权，请重新配对" }
+        if hasRecord { return lastFailure == nil ? "已配对，可连接 \(route.connectionName)" : "连接未成功；若已在系统取消授权，请重新配对" }
         return message
     }
     override convenience init() {
         self.init(store: RemotePairRecordStore(url: URL.applicationSupportDirectory.appending(path: "RemotePairing/identity.plist")))
     }
-    init(store: RemotePairRecordStore) { self.store = store; super.init(); hasRecord = store.exists }
+    init(store: RemotePairRecordStore, defaults: UserDefaults = .standard) {
+        self.store = store; self.defaults = defaults; route = DeviceControlRoute.load(from: defaults)
+        let saved = defaults.dictionary(forKey: Self.vpnConfigurationKey) as? [String: String]
+        vpnConfiguration = (try? VPNLoopbackConfiguration(localAddress: saved?["localAddress"] ?? VPNLoopbackConfiguration.defaults.localAddress,
+            peerAddress: saved?["peerAddress"] ?? VPNLoopbackConfiguration.defaults.peerAddress)) ?? .defaults
+        super.init(); hasRecord = store.exists
+    }
 
     /// User explicitly requests new system authorization, even if a local identity remains.
     func resetPairing() {
@@ -87,7 +119,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     func startPairing() {
         guard !running else { return }
         hasRecord = store.exists
-        guard !hasRecord else { message = "请连接 ESP32"; return }
+        guard !hasRecord else { message = "请连接 \(route.connectionName)"; return }
         guard registeredBackgroundTask else { message = "系统配对后台任务未注册，请重新打开 App"; return }
         guard #available(iOS 26.0, *) else { message = "系统交互配对需要 iOS 26 或更新版本的持续后台任务"; return }
         generation = UUID(); running = true; pairingActive = true; message = "正在申请配对后台任务，请等待入口就绪"
@@ -123,7 +155,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
                         self.message = "正在发布系统配对入口"
                     case .code(let value): self.pin = value; self.message = "在系统配对页面输入此 PIN"; continued.progress.completedUnitCount = 2
                     case .persisted(let committed): self.message = committed ? "正在确认配对完成" : "正在完成配对"; continued.progress.completedUnitCount = 3
-                    case .completed: self.message = "配对成功。回到 App，点击验证 ESP32 连接"; continued.progress.completedUnitCount = 4
+                    case .completed: self.message = "配对成功。回到 App，点击验证 \(route.connectionName) 连接"; continued.progress.completedUnitCount = 4
                     }
                 })
                 success = true
@@ -133,7 +165,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     }
     func netServiceDidPublish(_ sender: NetService) {
         guard service === sender else { return }
-        message = "打开设置 → 隐私与安全性 → 开发者模式，选择与 PhoneAgent NCM 配对"
+        message = "打开设置 → 隐私与安全性 → 开发者模式，选择与「执言」配对"
     }
     func netService(_ sender: NetService, didNotPublish errorDict: [String: NSNumber]) {
         guard service === sender else { return }
@@ -153,7 +185,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         job?.cancel(); pairing.close(); service?.stop(); service = nil
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.taskID)
         if pairingActive { finishPairing(success: false) }
-        backend.close(); client.cancel(); ready = false; mediaStarted = false; image = nil; screenshotData = nil; running = false; capturing = false; job = nil
+        backend.close(); client.cancel(); localDiscovery.cancel(); ready = false; mediaStarted = false; image = nil; screenshotData = nil; running = false; capturing = false; job = nil
         message = "已停止"
     }
     func background() {
@@ -180,7 +212,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     func connectIfNeeded() throws {
         hasRecord = store.exists
         if ready || pairingActive { return }
-        guard hasRecord else { throw NCMControlError.unavailable("请先在设置 → 手机操控 → ESP32 控制中完成系统配对") }
+        guard hasRecord else { throw NCMControlError.unavailable("请先在设置 → 手机操控 → 连接与验证中完成系统配对") }
         if !running && !agentReserved { verify() }
     }
     func verify() {
@@ -198,21 +230,30 @@ enum NCMControlError: Error { case unavailable(String), stopped }
                 try Task.checkCancellation()
                 guard generation == epoch else { return }
                 var identity = try store.load().identity(); defer { identity.clearSeed() }
-                message = "正在从 ESP32 发现手机 RemotePairing 服务"
-                var discovery = try await client.request(.discoverIPv4)
-                if discovery.endpoints?.contains(where: { $0.service == "remotepairing" }) != true {
-                    discovery = try await client.request(.discoverIPv6)
+                let authorization = ExistingSessionAuthorization(verifyExistingIdentity: true, screen: true, screenVideoStream: true, input: true)
+                if route == .vpnLoopback {
+                    message = "正在发现本机 RemotePairing 服务，请保持 VPN 回环连接开启"
+                    let configuration = vpnConfiguration
+                    let port = try await localDiscovery.discoverPort(configuration: configuration)
+                    try Task.checkCancellation(); guard generation == epoch else { return }
+                    message = "正在经 VPN 回环验证身份并建立 CoreDevice 隧道"
+                    try await backend.connectLocalVPN(identity: identity, authorization: authorization, pairingPort: port, configuration: configuration)
+                } else {
+                    message = "正在从 ESP32 发现手机 RemotePairing 服务"
+                    var discovery = try await client.request(.discoverIPv4)
+                    if discovery.endpoints?.contains(where: { $0.service == "remotepairing" }) != true {
+                        discovery = try await client.request(.discoverIPv6)
+                    }
+                    try Task.checkCancellation(); guard generation == epoch else { return }
+                    guard let endpoint = discovery.endpoints?.first(where: { $0.service == "remotepairing" }) else {
+                        throw NCMControlError.unavailable("未发现手机服务，请检查 ESP32 连接")
+                    }
+                    message = "正在经 ESP32 验证身份并建立开发者隧道"
+                    try await backend.connect(identity: identity, authorization: authorization, discovery: discovery, endpoint: endpoint)
                 }
-                try Task.checkCancellation()
-                guard generation == epoch else { return }
-                guard let endpoint = discovery.endpoints?.first(where: { $0.service == "remotepairing" }) else {
-                    message = "未发现手机服务，请检查 ESP32 连接"; return
-                }
-                message = "正在经 ESP32 验证身份并建立开发者隧道"
-                try await backend.connect(identity: identity, authorization: ExistingSessionAuthorization(verifyExistingIdentity: true, screen: true, screenVideoStream: true, input: true), discovery: discovery, endpoint: endpoint)
                 try await backend.checkDeveloperReadiness()
                 try Task.checkCancellation(); guard generation == epoch else { return }
-                ready = true; startHeartbeat(); message = "ESP32 认证、开发者隧道和服务检查成功，可测试截图与输入"
+                ready = true; startHeartbeat(); message = "\(route.connectionName) 认证、开发者隧道和服务检查成功，可测试截图与输入"
             } catch { guard generation == epoch else { return }; backend.close(); message = failure(error); lastFailure = message }
         }
     }
@@ -269,7 +310,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
                     lastFailure = message
                 } else {
                     stopHeartbeat(); ready = false; mediaStarted = false; backend.close()
-                    message = failure(error) + "；请重新连接 ESP32"; lastFailure = message
+                    message = failure(error) + "；请重新连接 \(route.connectionName)"; lastFailure = message
                 }
             }
         }
@@ -277,7 +318,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
     /// A task pins one authenticated session. Reconnect never silently substitutes
     /// another generation; diagnostics and task traffic share the operation gate.
     func agentOperation<T>(owner: UUID, session: UUID, action: (NativeDeveloperServices) async throws -> T) async throws -> T {
-        guard ready, controlSessionID == session else { throw NCMControlError.unavailable("ESP32 控制未连接，请在设置 → 手机操控 → ESP32 控制中连接") }
+        guard ready, controlSessionID == session else { throw NCMControlError.unavailable("手机操控未连接，请在设置 → 手机操控 → 连接与验证中连接") }
         if agentOwner != owner {
             if !agentQueue.contains(owner) { agentQueue.append(owner) }
             defer { agentQueue.removeAll { $0 == owner } }
@@ -323,7 +364,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
             if error is CancellationError || (error as? NCMControlError) != nil {
                 cancel(); throw NCMControlError.stopped
             }
-            message = failure(error) + "；请重新连接 ESP32"; lastFailure = message
+            message = failure(error) + "；请重新连接 \(route.connectionName)"; lastFailure = message
             stopHeartbeat(); ready = false; mediaStarted = false; backend.close()
             invalidateAgentSession(); running = false
             throw NCMControlError.unavailable(message)
@@ -437,7 +478,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
                     guard self.heartbeatEpoch == epoch else { return }
                     self.maintenanceBusy = false; self.ready = false; self.mediaStarted = false; self.running = false
                     self.backend.close(); self.invalidateAgentSession()
-                    self.message = "连接保活失败：" + self.failure(error) + "；请重新连接 ESP32"
+                    self.message = "连接保活失败：" + self.failure(error) + "；请重新连接 \(route.connectionName)"
                     self.lastFailure = self.message
                     return
                 }
@@ -445,6 +486,18 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         }
     }
     private func failure(_ error: Error) -> String {
+        if case NCMControlError.unavailable(let message) = error { return message }
+        if let vpnError = error as? LocalVPNError {
+            switch vpnError {
+            case .inactive: return "未找到 VPN 接口 \(vpnConfiguration.localAddress)，请检查 VPN 是否开启及地址配置"
+            case .ambiguousInterface: return "发现多个匹配的 VPN 接口，请检查连接配置"
+            case .serviceNotFound: return "未发现本机 RemotePairing 服务，请检查开发者模式、系统配对和本地网络权限"
+            case .ambiguousService: return "发现多个本机 RemotePairing 端口，请重新连接后再试"
+            case .invalidConfiguration: return "请输入不同的有效 IPv4 接口地址和对端地址"
+            case .discoveryDenied: return "本机服务发现失败，请允许本地网络访问"
+            }
+        }
+
         if case NativeBackendError.screenshotFailure(let stage, let cause) = error {
             return failure(NativeBackendError.protocolFailure(stage: stage, cause: cause))
         }
@@ -459,12 +512,14 @@ enum NCMControlError: Error { case unavailable(String), stopped }
                 let reasons: [UInt32: String] = [1:"协议错误", 2:"超时", 3:"参数无效", 4:"服务缺失", 5:"尚未就绪", 8:"超时，未收到视频数据", 9:"超时，未收到协商匹配的视频包", 10:"超时，视频包未组成完整帧", 11:"超时，未能确认视频画面完整性", 12:"超时，视频画面超过接收大小限制", 13:"视频解码会话已失效", 14:"视频解码失败"]
                 return "截图\(stage == 19 ? "服务连接" : "请求与接收")失败（\(reasons[cause] ?? "原因 \(cause)")）"
             }
-            let labels: [UInt32: String] = [1:"配对身份", 2:"ESP32 转发连接", 3:"手机身份认证", 4:"动态隧道入口", 5:"隧道 TLS", 6:"远程服务列表", 7:"开发者模式", 8:"开发者镜像", 9:"截图", 10:"屏幕视频会话", 11:"输入发送", 12:"会话关闭", 21:"App 服务"]
+            let labels: [UInt32: String] = [1:"配对身份", 2:route.connectionName + " 连接", 3:"手机身份认证", 4:"动态隧道入口", 5:"隧道 TLS", 6:"远程服务列表", 7:"开发者模式", 8:"开发者镜像", 9:"截图", 10:"屏幕视频会话", 11:"输入发送", 12:"会话关闭", 21:"App 服务"]
             let reasons: [UInt32: String] = [1:"协议错误", 2:"超时", 3:"参数无效", 4:"服务缺失", 5:"尚未就绪", 6:"屏幕会话失效", 7:"发送结果未知"]
             return "\(labels[stage] ?? "协议")失败（\(reasons[cause] ?? "原因 \(cause)")）"
         }
         if error is CancellationError { return "已停止" }
-        return "连接失败，请检查 ESP32 固件、NCM 接口和本地网络权限"
+        return route == .vpnLoopback
+            ? "连接失败，请检查 VPN 回环配置、开发者模式及本地网络权限"
+            : "连接失败，请检查 ESP32 固件、NCM 接口和本地网络权限"
     }
     #if DEBUG
     private var backgroundProbeStarted = false
@@ -651,10 +706,10 @@ struct TouchVerificationView: View {
                 Text(result).multilineTextAlignment(.center).accessibilityIdentifier("touchVerificationResult")
                 Text(flow.message).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 if !flow.ready {
-                    Button("重新连接 ESP32") { flow.verify() }.disabled(flow.running || flow.agentReserved)
+                    Button("重新连接 \(flow.route.connectionName)") { flow.verify() }.disabled(flow.running || flow.agentReserved)
                 }
                 if testing { ProgressView() }
-                Button("经 ESP32 点击中央目标") { test() }.buttonStyle(.bordered).disabled(testing || !flow.ready || flow.running || flow.agentReserved)
+                Button("经 \(flow.route.connectionName) 点击中央目标") { test() }.buttonStyle(.bordered).disabled(testing || !flow.ready || flow.running || flow.agentReserved)
                 Text("保持此页打开。计数增加才说明界面收到触摸；单纯报告发送成功不计入。")
                     .font(.footnote).foregroundStyle(.secondary)
             }.padding()

@@ -19,9 +19,10 @@ pub enum Purpose {
     NegotiatedTunnel { port: u16 },
     LockdownSession,
 }
-/// The embedding app owns a previously selected NCM target. Every call must
-/// create an S3-originated stream to that SAME target, bound to the same NCM
-/// generation. There is deliberately no native TCP, usbmux, VPN or Mac fallback.
+/// The embedding app explicitly selects S3 relay or VPN loopback before connecting.
+/// Every call stays on that connector and the same authenticated peer: S3 uses its
+/// discovery generation; VPN loopback uses its configured, bound utun interface.
+/// Neither connector falls back to another route, usbmux, or a Mac.
 pub trait NcmConnector: Send + Sync {
     fn connect(&self, purpose: Purpose) -> DialFuture<'_>;
 }

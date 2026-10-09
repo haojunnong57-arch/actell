@@ -1,16 +1,27 @@
 import Foundation
 import ImageIO
 
-/// Snapshot the route once per run. A future setting can select the retained
-/// local capture/USB implementation here without changing agent tools.
-enum DeviceControlRoute: Sendable {
+/// Persisted developer route; active bridges retain the shared connection and
+/// prevent route changes until their run has released it.
+enum DeviceControlRoute: String, Sendable {
+    case vpnLoopback = "localDevVPN"
     case ncmDeveloper
     case localCaptureUSB
-    static let current: Self = .ncmDeveloper
+    static let defaultsKey = "deviceControlRoute"
+    static var current: Self { load(from: .standard) }
+    static func load(from defaults: UserDefaults) -> Self {
+        // Retained capture route is not exposed by this setting.
+        defaults.string(forKey: defaultsKey) == Self.ncmDeveloper.rawValue ? .ncmDeveloper : .vpnLoopback
+    }
+    var title: String { self == .vpnLoopback ? "VPN 回环" : "ESP32 NCM" }
+    var connectionName: String { self == .vpnLoopback ? "VPN 回环" : "ESP32" }
+    var controlTitle: String { self == .vpnLoopback ? "VPN 回环控制" : "ESP32 控制" }
     var modelContext: String {
         switch self {
         case .ncmDeveloper:
             return "Screenshots and touch input use the authenticated ESP32 NCM developer connection. Background execution needs an active execution source. Device tools wait for a paired connection internally; reconnecting invalidates old frames and action grants, while read tools can bind the new session."
+        case .vpnLoopback:
+            return "Screenshots and touch input use authenticated CoreDevice services through a local VPN loopback on this phone, without ESP32. A compatible packet-reflection VPN must already be enabled with the configured interface and peer addresses. Device tools verify the paired connection internally; reconnecting invalidates old frames and action grants. Follow actual readiness errors."
         case .localCaptureUSB:
             return "Screenshots use this App's authorized ScreenCaptureKit capture, independently of USB. Touch input uses the retained USB HID route. Follow the tools' actual foreground/background capabilities."
         }
@@ -132,7 +143,7 @@ private final class NCMRunFence: @unchecked Sendable {
         var nextAttempt = ContinuousClock.now
         while !flow.ready {
             try Task.checkCancellation(); try fence.check()
-            guard stopID == flow.connectionStopID else { throw AppError.unavailable("ESP32 连接等待已停止") }
+            guard stopID == flow.connectionStopID else { throw AppError.unavailable("手机操控连接等待已停止") }
             if ContinuousClock.now >= nextAttempt {
                 do { try flow.connectIfNeeded() }
                 catch NCMControlError.unavailable(let message) { throw AppError.unavailable(message) }
@@ -140,12 +151,12 @@ private final class NCMRunFence: @unchecked Sendable {
             }
             if flow.ready { break }
             guard ContinuousClock.now < deadline else {
-                throw AppError.unavailable("等待 ESP32 连接超时。" + (flow.connectionFailure ?? "请检查设备连接"))
+                throw AppError.unavailable("等待手机操控连接超时。" + (flow.connectionFailure ?? "请检查设备连接"))
             }
             try await Task.sleep(for: .milliseconds(50))
         }
         try Task.checkCancellation(); try fence.check()
-        guard stopID == flow.connectionStopID else { throw AppError.unavailable("ESP32 连接等待已停止") }
+        guard stopID == flow.connectionStopID else { throw AppError.unavailable("手机操控连接等待已停止") }
         if session != flow.controlSessionID {
             if let session { flow.releaseAgent(owner: owner, session: session) }
             imageID = nil; approvedImageID = nil; systemAuthorizationID = nil
@@ -157,7 +168,7 @@ private final class NCMRunFence: @unchecked Sendable {
     private func check() throws {
         try fence.check()
         guard flow.ready else {
-            throw AppError.unavailable(flow.connectionFailure ?? "手机操控未连接，请在设置 → 手机操控 → ESP32 控制中连接")
+            throw AppError.unavailable(flow.connectionFailure ?? "手机操控未连接，请在设置 → 手机操控 → 连接与验证中连接")
         }
         if let session {
             guard flow.controlSessionID == session else {

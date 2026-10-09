@@ -524,7 +524,7 @@ struct AgentRunServices {
                                                    supportsHID: appOwner.usbConnectionStatus == .ready(hid: true))
                 }
                 switch DeviceControlRoute.current {
-                case .ncmDeveloper:
+                case .ncmDeveloper, .vpnLoopback:
                     selectedBridge = try NCMDeviceBridge()
                 case .localCaptureUSB:
                     selectedBridge = try LiveDeviceBridgeRouter.make(frames: capture.frames, captureActive: capture.active,

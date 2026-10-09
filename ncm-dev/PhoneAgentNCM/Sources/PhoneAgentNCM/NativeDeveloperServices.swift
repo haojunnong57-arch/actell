@@ -91,6 +91,26 @@ public enum InputDelivery: Sendable { case reportsWrittenVisualEffectUnverified 
         handle = started
         try await finishConnect(started)
     }
+    /// Reuses the exact authenticated CoreDevice session over a bound local VPN socket.
+    public func connectLocalVPN(identity: AuthorizedRemoteIdentity, authorization: ExistingSessionAuthorization,
+                                pairingPort: UInt16, configuration: VPNLoopbackConfiguration = .defaults) async throws {
+        try Task.checkCancellation()
+        guard authorization.verifyExistingIdentity else { throw NativeBackendError.authorizationRequired }
+        guard !busy, handle == 0 else { throw NativeBackendError.busy }
+        guard Self.linkedABIVersion == NCM_BACKEND_ABI else { throw NativeBackendError.unsupportedABI }
+        guard pairingPort != 0 else { throw NativeBackendError.invalidCandidate }
+        let row = try LocalVPNDiscovery.selectInterface(NCMInterfaceBinding.inventory(), configuration: configuration)
+        let values = [identity.signingSeed, Data(identity.controllerID.utf8), Data(identity.peerID.utf8), identity.peerPublicKey,
+                      identity.alternateIRK, Data(identity.peerUDID.utf8), Data(identity.peerModel.utf8)]
+        var started: UInt64 = 0
+        let code = withSlices(values) { b in
+            var raw = ncm_identity(seed: b[0], controller_id: b[1], peer_id: b[2], peer_public_key: b[3], alt_irk: b[4], peer_udid: b[5], peer_model: b[6])
+            return ncm_local_vpn_start_configured(row.index, pairingPort, authorization.mask, configuration.localIPv4, configuration.peerIPv4, &raw, &started)
+        }
+        guard code == 0, started != 0 else { throw NativeBackendError.transport(code: code) }
+        handle = started
+        try await finishConnect(started)
+    }
     private func finishConnect(_ token: UInt64) async throws {
         busy = true; defer { busy = false }
         do {

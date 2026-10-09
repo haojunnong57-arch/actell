@@ -106,9 +106,6 @@
         }
       }
     },
-    "ESP32 控制" : {
-
-    },
     "Execute a task" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -608,6 +605,9 @@
 
     },
     "选择 SKILL.md，或根目录含 SKILL.md 的文件夹。元数据用 --- 包围，必须有 name: 和 description:，可选 version:；支持简单文本及 | / > 多行值。包内只支持 UTF-8 Markdown/TXT，最多 32 个文档、每个 64 KiB、整包 512 KiB；不支持 ZIP、脚本、二进制文件或符号链接。参考文档按相对路径单独加载。" : {
+
+    },
+    "连接与验证" : {
 
     },
     "配置和密钥会保留，可在本页恢复。" : {

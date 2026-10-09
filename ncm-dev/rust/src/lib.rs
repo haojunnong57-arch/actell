@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Real protocol backend for an iOS-hosted controller. All device I/O must be
-//! provided by an NCM/S3 connector; this backend does not discover a Mac tunnel or
+//! provided by an NCM/S3 or VPN loopback connector; this backend does not discover a Mac tunnel or
 //! read/write a pairing file. Nothing runs just by linking this static library.
 mod ffi;
 mod media;
 mod relay;
+mod local_vpn;
 mod video;
 pub use relay::RelayConnector;
 pub mod lockdown;

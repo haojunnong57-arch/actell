@@ -4,7 +4,7 @@ import XCTest
     private func launch(demo: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing"] + (demo ? ["--ui-test-demo-history"] : [])
+        app.launchArguments = ["--ui-testing", "-deviceControlRoute", "ncmDeveloper"] + (demo ? ["--ui-test-demo-history"] : [])
         app.launch()
         return app
     }
@@ -124,6 +124,31 @@ import XCTest
         XCTAssertTrue(app.navigationBars["ESP32 控制"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["startScreenCapture"].exists)
         capture("device-panel")
+    }
+    func testVPNLoopbackModePersistsAndShowsEditableAddresses() {
+        let app = launch()
+        app.buttons["设置"].tap()
+        let mode = app.buttons["deviceControlMode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        mode.tap()
+        app.buttons["VPN 回环"].tap()
+        app.buttons["esp32ControlSettings"].tap()
+        XCTAssertTrue(app.navigationBars["VPN 回环控制"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "共用系统配对身份")).firstMatch.exists)
+        XCTAssertEqual(app.textFields["vpnLoopbackInterfaceAddress"].value as? String, "10.7.1.1")
+        XCTAssertEqual(app.textFields["vpnLoopbackPeerAddress"].value as? String, "10.7.0.1")
+        XCTAssertTrue(app.buttons["配对"].exists)
+        XCTAssertFalse(app.buttons["获取截图"].exists)
+        capture("local-vpn-setup")
+        app.terminate(); app.launchArguments = ["--ui-testing"]; app.launch()
+        app.buttons["设置"].tap()
+        app.buttons["esp32ControlSettings"].tap()
+        XCTAssertTrue(app.navigationBars["VPN 回环控制"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["deviceControlMode"].tap()
+        app.buttons["ESP32 NCM"].tap()
+        app.buttons["esp32ControlSettings"].tap()
+        XCTAssertTrue(app.navigationBars["ESP32 控制"].waitForExistence(timeout: 5))
     }
     private func openProviders(_ app: XCUIApplication) {
         XCTAssertFalse(app.buttons["openProviders"].exists)
