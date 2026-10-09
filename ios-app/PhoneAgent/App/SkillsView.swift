@@ -9,19 +9,11 @@ struct SkillsView: View {
     @State private var status: String?
     var body: some View {
         List {
-            Section {
-                Text("技能是供模型按需读取的本地文本参考。启用后，发送任务时允许模型查询摘要、读取相关内容；不会执行脚本，也不能扩大任务或设备权限。")
-                    .font(.caption)
-                Button("导入 SKILL.md 或文本技能包", systemImage: "square.and.arrow.down") { importing = true }
-                    .disabled(model.hasBusySessions).accessibilityIdentifier("importSkill")
-                DisclosureGroup("支持的格式") {
-                    Text("选择 SKILL.md，或根目录含 SKILL.md 的文件夹。元数据用 --- 包围，必须有 name: 和 description:，可选 version:；支持简单文本及 | / > 多行值。包内只支持 UTF-8 Markdown/TXT，最多 32 个文档、每个 64 KiB、整包 512 KiB；不支持 ZIP、脚本、二进制文件或符号链接。参考文档按相对路径单独加载。")
-                        .font(.caption)
-                    Text("---\nname: 示例技能\ndescription: 说明适用场景\nversion: 1\n---\n# 操作指南\n这里写任务相关的参考内容。")
-                        .font(.caption.monospaced()).textSelection(.enabled)
+            if status != nil || store.warning != nil {
+                Section {
+                    if let status { Text(status).font(.caption).accessibilityIdentifier("skillStatus") }
+                    if let warning = store.warning { Text(warning).foregroundStyle(.orange) }
                 }
-                if let status { Text(status).font(.caption).accessibilityIdentifier("skillStatus") }
-                if let warning = store.warning { Text(warning).foregroundStyle(.orange) }
             }
             if !store.builtinPackages.isEmpty {
                 Section("内置技能") {
@@ -33,7 +25,7 @@ struct SkillsView: View {
                 }
             }
             if store.packages.isEmpty {
-                ContentUnavailableView("尚未导入技能", systemImage: "books.vertical", description: Text("导入不会自动开始任务或发送正文。"))
+                ContentUnavailableView("暂无本地技能", systemImage: "books.vertical")
             } else {
                 Section("本地技能") {
                     ForEach(store.packages) { skill in
@@ -60,6 +52,12 @@ struct SkillsView: View {
             }
         }
         .navigationTitle("技能").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("导入", systemImage: "square.and.arrow.down") { importing = true }
+                    .disabled(model.hasBusySessions).accessibilityIdentifier("importSkill")
+            }
+        }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.folder, .plainText, UTType(filenameExtension: "md") ?? .plainText]) { result in
             switch result {
             case .success(let url): perform {

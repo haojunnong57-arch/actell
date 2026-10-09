@@ -23,7 +23,7 @@ import XCTest
         let remove = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "deleteSkill-")).firstMatch
         remove.tap(); app.alerts.buttons["取消"].tap(); XCTAssertTrue(title.exists)
         remove.tap(); app.alerts.buttons["删除"].tap()
-        XCTAssertTrue(app.staticTexts["尚未导入技能"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["暂无本地技能"].waitForExistence(timeout: 5))
         importSkill(app); XCTAssertTrue(title.waitForExistence(timeout: 8))
         app.navigationBars["技能"].buttons.firstMatch.tap(); app.buttons["关闭"].tap()
         app.staticTexts["新会话"].tap()

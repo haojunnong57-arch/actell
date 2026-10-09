@@ -615,7 +615,7 @@ struct PairingSection: View {
         return flow.hasRecord ? "未连接" : "未配对"
     }
     private var showsDetail: Bool {
-        (flow.running && !flow.ready) || flow.lastFailure != nil ||
+        (flow.running && !flow.ready) ||
         (!flow.hasRecord && flow.message != "请先完成系统配对")
     }
     var body: some View {
@@ -651,7 +651,10 @@ struct PairingSection: View {
                     if flow.running || flow.ready || flow.agentReserved {
                         Button("停止") { flow.cancel() }
                     }
-                }.buttonStyle(.bordered)
+                }
+                .buttonStyle(.bordered)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             }
         }
         if flow.ready {

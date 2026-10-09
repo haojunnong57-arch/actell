@@ -16,13 +16,14 @@ struct ProvidersView: View {
                 }
                 ForEach(providers.profiles) { profile in
                     Button { editing = profile } label: {
-                        VStack(alignment: .leading, spacing: 5) {
+                        HStack {
                             Text(profile.name).foregroundStyle(.primary)
-                            Text(profile.settings.model).font(.subheadline).foregroundStyle(.secondary)
-                            Text(profile.protocolType.title + (profile.protocolType.supportsInference ? "" : " · 仅模型发现"))
-                                .font(.caption).foregroundStyle(.secondary)
-                            Text(profile.settings.baseURL).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                                .accessibilityHidden(true)
                         }
+                        .contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityIdentifier("provider-\(profile.id)")
                     .swipeActions { Button("移除", role: .destructive) { removing = profile }.disabled(model.hasBusySessions) }
                 }
@@ -36,10 +37,6 @@ struct ProvidersView: View {
                             }
                         }
                     }
-                }
-                Section {
-                    Text("获取模型只读取元数据，不发送对话或开始推理。密钥保存在本机钥匙串；移除服务商可恢复。修改协议或 API 地址后需使用对应密钥。")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("服务商")
