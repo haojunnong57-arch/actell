@@ -10,4 +10,6 @@ case "${1:-device}" in
  *) echo 'usage: build_ncm_rust.sh [device|simulator|host]' >&2; exit 2 ;;
 esac
 export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}"
-bash tools/with_ncm_rust.sh cargo build --offline --locked --manifest-path ncm-dev/rust/Cargo.toml --release --target "$target"
+cargo_flags=(--locked)
+if [[ "${NCM_CARGO_OFFLINE:-0}" == 1 ]]; then cargo_flags+=(--offline); fi
+bash tools/with_ncm_rust.sh cargo build "${cargo_flags[@]}" --manifest-path ncm-dev/rust/Cargo.toml --release --target "$target"

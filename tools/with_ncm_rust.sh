@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
-# Use an existing Rust compiler; writes/cache/outputs stay in this worktree.
+# Use an installed Rust compiler; outputs stay in this worktree.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
-toolchain="${NCM_RUST_TOOLCHAIN:-$root/../app-only/build/toolchains/rustup/toolchains/1.95.0-aarch64-apple-darwin}"
+toolchain="${NCM_RUST_TOOLCHAIN:-}"
+if [[ -z "$toolchain" ]]; then
+    if command -v rustc >/dev/null 2>&1; then
+        toolchain=$(rustc --print sysroot)
+    elif [[ -x "${HOME}/.cargo/bin/rustc" ]]; then
+        toolchain=$("${HOME}/.cargo/bin/rustc" --print sysroot)
+    fi
+fi
+if [[ -z "$toolchain" || ! -x "$toolchain/bin/cargo" || ! -x "$toolchain/bin/rustc" ]]; then
+    echo 'error: Rust toolchain not found. Install Rust or set NCM_RUST_TOOLCHAIN to an installed toolchain directory.' >&2
+    exit 1
+fi
 export PATH="$toolchain/bin:$PATH"
 export RUSTC="$toolchain/bin/rustc"
 export RUSTDOC="$toolchain/bin/rustdoc"
-export CARGO_HOME="$root/.build/ncm-cargo"
+export CARGO_HOME="${NCM_CARGO_HOME:-${CARGO_HOME:-${HOME}/.cargo}}"
 export CARGO_TARGET_DIR="${NCM_RUST_TARGET_DIR:-$root/.build/ncm-rust}"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 exec "$@"

@@ -37,7 +37,7 @@ App 使用 [SwiftAgentKit](https://github.com/ayman3000/SwiftAgentKit)、[LLMPro
 
 以下命令均在仓库根目录执行。构建脚本复用本机工具链，并非开箱即用的安装器：
 
-- Rust 包使用 edition 2024；脚本默认指向相邻 `app-only` 中的 Rust 1.95.0 工具链，可用 `NCM_RUST_TOOLCHAIN` 指定实际工具链目录。需安装 `aarch64-apple-ios` 和 `aarch64-apple-ios-sim` target，并准备依赖缓存；后端构建采用 `--offline --locked`，Cargo 缓存位于 `.build/ncm-cargo`。版本见 [Cargo.lock](ncm-dev/rust/Cargo.lock)。
+- 独立安装 Rust，并运行 `rustup target add aarch64-apple-ios aarch64-apple-ios-sim` 安装 iOS target。脚本从 PATH 或标准 Cargo 安装位置查找 Rust，可用 `NCM_RUST_TOOLCHAIN` 显式选择工具链，不依赖旁边的项目目录。后端使用 `--locked` 和标准 Cargo 缓存（或 `CARGO_HOME` / `NCM_CARGO_HOME`），首次构建可下载依赖；缓存完备后可设置 `NCM_CARGO_OFFLINE=1` 离线构建。包使用 edition 2024，版本见 [Cargo.lock](ncm-dev/rust/Cargo.lock)。
 - 固件使用 ESP-IDF 5.5.5，可通过 `IDF_PATH`、`IDF_TOOLS_PATH` 指向已安装环境；组件版本由 [清单](firmware-device/main/idf_component.yml) 和锁文件固定。
 - Xcode 项目已提交；新增源文件后可运行 `python3 ios-app/scripts/generate_xcode_project.py` 重新生成。首次构建允许 Swift Package Manager 解析依赖；Xcode 构建阶段会生成当前平台的 Rust 静态库。
 

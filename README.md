@@ -39,7 +39,7 @@ Prerequisites for device control:
 
 Run all commands below from the repository root. The scripts reuse a local toolchain and are not ready-to-use installers:
 
-- The Rust package uses edition 2024. By default, the script points to the Rust 1.95.0 toolchain in the adjacent `app-only` directory; set `NCM_RUST_TOOLCHAIN` to your actual toolchain directory. Install the `aarch64-apple-ios` and `aarch64-apple-ios-sim` targets and prepare the dependency cache. Backend builds use `--offline --locked`, with the Cargo cache under `.build/ncm-cargo`. See [Cargo.lock](ncm-dev/rust/Cargo.lock) for versions.
+- Install Rust with the `aarch64-apple-ios` and `aarch64-apple-ios-sim` targets (`rustup target add aarch64-apple-ios aarch64-apple-ios-sim`). The script discovers Rust through PATH or the standard Cargo installation; `NCM_RUST_TOOLCHAIN` optionally selects an installed toolchain. It does not depend on a sibling project. Backend builds use `--locked` and the standard Cargo cache (or `CARGO_HOME` / `NCM_CARGO_HOME`); the first build can download dependencies. Set `NCM_CARGO_OFFLINE=1` for cached offline builds. The package uses edition 2024; versions are in [Cargo.lock](ncm-dev/rust/Cargo.lock).
 - Firmware uses ESP-IDF 5.5.5. Set `IDF_PATH` and `IDF_TOOLS_PATH` to an installed environment as needed. Component versions are pinned by the [manifest](firmware-device/main/idf_component.yml) and lockfile.
 - The Xcode project is checked in. After adding source files, regenerate it with `python3 ios-app/scripts/generate_xcode_project.py`. Allow Swift Package Manager to resolve dependencies on the first build. An Xcode build phase generates the Rust static library for the current platform.
 
