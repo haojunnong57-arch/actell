@@ -6,7 +6,7 @@
 
 输入区支持系统照片／文件选择、预览与移除；仅显式发送时传给所选模型。截图与消息图片可保存原图并在重启后查看；历史资源不恢复设备授权。设置内可管理用户主动导入的 SKILL.md／文本技能包，导入不执行脚本。服务商支持模型发现、能力缓存和每模型参数；选择列表仅提供 OpenAI-compatible 和 OpenRouter，旧 Anthropic、Gemini、Ollama 配置仍可读取，编辑时需明确选择可用服务商。详细范围和验收见 [本次证据](../docs/PROJECT-TODOS.md)。
 
-服务商明确返回的可读思考内容／摘要会在消息中单独折叠展示，支持流式状态、取消／失败后保留以及历史恢复。Chat Completions 解析 reasoning_content、reasoning 和可读 reasoning_details；Responses 展示明确返回的 summary，并将 encrypted_content 仅用于同域回放；不生成思考正文，不解释加密块，不从普通回复抽取，也不自动把历史思考发送到新任务。
+服务商明确返回的可读思考内容／摘要会在消息中单独折叠展示，支持流式状态、取消／失败后保留以及历史恢复。Chat Completions 解析 reasoning_content、reasoning 和可读 reasoning_details；Responses 展示明确返回的 summary 或 reasoning_text content（包括 DeepSeek 思考流事件），并将 encrypted_content 仅用于同域回放；不生成思考正文，不解释加密块，不从普通回复抽取，也不自动把历史思考发送到新任务。
 
 ## 构建
 

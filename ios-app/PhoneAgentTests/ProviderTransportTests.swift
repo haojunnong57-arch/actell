@@ -23,6 +23,42 @@ private final class ProviderURLProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() { Self.fixture.lock.withLock { Self.fixture.stopped += 1 } }
 }
 final class ProviderTransportTests: XCTestCase {
+    func testDeepSeekPlainReasoningSSECompletesWithoutDoneMarker() async throws {
+        let reasoning: [String: Any] = ["type": "reasoning", "id": "reason", "content": [["type": "reasoning_text", "text": "public reasoning"]]]
+        let message: [String: Any] = ["id": "msg", "type": "message", "role": "assistant", "status": "completed", "content": [["type": "output_text", "text": "answer", "annotations": []]]]
+        var frames: [[String: Any]] = [
+            ["type": "response.created", "response": ["id": "r1", "status": "in_progress"]],
+            ["type": "response.output_item.added", "output_index": 0, "item": ["id": "reason", "type": "reasoning"]],
+            ["type": "response.reasoning_text.delta", "output_index": 0, "item_id": "reason", "content_index": 0, "delta": "public reasoning"],
+            ["type": "response.reasoning_text.done", "output_index": 0, "item_id": "reason", "content_index": 0, "text": "public reasoning"],
+            ["type": "response.output_item.done", "output_index": 0, "item": reasoning],
+            ["type": "response.output_item.added", "output_index": 1, "item": message],
+            ["type": "response.output_text.delta", "output_index": 1, "item_id": "msg", "content_index": 0, "delta": "answer"],
+            ["type": "response.output_item.done", "output_index": 1, "item": message],
+            ["type": "response.completed", "response": ["id": "r1", "model": "fixture", "status": "completed", "store": false, "previous_response_id": NSNull(), "output": [reasoning, message]]]
+        ]
+        var body = Data()
+        for i in frames.indices {
+            frames[i]["sequence_number"] = i
+            body.append(Data("event: \(frames[i]["type"]!)\ndata: ".utf8))
+            body.append(try JSONSerialization.data(withJSONObject: frames[i]))
+            body.append(Data("\n\n".utf8))
+        }
+        ProviderURLProtocol.fixture.reset(body: body)
+        let p = try provider(); defer { p.cancel() }
+        var text = "", preview = "", terminal: ModelResponse?
+        for try await event in p.stream(request) {
+            switch event {
+            case .text(let delta): text += delta
+            case .reasoning(let delta): preview += delta
+            case .terminal(let response): terminal = response
+            default: break
+            }
+        }
+        XCTAssertEqual(text, "answer"); XCTAssertEqual(preview, "public reasoning")
+        XCTAssertEqual(terminal?.reasoning, preview); XCTAssertEqual(terminal?.status, .completed)
+        XCTAssertEqual(ProviderURLProtocol.fixture.lock.withLock { ProviderURLProtocol.fixture.requests.count }, 1)
+    }
     private var request: ModelRequest { .init(model: "fixture", messages: [.system("instructions"), .user("task")]) }
     private func provider() throws -> PrivateVisionProvider {
         try PrivateVisionProvider(settings: .init(baseURL: "https://invalid.invalid/v1", model: "fixture"), apiKey: "synthetic", limits: .init(), inferenceAPI: .responses, transport: ResponsesTransport(protocolClasses: [ProviderURLProtocol.self]))

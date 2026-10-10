@@ -87,12 +87,12 @@ public struct ResponsesReducer: Sendable {
             let index = try address(o)
             guard let item = o["item"] as? [String: Any], item["id"] as? String == itemIDs[index], doneItems[index] == nil else { throw ModelError.protocolViolation("Item done address conflict") }
             doneItems[index] = try codec.outputItem(item); return []
-        case "response.output_text.delta", "response.refusal.delta", "response.reasoning_summary_text.delta":
+        case "response.output_text.delta", "response.refusal.delta", "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
             let index = try address(o)
             let content = o["content_index"] as? Int ?? o["summary_index"] as? Int
             guard let content, content >= 0, let delta = o["delta"] as? String, doneItems[index] == nil else { throw ModelError.protocolViolation("Delta address missing") }
             let key = "\(index):\(content):\(type)"; contentPreviews[key, default: ""] += delta
-            return [type == "response.reasoning_summary_text.delta" ? .reasoning(delta) : .text(delta)]
+            return [type == "response.reasoning_summary_text.delta" || type == "response.reasoning_text.delta" ? .reasoning(delta) : .text(delta)]
         case "response.function_call_arguments.delta":
             let index = try address(o)
             guard let delta = o["delta"] as? String, doneItems[index] == nil else { throw ModelError.protocolViolation("Invalid arguments delta") }
@@ -101,7 +101,7 @@ public struct ResponsesReducer: Sendable {
             let index = try address(o)
             guard let args = o["arguments"] as? String else { throw ModelError.protocolViolation("Arguments done missing full value") }
             argumentPreviews[itemIDs[index]!] = args; return []
-        case "response.output_text.done", "response.refusal.done", "response.reasoning_summary_text.done", "response.content_part.added", "response.content_part.done", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.output_text.annotation.added":
+        case "response.output_text.done", "response.refusal.done", "response.reasoning_summary_text.done", "response.reasoning_text.done", "response.content_part.added", "response.content_part.done", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.output_text.annotation.added":
             _ = try address(o); return []
         case "response.completed", "response.incomplete", "response.failed", "response.cancelled":
             guard let r = o["response"] as? [String: Any] else { throw ModelError.protocolViolation("Terminal missing snapshot") }

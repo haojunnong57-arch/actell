@@ -5,6 +5,34 @@ import SwiftAgentKit
 @testable import PhoneAgent
 
 final class ResponsesProviderTests: XCTestCase {
+    func testPlainReasoningTextStreamsAndReplaysWithoutInventingSummary() throws {
+        let codec = OpenAIWireCodec(configuration: configuration, wire: .responses, scope: scope)
+        let plain: [String: Any] = ["type": "reasoning", "id": "reason", "content": [["type": "reasoning_text", "text": "public reasoning"]]]
+        var r = ResponsesReducer(codec: codec, request: request)
+        _ = try r.consume(payload: event("response.created", seq: 0, fields: ["response": ["id": "resp1"]]))
+        _ = try r.consume(payload: event("response.output_item.added", seq: 1, fields: ["output_index": 0, "item": ["id": "reason", "type": "reasoning"]]))
+        let delta = try r.consume(payload: event("response.reasoning_text.delta", seq: 2, fields: ["output_index": 0, "item_id": "reason", "content_index": 0, "delta": "public reasoning"]))
+        guard case .reasoning(let text) = delta.first else { return XCTFail("Expected reasoning preview") }
+        XCTAssertEqual(text, "public reasoning")
+        _ = try r.consume(payload: event("response.reasoning_text.done", seq: 3, fields: ["output_index": 0, "item_id": "reason", "content_index": 0, "text": "public reasoning"]))
+        _ = try r.consume(payload: event("response.output_item.done", seq: 4, fields: ["output_index": 0, "item": plain]))
+        _ = try r.consume(payload: event("response.completed", seq: 5, fields: ["response": envelope([plain])]))
+        let response = try r.finish()
+        XCTAssertEqual(response.reasoning, "public reasoning")
+        guard case .reasoning(let item) = response.output[0] else { return XCTFail("Expected reasoning item") }
+        XCTAssertEqual(item.summary, [])
+        var next = request; next.input = try response.output.map { try $0.asReplayInput(scope: scope) }
+        let body = try XCTUnwrap(codec.prepareRequest(next, stream: false).httpBody)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let input = try XCTUnwrap(object["input"] as? [[String: Any]])
+        XCTAssertEqual((input[0]["summary"] as? [Any])?.count, 0)
+        XCTAssertEqual((input[0]["content"] as? [[String: Any]])?[0]["text"] as? String, "public reasoning")
+        var malformed = plain; malformed["content"] = [["type": "reasoning_text", "text": 42]]
+        XCTAssertThrowsError(try codec.outputItem(malformed))
+        var invalid = ResponsesReducer(codec: codec, request: request)
+        _ = try invalid.consume(payload: event("response.created", seq: 0, fields: ["response": ["id": "resp1"]]))
+        XCTAssertThrowsError(try invalid.consume(payload: event("response.reasoning_text.delta", seq: 1, fields: ["output_index": 0, "item_id": "unknown", "content_index": 0, "delta": "invalid"])))
+    }
     private let configuration = ProviderConfiguration(name: "fixture", baseURL: URL(string: "https://invalid.invalid/proxy/v1")!, apiKey: "synthetic", defaultModel: "fixture")
     private let scope = ProviderScope(provider: "fixture", endpoint: "https://invalid.invalid/proxy/v1", account: "fixture-account", model: "fixture")
     private var request: ModelRequest { .init(model: "fixture", messages: [.system("safety instructions"), .user("task")]) }

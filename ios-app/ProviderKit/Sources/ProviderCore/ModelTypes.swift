@@ -100,7 +100,7 @@ public struct ModelResponse: Sendable {
     public let permitsTextToolInference: Bool
     public var rawData: Data? { nil }
     public var text: String { output.compactMap { if case .message(let m) = $0 { return m.content.compactMap { if case .text(let text, _) = $0 { return text }; if case .refusal(let text) = $0 { return text }; return nil }.joined() }; return nil }.joined() }
-    public var reasoning: String? { let s = output.compactMap { if case .reasoning(let r) = $0 { return r.summary.joined(separator: "\n") }; return nil }.joined(separator: "\n"); return s.isEmpty ? nil : s }
+    public var reasoning: String? { let s = output.compactMap { if case .reasoning(let r) = $0 { return r.readableText }; return nil }.joined(separator: "\n"); return s.isEmpty ? nil : s }
     public var toolCalls: [ModelToolCall] { output.compactMap { if case .functionCall(let c) = $0 { return c }; return nil } }
     public init(id: String, model: String, status: ResponseStatus, scope: ProviderScope? = nil, output: [ModelOutputItem], usage: ModelUsage? = nil, error: APIErrorInfo? = nil, incomplete: JSONValue? = nil, extra: [String: JSONValue] = [:], request: ModelRequest, providerName: String, permitsTextToolInference: Bool = false) {
         self.replayState = nil; self.id = id; self.scope = scope; self.model = model; self.status = status; self.output = output; self.usage = usage; self.error = error; self.incomplete = incomplete; self.extra = extra; self.request = request; self.providerName = providerName; self.permitsTextToolInference = permitsTextToolInference

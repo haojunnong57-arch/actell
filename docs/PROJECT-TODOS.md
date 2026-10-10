@@ -182,3 +182,11 @@ iPhone 15 Pro 真机已通过：复用已有身份、CoreDevice 认证、1179 ×
 按用户要求，服务商选择列表移除 Anthropic、Gemini、Ollama，只提供 OpenAI-compatible 和 OpenRouter。`ProviderModels.swift` 的 `selectableKinds` 与持久化枚举分离；保留旧 raw value 与底层兼容代码，以免旧条目导致整个配置归档无法解码。`ProvidersView.swift` 对旧类型显示选择提示，用户明确改选前不能获取模型或保存；不自动改类型、地址或密钥。原有配置条目仍可查看、移除／恢复。
 
 `ModelDiscoveryTests.swift` 验证三种旧配置与 OpenRouter 混合归档恢复；`ConversationUITests.swift` 在既有上下文保存用例中验证菜单只有两个服务商、旧选项不存在且两种类型可切换。核心 **354 tests，0 失败**：`.build/validation/core.AglNAx/Tests.xcresult`；定向 UI **1 test，0 失败**：`.build/validation/provider-selection-ui.xcresult`／`provider-selection-ui.log`；无签名 iPhoneOS **BUILD SUCCEEDED**：`provider-selection-iphoneos.log`。本轮未重跑完整 UI、未调用线上 API；此前完整 UI 的两项设备设置失败仍未解决。未提交／推送，保留其他任务已有修改。
+
+### 2026-10-11 DeepSeek 无状态 Responses 思考兼容
+
+用户反馈 Responses 失败但 Chat 正常，确认选择本地回放。核对 [DeepSeek 官方 Responses 说明](https://api-docs.deepseek.com/guides/responses_api/)：官方支持 `https://api.deepseek.com/responses`，使用无状态历史回放，思考流为 `response.reasoning_text.delta/done`，reasoning 项可用 `content: [{type: reasoning_text, text: ...}]`，终态后没有 `[DONE]`。原 reducer 对这两个语义事件会进入 unsupported 分支；SDK 0.5.2 对 summary 必填，会拒绝未含 summary 的 plain-content reasoning 项。尚无实际失败请求的地址、模型 ID、完整提示或脱敏帧，不能确认这两个缺口是用户请求的全部原因。
+
+`ResponsesReducer.swift` 接受这两个事件，保持地址、顺序、重复、终态及工具执行检查；`OpenAIWireCodec.swift` 检查 plain reasoning content，仅在 SDK 验证副本补缺省空 summary，原生 content 仍保留用于同域回放；`NativeItems.swift`／`ModelTypes.swift` 将明确返回的 plain reasoning 投影为可读思考，summary 与加密内容语义保持独立。未修改 HTTP 重试、终态成功规则、服务商地址、自动接口降级或设备授权逻辑。
+
+新增两项回归覆盖 plain reasoning 增量、完成与回放、非法字段／地址拒绝，以及 URLSession/URLProtocol → SSE → Provider 无 `[DONE]` 完整流（单次请求、正文与思考分开、completed 终态）。核心 **356 tests，0 失败**：`.build/validation/core.ui9aJ7/Tests.xcresult`／`test.log`；最终无签名 iPhoneOS build 通过：`.build/validation/deepseek-responses-iphoneos.log`。本轮没有 UI 改动，未重跑 UI／USB；没有读取密钥或调用线上 API，需要更新 App 后真实复验。本轮修复尚未提交，保留已有 Xcode／Info.plist 工作区修改。

@@ -43,6 +43,12 @@ public struct OutputMessage: Sendable, Equatable, Codable {
     public init(id: String, content: [ModelOutputContent], phase: String? = nil, status: ResponseStatus = .completed, extra: [String: JSONValue] = [:], scope: ProviderScope? = nil) { self.id = id; self.content = content; self.phase = phase; self.scope = scope; self.status = status; self.extra = extra }
 }
 public struct ReasoningItem: Sendable, Equatable, Codable {
+    public var readableText: String {
+        let content = (extra["content"]?.foundation as? [[String: Any]] ?? []).compactMap { part in
+            part["type"] as? String == "reasoning_text" ? part["text"] as? String : nil
+        }
+        return (summary + content).joined(separator: "\n")
+    }
     public let id: String; public let summary: [String]; private let opaque: String?; public let scope: ProviderScope?; public let extra: [String: JSONValue]
     public init(id: String, summary: [String], encryptedContent: String? = nil, scope: ProviderScope? = nil, extra: [String: JSONValue] = [:]) { self.id = id; self.summary = summary; self.opaque = encryptedContent; self.scope = scope; self.extra = extra }
     /// Only wire serialization uses this field; never projected to UI or logs.

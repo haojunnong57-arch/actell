@@ -212,6 +212,14 @@ public struct OpenAIWireCodec: Sendable {
         guard ["message", "reasoning", "function_call"].contains(type) else { return .unknown(.init(type: type, payload: try JSONValue(any: object), scope: scope)) }
         // Decode with the fixed MacPaw schema to reject malformed known items.
         var sdkObject = object
+        if type == "reasoning", let content = object["content"] {
+            guard let parts = content as? [[String: Any]], parts.allSatisfy({ $0["type"] as? String == "reasoning_text" && $0["text"] is String }) else {
+                throw ModelError.protocolViolation("Invalid reasoning text content")
+            }
+            // DeepSeek returns plain reasoning content without an OpenAI summary.
+            // Normalize only the SDK validation copy; preserve native content for replay.
+            if object["summary"] == nil { sdkObject["summary"] = [] }
+        }
         if type == "message", var content = object["content"] as? [[String: Any]] {
             for i in content.indices where content[i]["type"] as? String == "output_text" {
                 // SDK 0.5.2 models absent logprobs as a required array.
