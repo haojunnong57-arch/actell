@@ -40,6 +40,7 @@ struct ProvidersView: View {
                 }
             }
             .navigationTitle("服务商")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button { editing = ProviderProfile() } label: { Image(systemName: "plus") }
@@ -175,6 +176,7 @@ struct ProviderModelPicker: View {
             }
             .searchable(text: $search, prompt: "搜索模型 ID")
             .navigationTitle("选择模型")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
         }
     }

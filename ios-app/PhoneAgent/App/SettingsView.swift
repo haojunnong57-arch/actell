@@ -46,6 +46,7 @@ struct SettingsView: View {
                 if let warning = model.storageWarning { Text(warning).foregroundStyle(.orange) }
             }
             .navigationTitle("设置")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
             .confirmationDialog("删除本机保存的任务和结果？无法在 App 内恢复。", isPresented: $clear, titleVisibility: .visible) {
                 Button("清空记录", role: .destructive) { model.clearHistory() }
