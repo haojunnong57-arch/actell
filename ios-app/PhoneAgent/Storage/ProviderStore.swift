@@ -6,7 +6,9 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
     var name: String
     var settings: ProviderSettings
     var models: [String]
-    var protocolKind: ProviderProtocol?
+    var protocolKind: ProviderKind?
+    var inferenceKind: InferenceAPI?
+    var contextKind: ProviderContextPolicy?
     var catalog: ModelCatalog?
     var modelParameters: [String: ModelParameters]?
     // Reference only. Credentials are never encoded into UserDefaults/history.
@@ -16,8 +18,10 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
         self.id = id; self.name = name; self.settings = settings; self.models = models
         self.keyAccount = keyAccount ?? "provider-profile:\(id):\(settings.baseURL)"
     }
-    var protocolType: ProviderProtocol { protocolKind ?? .openAI }
-    func catalogEndpoint() throws -> String { protocolType.rawValue + ":" + (try protocolType.baseURL(settings.baseURL)).absoluteString }
+    var providerKind: ProviderKind { protocolKind ?? .openAI }
+    var inferenceAPI: InferenceAPI { inferenceKind ?? .chatCompletions }
+    var contextPolicy: ProviderContextPolicy { contextKind ?? .stateless }
+    func catalogEndpoint() throws -> String { providerKind.rawValue + ":" + (try providerKind.baseURL(settings.baseURL)).absoluteString }
     var currentCatalog: ModelCatalog? { catalog?.endpoint == (try? catalogEndpoint()) ? catalog : nil }
     var availableModels: [String] {
         Array(NSOrderedSet(array: ([settings.model] + models + (currentCatalog?.models.map(\.id) ?? [])).filter { !$0.isEmpty })) as? [String] ?? []
@@ -25,7 +29,10 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
     func metadata(for model: String) -> DiscoveredModel? { currentCatalog?.models.first { $0.id == model } }
     func parameters(for model: String) -> ModelParameters { modelParameters?[model] ?? ModelParameters() }
     func requireInference(model: String) throws {
-        guard protocolType.supportsInference else { throw AppError.unavailable(protocolType.inferenceNotice) }
+        guard inferenceAPI == .chatCompletions || providerKind.supportsResponses else { throw AppError.invalid("此协议仅支持 Chat Completions 推理") }
+        guard inferenceAPI == .responses || contextPolicy == .stateless else { throw AppError.invalid("服务端响应链需要 Responses") }
+        guard contextPolicy == .stateless || providerKind.supportsResponseChain else { throw AppError.invalid("此服务商不支持服务端响应链；请选择本地回放") }
+        guard providerKind.supportsInference else { throw AppError.unavailable(providerKind.inferenceNotice) }
         guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.invalid("请先选择或手动填写模型 ID") }
         if let metadata = metadata(for: model), metadata.vision == .unsupported || metadata.tools == .unsupported || metadata.generation == .unsupported {
             throw AppError.unavailable("服务商明确报告此模型不支持图片、工具或文本生成，不能执行屏幕任务；请选择兼容模型")
@@ -70,7 +77,11 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
         value.name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         value.settings.baseURL = draft.settings.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         value.settings.model = draft.settings.model.trimmingCharacters(in: .whitespacesAndNewlines)
-        let url = try value.protocolType.baseURL(value.settings.baseURL)
+        guard value.inferenceAPI == .chatCompletions || value.providerKind.supportsResponses else { throw AppError.invalid("此协议尚不支持 Responses") }
+        guard value.inferenceAPI == .responses || value.contextPolicy == .stateless else { throw AppError.invalid("响应链需要 Responses") }
+        if value.inferenceAPI == .responses, value.modelParameters?.values.contains(where: { !($0.values["seed"] ?? "").isEmpty }) == true { throw AppError.invalid("Responses 不支持 seed，请清空该参数") }
+        guard value.contextPolicy == .stateless || value.providerKind.supportsResponseChain else { throw AppError.invalid("此服务商不支持服务端响应链") }
+        let url = try value.providerKind.baseURL(value.settings.baseURL)
         if value.name.isEmpty { value.name = url.host ?? "服务商" }
         value.models = draft.models.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         if let previous = profiles.first(where: { $0.id == draft.id }) {
@@ -82,7 +93,7 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
         } else { value.keyAccount = value.newKeyAccount }
         if value.currentCatalog == nil { value.catalog = nil }
         for (model, parameters) in value.modelParameters ?? [:] {
-            _ = try parameters.requestFields(protocolType: value.protocolType, model: value.metadata(for: model))
+            _ = try parameters.requestFields(providerKind: value.providerKind, model: value.metadata(for: model))
         }
         return value
     }
@@ -111,7 +122,7 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
 
 private extension ProviderProfile {
     var newKeyAccount: String {
-        let discriminator = protocolType == .openAI ? "" : protocolType.rawValue + ":"
+        let discriminator = providerKind == .openAI ? "" : providerKind.rawValue + ":"
         return "provider-profile:\(id):\(discriminator)\(settings.baseURL)"
     }
 }

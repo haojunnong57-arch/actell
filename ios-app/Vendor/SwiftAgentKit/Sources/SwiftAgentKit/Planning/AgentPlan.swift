@@ -10,7 +10,7 @@
 //
 
 import Foundation
-import LLMProviderKit
+import ProviderCore
 
 /// A step in an agent execution plan.
 ///
@@ -105,11 +105,11 @@ public final class LLMPlanner: AgentPlanner, @unchecked Sendable {
     public var plannerSystemPrompt: String
     public var shouldPlanThreshold: (String) -> Bool
 
-    private let plannerProvider: any LLMProvider
+    private let plannerProvider: any ModelProvider
     private let plannerModel: String
 
     public init(
-        provider: any LLMProvider,
+        provider: any ModelProvider,
         model: String? = nil,
         systemPrompt: String? = nil,
         shouldPlanThreshold: @escaping (String) -> Bool = { query in
@@ -131,7 +131,7 @@ public final class LLMPlanner: AgentPlanner, @unchecked Sendable {
 
     public func generatePlan(for query: String, systemPrompt: String? = nil) async throws -> AgentPlan {
         let prompt = systemPrompt ?? plannerSystemPrompt
-        let request = LLMRequest(
+        let request = ModelRequest(
             model: plannerModel,
             messages: [
                 .system(prompt),

@@ -2,7 +2,7 @@
 //  Agent.swift
 //  SwiftAgentKit
 //
-//  The main Agent class — ties together LLMProviderKit, tools, memory, planning,
+//  The main Agent class — ties together ProviderCore, tools, memory, planning,
 //  and the agent loop.
 //
 //  This is the universal agent that supports multiple agent philosophies:
@@ -13,7 +13,7 @@
 //
 
 import Foundation
-import LLMProviderKit
+import ProviderCore
 
 // MARK: - Agent Configuration
 
@@ -21,8 +21,8 @@ import LLMProviderKit
 ///
 public struct AgentConfig: Sendable {
 
-    /// The LLM provider to use (from LLMProviderKit).
-    public var provider: any LLMProvider
+    /// The LLM provider to use (from ProviderCore).
+    public var provider: any ModelProvider
 
     /// Model name (optional — falls back to provider's default).
     public var model: String?
@@ -42,11 +42,11 @@ public struct AgentConfig: Sendable {
     /// agent's tool calls fewer and terser.
     ///
     /// Only set this for a model whose catalog entry carries
-    /// `LLMModelCapability.reasoningEffort`: at least one provider answers an
+    /// a verified reasoning-effort capability: at least one provider answers an
     /// unsupported level with HTTP 400. Hold one level for the life of a
     /// conversation — providers render it into the prompt, so changing it
     /// mid-run invalidates prompt caching.
-    public var reasoningEffort: LLMReasoningEffort?
+    public var reasoningEffort: ModelReasoningEffort?
 
     /// System prompt prefix (prepended to every conversation).
     public var systemPrompt: String?
@@ -116,11 +116,11 @@ public struct AgentConfig: Sendable {
     /// Lets an app route delegated side-tasks to a cheaper or faster model
     /// while the parent keeps the strong one (plan/verify on the strong
     /// model, execute the bulk of tool calls on the cheap one).
-    public var subAgentProvider: (any LLMProvider)?
+    public var subAgentProvider: (any ModelProvider)?
     public var subAgentModel: String?
     /// Reasoning effort for CHILD agents. nil = the parent's. Delegated
     /// pieces rarely need the parent's depth; a lower level saves tokens.
-    public var subAgentReasoningEffort: LLMReasoningEffort?
+    public var subAgentReasoningEffort: ModelReasoningEffort?
     /// Whether the sub-agent model accepts images. When false the child is not
     /// given vision tools and is told so — a text-only child handed
     /// `view_image` fails the whole delegation the first time it tries.
@@ -156,12 +156,12 @@ public struct AgentConfig: Sendable {
     public var toolGroups: [DeferredToolGroup]
 
     public init(
-        provider: any LLMProvider,
+        provider: any ModelProvider,
         model: String? = nil,
         temperature: Double? = nil,
         maxTokens: Int? = nil,
         topP: Double? = nil,
-        reasoningEffort: LLMReasoningEffort? = nil,
+        reasoningEffort: ModelReasoningEffort? = nil,
         systemPrompt: String? = nil,
         maxTurns: Int = 20,
         contextWindow: Int = 8192,
@@ -175,9 +175,9 @@ public struct AgentConfig: Sendable {
         enableSubAgents: Bool = false,
         maxSubAgentConcurrency: Int = 1,
         maxSubAgentTurns: Int = SubAgentSpawner.maxChildTurns,
-        subAgentProvider: (any LLMProvider)? = nil,
+        subAgentProvider: (any ModelProvider)? = nil,
         subAgentModel: String? = nil,
-        subAgentReasoningEffort: LLMReasoningEffort? = nil,
+        subAgentReasoningEffort: ModelReasoningEffort? = nil,
         subAgentCanSeeImages: Bool = true,
         maxVerificationRetries: Int = 3,
         loopDetection: LoopDetectionConfig? = .default,
@@ -225,7 +225,7 @@ public struct AgentConfig: Sendable {
 /// The universal AI agent.
 ///
 /// This is the main entry point for SwiftAgentKit. It combines:
-/// - **LLM backend**: LLMProviderKit's `LLMProvider` (Ollama, OpenAI, Gemini, Anthropic)
+/// - **LLM backend**: ProviderCore's `ModelProvider` (explicitly supported adapters)
 /// - **Tools**: `ToolRegistry` + `ToolDispatcher` for function-calling
 /// - **Memory**: `Conversation` with token-aware context management
 /// - **Planning**: `AgentPlanner` for plan-then-execute workflows
@@ -249,11 +249,10 @@ public struct AgentConfig: Sendable {
 ///
 /// ```swift
 /// import SwiftAgentKit
-/// import LLMProviderKit
-/// import LLMProviderKitOllama
+/// import ProviderCore
 ///
 /// // 1. Create a provider
-/// let provider = OllamaProvider(configuration: .local(model: "llama3.2"))
+/// let provider: any ModelProvider = yourConfiguredProvider
 ///
 /// // 2. Configure the agent
 /// let config = AgentConfig(
@@ -733,51 +732,10 @@ public actor Agent {
         subAgentSpawner?.resetCancellation()
     }
 
-    /// Whether an LLM-call error is worth retrying. Transient failures (network
-    /// blips, 5xx, 429 rate-limit, Ollama load/degenerate bodies) are retried;
-    /// permanent client errors (4xx other than 429, malformed request,
-    /// unsupported op) are not — retrying them only burns the backoff schedule
-    /// before surfacing the same error.
-    /// Quota exhaustion masquerading as a 429: the limit resets in HOURS
-    /// (ChatGPT Plus "usage_limit_reached" observed live with
-    /// resets_in_seconds:10654), so seconds of backoff only stall every
-    /// message ~30s before failing anyway. Rate-limit 429s carry no such
-    /// marker and stay retryable.
-    private static func isQuotaExhaustedMessage(_ text: String) -> Bool {
-        let t = text.lowercased()
-        return t.contains("usage_limit_reached") || t.contains("insufficient_quota")
-    }
-
-    static func isRetryableLLMError(_ error: Error) -> Bool {
-        // A stall already got its one retry in executeTurn; the generic
-        // backoff would turn it into six stalls in a row.
-        if error is LLMStreamStalled { return false }
-        switch error {
-        case let llm as LLMError:
-            switch llm {
-            case .httpError(let code, let body):
-                if code == 429, let body,
-                   isQuotaExhaustedMessage(String(decoding: body, as: UTF8.self)) {
-                    return false                      // quota exhausted — resets in hours
-                }
-                return code == 429 || code >= 500   // rate-limit + server errors
-            case .invalidRequest, .unsupportedOperation, .unknownProvider:
-                return false                          // permanent client errors
-            case .networkError(let message):
-                // "Nothing is listening" is not transient: a fresh install
-                // without Ollama running would otherwise sit through the full
-                // retry backoff (~40s of silence) before erroring. Genuine
-                // blips (resets, timeouts, dropped connections) stay retryable.
-                let m = message.lowercased()
-                return !(m.contains("could not connect") || m.contains("connection refused"))
-            case .providerError(let message):
-                return !isQuotaExhaustedMessage(message)  // transient unless quota-exhausted
-            case .invalidResponse, .streamingError:
-                return true                           // transient (incl. Ollama load bodies)
-            }
-        default:
-            return true                               // unknown/network errors: retry
-        }
+    static func isRetryableModelError(_ error: Error) -> Bool {
+        // Creating a new generation after an unknown acceptance can duplicate
+        // tool intent. Reconciliation/retry must be explicit in runtime.
+        return false
     }
 
     private func beginRunIfIdle() -> Bool {
@@ -829,7 +787,7 @@ public actor Agent {
     /// Images are forwarded to the provider as base64-encoded attachments in the user message.
     /// Works with models that support vision (e.g., GPT-4o, Gemini, LLaVA).
     ///
-    public func run(_ query: String, images: [LLMImage]) async throws -> String {
+    public func run(_ query: String, images: [ModelImage]) async throws -> String {
         try await runLoop(query: query, images: images, onText: nil)
     }
 
@@ -865,7 +823,7 @@ public actor Agent {
     /// `runStreaming(_:)` (streaming). When `onText` is non-nil, each turn is
     /// streamed and assistant text deltas are delivered to `onText` as they
     /// arrive — including the final answer, token-by-token.
-    private func runLoop(query: String, images: [LLMImage], onText: (@Sendable (String) -> Void)?, onReasoning: (@Sendable (String) -> Void)? = nil, onTurnCompleted: (@Sendable (String, Bool) -> Void)? = nil) async throws -> String {
+    private func runLoop(query: String, images: [ModelImage], onText: (@Sendable (String) -> Void)?, onReasoning: (@Sendable (String) -> Void)? = nil, onTurnCompleted: (@Sendable (String, Bool) -> Void)? = nil) async throws -> String {
         // The file tools tell agents apart by this, so one agent can't
         // overwrite a file another changed since it last looked.
         try await FileStateRegistry.$currentAgent.withValue(fileIdentity) {
@@ -874,7 +832,7 @@ public actor Agent {
         }
     }
 
-    private func runLoopBody(query: String, images: [LLMImage], onText: (@Sendable (String) -> Void)?, onReasoning: (@Sendable (String) -> Void)?, onTurnCompleted: (@Sendable (String, Bool) -> Void)?) async throws -> String {
+    private func runLoopBody(query: String, images: [ModelImage], onText: (@Sendable (String) -> Void)?, onReasoning: (@Sendable (String) -> Void)?, onTurnCompleted: (@Sendable (String, Bool) -> Void)?) async throws -> String {
         guard beginRunIfIdle() else {
             throw AgentError.runInProgress
         }
@@ -1061,8 +1019,8 @@ public actor Agent {
                 }
 
                 // Build LLM request (with state-templated system prompt)
-                let llmToolDefs = makeLLMToolDefinitions(from: visibleTools(registeredTools))
-                let request = await makeLLMRequest(messagesForLLM: messagesForLLM, tools: llmToolDefs)
+                let llmToolDefs = makeModelToolDefinitions(from: visibleTools(registeredTools))
+                let request = await makeModelRequest(messagesForLLM: messagesForLLM, tools: llmToolDefs)
 
                 // Call the provider (streamed when onText is set). Transient
                 // provider errors — network blips, proxy 5xx, Ollama cloud
@@ -1078,12 +1036,8 @@ public actor Agent {
                         throw AgentError.cancelled
                     } catch {
                         llmAttempt += 1
-                        // Only retry TRANSIENT failures. A permanent client error
-                        // (HTTP 4xx except 429 rate-limit, bad request, unsupported)
-                        // will never succeed on retry — retrying it just stalls the
-                        // run through the whole backoff schedule (~30s) before
-                        // surfacing the same error. Fail fast on those.
-                        if Self.isRetryableLLMError(error), llmAttempt <= Self.maxLLMRetries, !isCancelled {
+                        // The Provider boundary currently rejects automatic generation retries.
+                        if Self.isRetryableModelError(error), llmAttempt <= Self.maxLLMRetries, !isCancelled {
                             emit(.llmCallRetrying(turn: totalTurns, attempt: llmAttempt, error: error.localizedDescription))
                             // Exponential backoff + jitter (0…base) so concurrent
                             // sub-agents desynchronize instead of re-colliding on
@@ -1094,7 +1048,7 @@ public actor Agent {
                             try await Task.sleep(nanoseconds: UInt64((backoff + jitter) * 1_000_000_000))
                             continue
                         }
-                        // Retries exhausted — onModelError callback can provide a fallback
+                        // Runtime may supply an explicit fallback; PhoneAgent installs none.
                         if let onModelError = callbacks?.onModelError {
                             if let fallback = await onModelError(error, state) {
                                 emit(.llmCallCompleted(turn: totalTurns, response: fallback))
@@ -1139,7 +1093,7 @@ public actor Agent {
                        let reasoning = agentResponse.reasoning,
                        !reasoning.isEmpty,
                        reasoningContinuations < Self.maxReasoningContinuations {
-                        conversation.append(.assistant(agentResponse.text))
+                        conversation.append(.assistant(agentResponse.text, replayState: agentResponse.replayState))
                         conversation.append(.user(reasoningTimedOut
                             ? "You have been reasoning for a long time without acting, so that step was stopped. Stop deliberating: check what you need with a tool call, or give your answer now."
                             : "You produced internal reasoning but no answer and no tool calls. Continue: call tools if you need information, then give your final answer."))
@@ -1156,7 +1110,7 @@ public actor Agent {
                             attemptsUsed: repairAttempts,
                             turnsRemaining: config.maxTurns - totalTurns
                         ) {
-                            conversation.append(.assistant(agentResponse.text))
+                            conversation.append(.assistant(agentResponse.text, replayState: agentResponse.replayState))
                             let nudge = repairRetryPolicy.nudge(for: lastErrors)
                             conversation.append(.user(nudge))
                             repairAttempts += 1
@@ -1171,7 +1125,7 @@ public actor Agent {
                         attemptsUsed: planContinuationAttempts,
                         turnsRemaining: config.maxTurns - totalTurns
                     ) {
-                        conversation.append(.assistant(agentResponse.text))
+                        conversation.append(.assistant(agentResponse.text, replayState: agentResponse.replayState))
                         let nudge = planContinuationPolicy.nudge(for: plan)
                         conversation.append(.user(nudge))
                         planContinuationAttempts += 1
@@ -1187,14 +1141,14 @@ public actor Agent {
                         case .satisfied:
                             break  // fall through to Done
                         case .unsatisfied(let reason):
-                            conversation.append(.assistant(agentResponse.text))
+                            conversation.append(.assistant(agentResponse.text, replayState: agentResponse.replayState))
                             conversation.append(.user(
                                 "The task is NOT complete yet. \(reason)\n\nKeep going until it is fully done."))
                             verificationAttempts += 1
                             emit(.completionVerificationFailed(reason: reason, attempt: verificationAttempts))
                             continue
                         case .blocked(let reason):
-                            conversation.append(.assistant(agentResponse.text))
+                            conversation.append(.assistant(agentResponse.text, replayState: agentResponse.replayState))
                             emit(.completionBlocked(reason: reason))
                             // Stop early: surface the blocker rather than burn turns.
                             let blockedText = agentResponse.text.isEmpty
@@ -1207,7 +1161,7 @@ public actor Agent {
                     }
 
                     // Done — return the response
-                    conversation.append(.assistant(agentResponse.text))
+                    conversation.append(.assistant(agentResponse.text, replayState: agentResponse.replayState))
                     lastTurnErrors = []
 
                     let summary = makeRunSummary(
@@ -1241,12 +1195,12 @@ public actor Agent {
                 for call in toolCalls {
                     guard !call.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                           nextIDs.insert(call.id).inserted else {
-                        throw LLMError.invalidRequest("模型工具调用 ID 缺失或重复；本批未执行，不会重放旧动作")
+                        throw ModelError.invalidRequest("模型工具调用 ID 缺失或重复；本批未执行，不会重放旧动作")
                     }
                 }
                 seenToolCallIDs = nextIDs
                 emit(.toolCallsReceived(toolCalls))
-                conversation.append(.assistant(content: agentResponse.text, toolCalls: toolCalls))
+                conversation.append(.assistant(content: agentResponse.text, toolCalls: toolCalls, replayState: agentResponse.replayState))
 
                 // Narration precedes tool-execution events on the consumer side:
                 // fire the turn-completed tag BEFORE dispatching so observers see
@@ -1321,7 +1275,7 @@ public actor Agent {
         } else {
             // Single-shot or multi-turn chat (no tools)
             let messagesForLLM = conversation.messagesForLLMCall()
-            let request = await makeLLMRequest(messagesForLLM: messagesForLLM)
+            let request = await makeModelRequest(messagesForLLM: messagesForLLM)
 
             emit(.llmCallStarted(turn: 1))
 
@@ -1362,7 +1316,7 @@ public actor Agent {
                 if reasoningTimedOut, agentResponse.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     conversation.append(.assistant(""))
                     conversation.append(.user("You have been reasoning for a long time without answering, so that step was stopped. Give your answer now."))
-                    let again = await makeLLMRequest(messagesForLLM: conversation.messagesForLLMCall())
+                    let again = await makeModelRequest(messagesForLLM: conversation.messagesForLLMCall())
                     agentResponse = try await executeTurn(request: again, onText: onText, onReasoning: onReasoning)
                 }
             } catch {
@@ -1396,7 +1350,7 @@ public actor Agent {
 
             emit(.llmCallCompleted(turn: 1, response: agentResponse))
 
-            conversation.append(.assistant(agentResponse.text))
+            conversation.append(.assistant(agentResponse.text, replayState: agentResponse.replayState))
             state.clearTemp()
 
             let summary = makeRunSummary(
@@ -1497,23 +1451,17 @@ public actor Agent {
         )
     }
 
-    /// Execute one turn against the provider and return the parsed response.
-    ///
-    /// - When `onText` is `nil`, the turn is non-streaming (`complete`).
-    /// - When `onText` is non-nil, the turn is streamed: text deltas are
-    ///   delivered to `onText` as they arrive. If the stream signals native tool
-    ///   use, the turn is re-issued non-streaming to obtain reliable tool-call
-    ///   arguments (provider streaming doesn't deliver complete tool args
-    ///   consistently). Otherwise the streamed text is parsed the same way as a
-    ///   non-streaming response — so text-marker tool calls (for models without
-    ///   native tool calling) are still detected.
+    /// Execute one generation. Native terminal snapshots are authoritative;
+    /// partial streams never trigger a replacement generation.
     private func executeTurn(
-        request: LLMRequest,
+        request: ModelRequest,
         onText: (@Sendable (String) -> Void)?,
         onReasoning: (@Sendable (String) -> Void)? = nil
     ) async throws -> AgentLLMResponse {
         guard let onText else {
             let response = try await config.provider.complete(request)
+            guard response.status == .completed else { throw ModelError.protocolViolation("Model generation did not complete successfully") }
+            try ToolBatchValidator.validate(response.toolCalls)
             return AgentLLMResponse.from(response)
         }
 
@@ -1521,10 +1469,6 @@ public actor Agent {
         if let policy = config.stallPolicy { request.stallTimeout = policy.limit(for: request) }
         let started = Date()
         do {
-            return try await streamTurn(request: request, onText: onText, onReasoning: onReasoning)
-        } catch let stall as LLMStreamStalled where !textShown {
-            // Nothing the user saw is lost: ask again, once.
-            logger.warning("\(type(of: config.provider).name) made no progress for \(Int(stall.seconds)) s; retrying the call once.")
             return try await streamTurn(request: request, onText: onText, onReasoning: onReasoning)
         } catch {
             let seconds = Date().timeIntervalSince(started)
@@ -1540,7 +1484,7 @@ public actor Agent {
     private var reasoningTimedOut = false
 
     private func streamTurn(
-        request: LLMRequest,
+        request: ModelRequest,
         onText: @escaping @Sendable (String) -> Void,
         onReasoning: (@Sendable (String) -> Void)?
     ) async throws -> AgentLLMResponse {
@@ -1557,13 +1501,15 @@ public actor Agent {
         // becomes the answer, but carried on the synthesized response so the
         // reasoning-only continuation guard works for streamed turns too.
         var streamedReasoning = ""
-        var streamedToolCalls: [LLMToolCall] = []
+        var streamedToolCalls: [ModelToolCall] = []
         var sawNativeToolSignal = false
         // Providers report real token usage on the final `.finish` chunk; capture
         // it so the synthesized streaming response carries the model's actual
         // consumed tokens rather than dropping them (which forced cost/context
         // onto a local estimate).
-        var streamedUsage: LLMUsage? = nil
+        var streamedUsage: ModelUsage? = nil
+        var terminal: ModelResponse?
+        var sawFinish = false
         streamLoop: for try await chunk in config.provider.stream(request) {
             switch chunk {
             case .text(let text):
@@ -1581,19 +1527,29 @@ public actor Agent {
                 if let limit = config.maxReasoningSeconds, streamedText.isEmpty, streamedToolCalls.isEmpty,
                    Date().timeIntervalSince(started) > limit {
                     logger.info("A call reasoned for \(Int(Date().timeIntervalSince(started))) s without acting; stopping it and asking the model to act.")
-                    reasoningTimedOut = true
-                    break streamLoop
+                    throw ModelError.interrupted
                 }
             case .toolCall(let call):
                 streamedToolCalls.append(call)
                 sawNativeToolSignal = true
+            case .progress: break
+            case .terminal(let response):
+                guard terminal == nil, response.status == .completed else { throw ModelError.protocolViolation("Model generation did not complete successfully") }
+                try ToolBatchValidator.validate(response.toolCalls)
+                terminal = response
             case .finish(let reason, let usage):
+                guard reason == .stop || reason == .toolCalls else { throw ModelError.protocolViolation("Model stream is incomplete") }
+                guard !sawFinish else { throw ModelError.protocolViolation("Duplicate stream terminal") }; sawFinish = true
                 if let usage { streamedUsage = usage }
                 if reason == .toolCalls { sawNativeToolSignal = true }
             case .error(let error):
                 throw error
             }
         }
+        try Task.checkCancellation()
+        guard !isCancelled else { throw CancellationError() }
+        if let terminal { emit(.streamFinished); return AgentLLMResponse.from(terminal) }
+        guard sawFinish else { throw ModelError.interrupted }
         emit(.streamFinished)
 
         // If the stream already delivered complete tool calls (name present),
@@ -1601,7 +1557,7 @@ public actor Agent {
         // divergent generation for in-process providers (e.g. MLX at a non-zero
         // temperature), which could otherwise return empty/different tool calls.
         if !streamedToolCalls.isEmpty && streamedToolCalls.allSatisfy({ !$0.name.isEmpty }) {
-            let response = LLMResponse(
+            let response = ModelResponse(
                 text: streamedText,
                 reasoning: streamedReasoning.isEmpty ? nil : streamedReasoning,
                 finishReason: .toolCalls,
@@ -1613,31 +1569,11 @@ public actor Agent {
             return AgentLLMResponse.from(response)
         }
 
-        if sawNativeToolSignal {
-            // Signaled tool use but didn't stream usable args — re-issue
-            // non-streaming. A safety net for providers that only flag tool
-            // use, NOT a normal path: it generates the whole step twice. Every
-            // built-in provider streams whole calls (StreamedToolStepWireTests
-            // pins that), so reaching here means a provider regressed. Say so.
-            logger.warning("\(type(of: config.provider).name) signalled tool use without streaming usable tool calls; re-asking without streaming. This doubles the model call for this step — the provider should stream whole tool calls.")
-            let response = try await config.provider.complete(request)
-            let parsed = AgentLLMResponse.from(response)
-            // Keep any streamed preamble text if the re-issue returned none.
-            if parsed.text.isEmpty && !streamedText.isEmpty {
-                return AgentLLMResponse(
-                    text: streamedText,
-                    toolCalls: parsed.toolCalls,
-                    finishReason: parsed.finishReason,
-                    usage: parsed.usage,
-                    providerName: parsed.providerName
-                )
-            }
-            return parsed
-        }
+        if sawNativeToolSignal { throw ModelError.protocolViolation("Model signalled tools without complete arguments; no regeneration") }
 
         // No native tool signal — parse the streamed text so text-marker tool
         // calls are still recognized (parity with the non-streaming path).
-        let synthesized = LLMResponse(
+        let synthesized = ModelResponse(
             text: streamedText,
             reasoning: streamedReasoning.isEmpty ? nil : streamedReasoning,
             finishReason: .stop,
@@ -1649,13 +1585,13 @@ public actor Agent {
         return AgentLLMResponse.from(synthesized)
     }
 
-    private func makeLLMToolDefinitions(from registeredTools: [any AgentTool]) -> [LLMToolDefinition] {
-        registeredTools.map { tool -> LLMToolDefinition in
+    private func makeModelToolDefinitions(from registeredTools: [any AgentTool]) -> [ModelToolDefinition] {
+        registeredTools.map { tool -> ModelToolDefinition in
             let paramsData = try? JSONEncoder().encode(tool.parameters)
             let paramsDict = paramsData.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] ?? [:]
             // describedForModel appends the tool's example calls — a schema cannot
             // express formats, id shapes or which optional fields go together.
-            return LLMToolDefinition(name: tool.name, description: tool.describedForModel, parameters: paramsDict)
+            return ModelToolDefinition(name: tool.name, description: tool.describedForModel, parameters: paramsDict)
         }
     }
 
@@ -1664,26 +1600,26 @@ public actor Agent {
     /// message and there is no way to separate them again.
     static func providerFailure(_ error: any Error) -> AgentError {
         if error is CancellationError { return .cancelled }
-        let reported = error.llmUserMessage
+        let reported = error.modelUserMessage
         return .providerRefused(summary: reported.summary, details: reported.details)
     }
 
-    private func makeLLMRequest(
+    private func makeModelRequest(
         messagesForLLM: [AgentMessage],
-        tools: [LLMToolDefinition] = []
-    ) async -> LLMRequest {
-        let llmMessages: [LLMMessage]
+        tools: [ModelToolDefinition] = []
+    ) async -> ModelRequest {
+        let llmMessages: [ModelMessage]
         if let contextManager = config.contextManager {
             // ContextSift-style: externalize completed tool exchanges.
             llmMessages = await contextManager.modelMessages(messagesForLLM) { [state] content in
                 state.template(content)
             }
         } else {
-            llmMessages = messagesForLLM.flatMap { msg -> [LLMMessage] in
+            llmMessages = messagesForLLM.flatMap { msg -> [ModelMessage] in
                 if msg.role == .system {
                     return [.system(state.template(msg.content))]
                 }
-                return msg.toLLMMessages()
+                return msg.toModelMessages()
             }
         }
 
@@ -1693,7 +1629,7 @@ public actor Agent {
         let estimate = Int((Double(promptChars) / 3.5).rounded()) + llmMessages.count * 4
         lastPromptTokens = estimate
 
-        return LLMRequest(
+        return ModelRequest(
             model: config.model ?? config.provider.configuration.defaultModel ?? "",
             messages: llmMessages,
             temperature: config.temperature,
@@ -1812,7 +1748,7 @@ public actor Agent {
     /// This shares the exact ReAct implementation used by `run(_:)` — including
     /// planning, skills, repair-retry, and lifecycle callbacks — but streams each
     /// turn. Any assistant text, including the final answer, reaches the caller as
-    /// it is generated. Turns that signal tool use are re-issued non-streaming to
+    /// it is generated. Tool intents are dispatched only after a valid terminal; never reissued to
     /// obtain reliable tool-call arguments (provider streaming does not deliver
     /// complete tool arguments consistently), then tools run and the loop
     /// continues; the final tool-free turn streams its answer directly.
@@ -1826,7 +1762,7 @@ public actor Agent {
 
     /// Streaming variant that accepts images for vision-capable models. The images
     /// are attached to the user turn; the rest of the ReAct loop is identical.
-    nonisolated public func runStreaming(_ query: String, images: [LLMImage]) -> AsyncThrowingStream<String, Error> {
+    nonisolated public func runStreaming(_ query: String, images: [ModelImage]) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -1848,7 +1784,7 @@ public actor Agent {
     /// Streaming variant tagging content finality. `.delta` = live text of the
     /// in-progress turn; `.turnCompleted` = one per finished turn (step vs final
     /// answer). Additive — `runStreaming` (String) is unchanged.
-    nonisolated public func runStreamingTagged(_ query: String, images: [LLMImage] = []) -> AsyncThrowingStream<AgentStreamEvent, Error> {
+    nonisolated public func runStreamingTagged(_ query: String, images: [ModelImage] = []) -> AsyncThrowingStream<AgentStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {

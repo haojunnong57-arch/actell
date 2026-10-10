@@ -2,10 +2,10 @@ import Foundation
 import SwiftUI
 import Combine
 import SwiftAgentKit
-import LLMProviderKit
+import ProviderCore
 
 struct AgentRunServices {
-    let provider: any LLMProvider
+    let provider: any ModelProvider
     let bridge: any DeviceBridge
 }
 
@@ -429,7 +429,7 @@ struct AgentRunServices {
     }
     struct PreparedAttachments {
         var references: [StoredAttachment] = []
-        var images: [LLMImage] = []
+        var images: [ModelImage] = []
         var text = ""
     }
     func importDraftAttachment(data: Data, name: String, in id: UUID) async throws {
@@ -463,7 +463,7 @@ struct AgentRunServices {
         var prepared = PreparedAttachments(references: before.draftAttachments ?? [])
         for asset in prepared.references {
             try Task.checkCancellation()
-            if asset.kind == .image { prepared.images.append(LLMImage(data: try await attachments.inferenceImage(asset, conversationID: id))) }
+            if asset.kind == .image { prepared.images.append(ModelImage(data: try await attachments.inferenceImage(asset, conversationID: id))) }
             else {
                 let bytes = try await attachments.read(asset, conversationID: id)
                 guard let content = String(data: bytes, encoding: .utf8) else { throw AppError.invalid("附件不是 UTF-8 文本") }
@@ -503,8 +503,9 @@ struct AgentRunServices {
         cancelPreview()
         let selectedMode = session.mode, token = UUID()
         var runSettings = ProviderSettings()
+        var nativeResponses = false
         let selectedBridge: any DeviceBridge
-        let selectedProvider: any LLMProvider
+        let selectedProvider: any ModelProvider
         do {
             if let services = runServicesFactory?(conversationID) ?? runServices { selectedBridge = services.bridge; selectedProvider = services.provider }
             else if selectedMode == .demo { selectedBridge = DemoBridge(); selectedProvider = DemoProvider() }
@@ -513,12 +514,15 @@ struct AgentRunServices {
                 if session.providerID == nil {
                     sessions.selectProvider(profile.id, model: profile.settings.model, in: conversationID)
                 }
+                nativeResponses = profile.inferenceAPI == .responses
                 runSettings = profile.settings
                 runSettings.model = selectedModel(in: conversationID)
                 try profile.requireInference(model: runSettings.model)
                 let key = try SecretStore.load(profile.keyAccount) ?? ""
                 let cloud = try PrivateVisionProvider(settings: runSettings, apiKey: key, limits: limits,
-                    protocolType: profile.protocolType, parameters: profile.parameters(for: runSettings.model), metadata: profile.metadata(for: runSettings.model))
+                    providerKind: profile.providerKind, parameters: profile.parameters(for: runSettings.model), metadata: profile.metadata(for: runSettings.model),
+                    inferenceAPI: profile.inferenceAPI, contextPolicy: profile.contextPolicy, accountReference: profile.keyAccount, runID: token,
+                    checkpointFile: try Self.providerCheckpointFile(runID: token))
                 let usbInput = appOwner.usbClient.map { client in
                     LiveDeviceBridgeRouter.USBInput(transport: client, health: client.health,
                                                    supportsHID: appOwner.usbConnectionStatus == .ready(hid: true))
@@ -589,7 +593,7 @@ struct AgentRunServices {
         }
         let config = AgentConfig(provider: selectedProvider, model: selectedMode == .demo ? "demo" : runSettings.model,
             maxTokens: limits.maxOutputTokens, systemPrompt: Self.systemPrompt(skills: skillSnapshot),
-            maxTurns: limits.maxTurns, contextWindow: 16_384, maxMessages: 30,
+            maxTurns: limits.maxTurns, contextWindow: nativeResponses ? Int.max / 4 : 16_384, maxMessages: nativeResponses ? 0 : 30,
             enablePlanning: false, enableRepairRetry: false, enablePlanContinuation: false,
             tools: tools,
             autonomousMode: false, enableSubAgents: false, maxVerificationRetries: 0,
@@ -709,6 +713,10 @@ struct AgentRunServices {
     func stop(message: String = "已停止；已发出的动作可能已执行，请核对设备", interrupted: Bool = false) {
         cancelRun(message: message, phase: interrupted ? .interrupted : .stopped)
     }
+    private static func providerCheckpointFile(runID: UUID) throws -> URL {
+        let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        return root.appendingPathComponent("PhoneAgent/provider-runs/\(runID).json")
+    }
     private func cancelRun(message: String, phase: RunPhase, publishNotice: Bool = true, disconnectUSB: Bool = false) {
         // Inactive -> background can call stop twice. Only the first cleanup
         // owns draining; a second cleanup must not unlock Start prematurely.
@@ -729,10 +737,10 @@ struct AgentRunServices {
             // The caller's message may refer to a task; do not export it.
             usbDiagnostics.record("viewmodel.stop phase=\(phase) scene=\(currentScene) running=\(running) stopping=\(stopping)", attempt: usbGeneration)
         }
+        lifecycle.stop(message: message) // Durable cancel fence before network cancellation.
         runTask?.cancel(); agent?.requestCancel(); provider?.cancel()
         bridge?.cancelTransport()
         if let liveBridge, (bridge as? TLSBridge) !== liveBridge { liveBridge.cancelTransport() }
-        lifecycle.stop(message: message)
         publishActivity(phase == .interrupted ? .interrupted : (phase == .blocked ? .blocked : .stopped))
         if let identity = runIdentity { invalidateApprovals(identity) }
         approvalTimeout?.cancel(); approvalTimeout = nil
@@ -1018,7 +1026,7 @@ struct AgentRunServices {
     }
     private static func safeError(_ error: Error) -> String {
         if let e = error as? AppError { return e.localizedDescription }
-        if let e = error as? LLMError, case .invalidRequest(let message) = e { return message }
+        if let e = error as? ModelError, case .invalidRequest(let message) = e { return message }
         if error is CancellationError { return "运行已取消" }
         if let error = error as? AgentError {
             switch error {

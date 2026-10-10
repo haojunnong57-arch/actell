@@ -143,3 +143,42 @@ UI 提供协议/基础地址/密钥、获取/取消/刷新、缓存搜索选择�
 已新增 VPN 回环连接模式，作为首个选项及未保存偏好时的默认值；已有显式 ESP32 选择保留。两条路线共用 App 内系统配对身份与 CoreDevice 后端，切换或保存地址配置会释放旧会话并撤销旧截图/动作授权，运行中禁止修改。接口与对端 IPv4 可编辑，默认 10.7.1.1 / 10.7.0.1，发现或绑定失败不回落其他通道。新配对广播和协议中的授权名称为「执言」。
 
 iPhone 15 Pro 真机已通过：复用已有身份、CoreDevice 认证、1179 × 2556 截图、真实点击计数 0 → 1、对端确认媒体释放；更新已安装并正常启动。最新默认 App 326 项、Swift/C/Rust 链路 40 项、Rust 45 + 176 项及 PA3 TCP 25 项通过；模式与地址 UI 用例通过。证据、测试入口及剩余拖动/后台验收边界见 [VPN 回环模式](ncm-coredevice/LOCALDEVVPN.md)。
+
+
+## 2026-10-10 ProviderKit 迁移与离线验证
+
+- 当前依赖图已移除 LLMProviderKit（包括 SwiftAgentKit 的间接依赖）。保留 SwiftAgentKit；仅适配 Provider 消息／响应／上下文与安全终态接缝，不扩大设备并发、授权或模型自动重试。
+- 包目录及包名统一 `ios-app/ProviderKit`／`ProviderKit`；模块、target、product、Sources 目录为 `ProviderCore` 和 `OpenAIAdapter`。远程 SPM 固定 MacPaw/OpenAI 0.5.2，commit `975fff8a1e1ef92fc7fc04097b0cfe253b840cb7`；无 SDK vendoring、源码补丁或 fork。保留上游许可证与来源记录。
+- ProviderCore 自有消息／图片／工具／原生有序输出／流事件／错误／作用域句柄；MacPaw 类型仅在适配器 codec 内。窄传输使用 ephemeral、禁重定向、有限缓冲与请求／响应大小上限；规避 SDK 0.5.2 streaming 独立 default session 和 DEBUG 原始载荷日志。
+- Responses 默认无状态本地回放／store=false；OpenAI 响应链须明确选择 store=true，每轮仅提交新增输入并重发 instructions。任务作用域独立于 UI 历史。完成终态后先原子持久化 head、native replay 与 pending calls，再允许派发；EOF、item.done、incomplete、failed、cancelled、未知关键 item/event 不授权动作，不重复生成。StreamCheckpoint 与设备 RunLifecycle journal 独立，取消保存 epoch 并保全证据；不恢复授权或自动重放。
+- 服务商 `ProviderKind`／端点配置 `ProviderProfile` 与 wire 选择 `InferenceAPI`／`OpenAIWireProtocol` 分离；旧 JSON `protocolKind` 字段和原始枚举值继续兼容。OpenRouter 原 Chat 配置、baseURL 前缀、模型 ID、Keychain 引用及已支持参数保留。显式 Responses 仅允许无状态；配置与 wire 边界均拒绝 store=true／previous_response_id。依据 [OpenRouter 官方 Responses](https://openrouter.ai/docs/api_reference/responses/overview)，不能把 OpenAI 服务端状态能力传播给 OpenRouter。
+- OpenRouter Chat 按 [官方 reasoning 合约](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens) 保全完整、有序 reasoning_details（含签名、opaque、扩展字段），通过自有 scoped replay state 续接工具结果；UI 仅展示既有可读投影。流末 usage 的非空 choices／相同重复 finish_reason 不再次派发工具；冲突终态拒绝。不能重建被服务商遮蔽的内容。
+- 100 轮合成截图测试保留所有 call/result，只留最近设备图及用户附件。这是引用／编码不变量验证，**不是实机 RSS 或长时间内存测量**。请求超限显式失败；Responses 禁用旧消息数/token 静默剪链。
+
+验证证据：
+
+- `bash ios-app/scripts/test_core.sh 48D357F3-023C-41C1-8C07-EB0984733302`：**351 核心测试通过、0 失败**；`.build/validation/core.To9bSu/Tests.xcresult` 与 `test.log`。协议、单次授权、会话隔离、未知结果、防重放、checkpoint、停止覆盖留在默认 target。
+- `CC=clang bash tools/test_usb_device.sh`：**25 测试通过**；`.build/validation/provider-usb.log`，仅 TCP 回环／协议夹具。
+- 最终 unsigned iPhoneOS/Xcode 27 build：**BUILD SUCCEEDED**；`.build/validation/provider-iphoneos-final.log`。解析依赖图中无旧 Kit，只有远程 OpenAI 0.5.2 及其锁定的 swift-openapi-runtime／swift-http-types 等依赖。
+- 首轮全 UI（重命名前构建）23 项中 20 通过、3 失败：模型发现后的 composer focus 未显示菜单、服务商会话用例最后断言 ESP32 标题、VPN 保存按钮状态。证据 `.build/validation/core.ENW26I/Tests.xcresult`／`test.log`。后两项涉及未修改的设备设置流程；尚未建立基线对照，不能归因或称为全量通过。服务商相关定向回归另记下方。
+- 最后服务商定向 UI：**2 项通过、0 失败**；`.build/validation/provider-ui-recheck.xcresult`／`provider-ui-recheck.log`。新增 Responses 设置保存／切回 Chat 的状态重置；模型发现用例使用已有 composer-model 用例的两次点击完成焦点过渡，保留模型参数、缓存及会话选择断言。完整 UI 首轮剩余的 ESP32 标题／VPN 保存按钮两项仍待查，未修改设备流程来掩盖断言。
+- Python 工程生成／source-check 脚本语法检查与 git diff whitespace 检查通过；可选 `check_source.py` 全检查因本机未安装 yaml/tree_sitter 依赖未运行，不以它替代实际编译。
+
+边界：无真实模型收费调用、无真机端到端或实际内存测量；SDK 编译与 mock 通过不证明所有 OpenRouter 模型兼容。模型目录不证明 Responses 支持；显式已知不支持视觉／工具／生成的模型会拒绝，未知能力仍须后续真实验收。Conversations、background、compaction、hosted tools、远端 cancel/resume、新路由/session_id/provider-selection 和完整服务商扩展参数未接入。session_id 不作为会话存储。未由本任务执行提交、推送或清理他人暂存内容。
+
+
+## 2026-10-11 OpenRouter Chat 末尾 usage 误判修复
+
+用户反馈：使用 OpenRouter 地址、OpenAI-compatible + Chat Completions，正文返回后标记“回复未完成”，并显示通用服务商错误。定位到本地可复现兼容缺陷：[官方 Streaming 合约](https://openrouter.ai/docs/api_reference/streaming) 的最后 usage 帧包含非空 choices、`delta.role=assistant`、空 content 和重复 finish_reason；旧解析器把 role 元数据误判为完成后的新输出。此前 reasoning/usage 夹具只带空 content，漏测 role 字段；本次补齐完整官方形状。
+
+修复仅在 Chat 终态后的内容判定中排除合法 assistant role 元数据。重复终态仍必须相同；非空文本／工具、冲突终态、错误 role、无成功终态的截断流和单独 [DONE] 仍拒绝，不自动重新生成。不修改 Responses、服务商配置、设备并发或权限。
+
+离线回归：实际 URLSession/URLProtocol → SSE frame decoder → PrivateVisionProvider 的测试同时覆盖 OpenAI-compatible 和 OpenRouter 两种配置，确认正文只出现一次、只发布一个 completed 终态、usage=17 且仅一次请求；工具 reasoning 回放用例也加入 role/native_finish_reason 末帧。核心 **353 tests，0 失败**，证据 `.build/validation/core.H7kfP4/Tests.xcresult`／`test.log`；最终无签名 iPhoneOS build 通过，`.build/validation/openrouter-accounting-iphoneos.log`；USB 回环 **25 tests 通过**，`openrouter-accounting-usb.log`。仅协议解析改动，未新增 UI 改动，未重复完整 UI 回归。
+
+没有读取密钥、发起收费模型请求或操作真实手机；尚未取得该次真实请求的脱敏帧，因此本地复现与修复吻合反馈，但仍需更新 App 后真实复验，不能称在线联调已经通过。保留已有未提交／暂存修改，没有执行提交或推送。
+
+### 2026-10-11 服务商选项精简
+
+按用户要求，服务商选择列表移除 Anthropic、Gemini、Ollama，只提供 OpenAI-compatible 和 OpenRouter。`ProviderModels.swift` 的 `selectableKinds` 与持久化枚举分离；保留旧 raw value 与底层兼容代码，以免旧条目导致整个配置归档无法解码。`ProvidersView.swift` 对旧类型显示选择提示，用户明确改选前不能获取模型或保存；不自动改类型、地址或密钥。原有配置条目仍可查看、移除／恢复。
+
+`ModelDiscoveryTests.swift` 验证三种旧配置与 OpenRouter 混合归档恢复；`ConversationUITests.swift` 在既有上下文保存用例中验证菜单只有两个服务商、旧选项不存在且两种类型可切换。核心 **354 tests，0 失败**：`.build/validation/core.AglNAx/Tests.xcresult`；定向 UI **1 test，0 失败**：`.build/validation/provider-selection-ui.xcresult`／`provider-selection-ui.log`；无签名 iPhoneOS **BUILD SUCCEEDED**：`provider-selection-iphoneos.log`。本轮未重跑完整 UI、未调用线上 API；此前完整 UI 的两项设备设置失败仍未解决。未提交／推送，保留其他任务已有修改。

@@ -12,7 +12,7 @@
 //
 
 import Foundation
-import LLMProviderKit
+import ProviderCore
 
 /// Transforms an agent conversation into the model-facing message set, keeping
 /// tool history out of routine context without losing it.
@@ -183,7 +183,7 @@ public final class ContextManager: @unchecked Sendable {
     public func modelMessages(
         _ messages: [AgentMessage],
         systemTemplate: (String) -> String
-    ) async -> [LLMMessage] {
+    ) async -> [ModelMessage] {
         let systemBlocks = messages
             .filter { $0.role == .system }
             .map { systemTemplate($0.content) }
@@ -198,10 +198,10 @@ public final class ContextManager: @unchecked Sendable {
             sum + m.content.count + (m.toolResults?.reduce(0) { $0 + $1.result.count } ?? 0)
         }
         if totalChars <= inlineBudgetChars {
-            var inline: [LLMMessage] = []
+            var inline: [ModelMessage] = []
             if !systemBlocks.isEmpty { inline.append(.system(systemBlocks.joined(separator: "\n\n"))) }
             for message in rest where message.role != .system {
-                inline.append(contentsOf: message.toLLMMessages())
+                inline.append(contentsOf: message.toModelMessages())
             }
             return inline
         }
@@ -269,7 +269,7 @@ public final class ContextManager: @unchecked Sendable {
             }
         }
 
-        var out: [LLMMessage] = []
+        var out: [ModelMessage] = []
 
         // One combined system message (identity + ledger) — provider-safe
         // (some providers keep only a single system block).
@@ -304,12 +304,12 @@ public final class ContextManager: @unchecked Sendable {
             let isExternalized = externalized.contains(index)
             switch message.role {
             case .user:
-                out.append(contentsOf: message.toLLMMessages())
+                out.append(contentsOf: message.toModelMessages())
             case .assistant:
                 if isExternalized {
                     if !message.content.isEmpty { out.append(.assistant(message.content)) }  // drop tool calls
                 } else {
-                    out.append(contentsOf: message.toLLMMessages())  // keep tool calls (recent/active)
+                    out.append(contentsOf: message.toModelMessages())  // keep tool calls (recent/active)
                 }
             case .tool:
                 if !isExternalized, let results = message.toolResults {

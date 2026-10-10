@@ -1,6 +1,6 @@
 import XCTest
 import SwiftAgentKit
-import LLMProviderKit
+import ProviderCore
 @testable import PhoneAgent
 
 private actor SpyBridge: DeviceBridge {
@@ -190,10 +190,10 @@ final class SafetyTests: XCTestCase {
         let settings = ProviderSettings(baseURL: "https://example.com/v1", model: "vision")
         let provider = try PrivateVisionProvider(settings: settings, apiKey: "test-only-not-a-real-key", limits: AgentLimits())
         defer { provider.cancel() }
-        let image = LLMImage(data: Data([1,2,3]))
-        let request = LLMRequest(model: "vision", messages: [
-            .assistant(content: "", toolCalls: [LLMToolCall(id: "call", name: "screenshot", arguments: "{}")]),
-            LLMMessage(role: .tool, content: "screen", images: [image], toolCallId: "call")
+        let image = ModelImage(data: Data([1,2,3]))
+        let request = ModelRequest(model: "vision", messages: [
+            .assistant(content: "", toolCalls: [ModelToolCall(id: "call", name: "screenshot", arguments: "{}")]),
+            ModelMessage(role: .tool, content: "screen", images: [image], toolCallId: "call")
         ])
         let body = try XCTUnwrap(try provider.prepareRequest(request, stream: false).httpBody)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])

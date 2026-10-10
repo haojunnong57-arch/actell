@@ -389,6 +389,29 @@ import XCTest
         XCTAssertFalse(app.buttons["stopRun"].exists)
         XCTAssertFalse(app.buttons["approveTool"].exists)
     }
+    func testResponsesContextSelectionPersistsAndChatResetsChain() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing", "--ui-test-composer-models"]; app.launch()
+        openProviders(app); app.staticTexts["Fixture One"].tap()
+        let service = app.buttons["providerProtocol"]
+        XCTAssertTrue(service.waitForExistence(timeout: 5)); service.tap()
+        XCTAssertTrue(app.buttons["OpenAI-compatible"].exists)
+        XCTAssertTrue(app.buttons["OpenRouter"].exists)
+        for removed in ["Anthropic", "Gemini", "Ollama"] { XCTAssertFalse(app.buttons[removed].exists) }
+        app.buttons["OpenRouter"].tap()
+        XCTAssertTrue(service.label.contains("OpenRouter"))
+        service.tap(); app.buttons["OpenAI-compatible"].tap()
+        let api = app.buttons["providerInferenceAPI"], context = app.buttons["providerContextPolicy"]
+        XCTAssertTrue(api.waitForExistence(timeout: 5)); api.tap(); app.buttons["Responses"].tap()
+        XCTAssertTrue(context.waitForExistence(timeout: 3)); context.tap()
+        app.buttons["服务端响应链 · 保存远端响应"].tap()
+        capture("responses-context-setting")
+        app.buttons["saveProvider"].tap(); app.staticTexts["Fixture One"].tap()
+        XCTAssertTrue(api.label.contains("Responses")); XCTAssertTrue(context.label.contains("服务端响应链"))
+        api.tap(); app.buttons["Chat Completions"].tap(); XCTAssertFalse(context.exists)
+        app.buttons["saveProvider"].tap(); app.staticTexts["Fixture One"].tap()
+        XCTAssertTrue(api.label.contains("Chat Completions")); XCTAssertFalse(context.exists)
+    }
     func testDiscoverModelsConfigureParameterAndSelectCachedModelInConversation() {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing", "--ui-test-model-catalog"]; app.launch()
@@ -403,7 +426,9 @@ import XCTest
         capture("model-parameters")
         app.buttons["saveProvider"].tap(); closeProviders(app); app.buttons["newConversation"].tap()
         let picker = app.buttons["conversationModelPicker"]
-        app.textViews["messageInput"].tap()
+        // Match the existing composer-model test: complete the focus transition
+        // after dismissing an editor keyboard before expecting its action row.
+        app.textViews["messageInput"].tap(); app.textViews["messageInput"].tap()
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
         XCTAssertTrue(picker.label.contains("fixture-vision")); picker.tap(); app.buttons["fixture-other"].tap()
         XCTAssertTrue(picker.label.contains("fixture-other"))

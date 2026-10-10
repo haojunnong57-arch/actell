@@ -1,19 +1,19 @@
 import XCTest
 import UIKit
-import LLMProviderKit
+import ProviderCore
 @testable import PhoneAgent
 
-private final class AttachmentReceiptProvider: LLMProvider, @unchecked Sendable {
+private final class AttachmentReceiptProvider: ModelProvider, @unchecked Sendable {
     static let name = "synthetic-attachment-receipt"
-    let configuration = LLMProviderConfiguration(name: name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
+    let configuration = ProviderConfiguration(name: name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
     private let lock = NSLock()
-    private var captured: [LLMRequest] = []
-    var requests: [LLMRequest] { lock.withLock { captured } }
-    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
+    private var captured: [ModelRequest] = []
+    var requests: [ModelRequest] { lock.withLock { captured } }
+    func stream(_ request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         lock.withLock { captured.append(request) }
         return AsyncThrowingStream { continuation in
             if !request.messages.contains(where: { $0.role == .tool }) {
-                continuation.yield(.toolCall(LLMToolCall(id: "attachment-observe", name: "screenshot", arguments: "{}")))
+                continuation.yield(.toolCall(ModelToolCall(id: "attachment-observe", name: "screenshot", arguments: "{}")))
                 continuation.yield(.finish(reason: .toolCalls, usage: nil))
             } else {
                 continuation.yield(.text("已读取合成附件。")); continuation.yield(.finish(reason: .stop, usage: nil))
@@ -21,7 +21,7 @@ private final class AttachmentReceiptProvider: LLMProvider, @unchecked Sendable 
             continuation.finish()
         }
     }
-    func complete(_ request: LLMRequest) async throws -> LLMResponse { throw AppError.invalid("stream only") }
+    func complete(_ request: ModelRequest) async throws -> ModelResponse { throw AppError.invalid("stream only") }
 }
 
 @MainActor final class AttachmentSendingTests: XCTestCase {
@@ -89,16 +89,16 @@ private final class AttachmentReceiptProvider: LLMProvider, @unchecked Sendable 
     func testWireRequestKeepsUserAttachmentsAndOnlyLatestDeviceImage() throws {
         let provider = try PrivateVisionProvider(settings: .init(baseURL: "https://invalid.invalid/v1", model: "fixture"), apiKey: "synthetic-key", limits: AgentLimits())
         defer { provider.cancel() }
-        let user = LLMImage(data: Data([1])), old = LLMImage(data: Data([2])), newest = LLMImage(data: Data([3]))
-        let request = LLMRequest(model: "fixture", messages: [.user("attached", images: [user]),
-            LLMMessage(role: .tool, content: "old", images: [old], toolCallId: "old"),
-            LLMMessage(role: .tool, content: "new", images: [newest], toolCallId: "new")])
+        let user = ModelImage(data: Data([1])), old = ModelImage(data: Data([2])), newest = ModelImage(data: Data([3]))
+        let request = ModelRequest(model: "fixture", messages: [.user("attached", images: [user]),
+            ModelMessage(role: .tool, content: "old", images: [old], toolCallId: "old"),
+            ModelMessage(role: .tool, content: "new", images: [newest], toolCallId: "new")])
         let body = try XCTUnwrap(try provider.prepareRequest(request, stream: true).httpBody)
         let encoded = String(decoding: body, as: UTF8.self)
         XCTAssertTrue(encoded.contains("AQ==")); XCTAssertTrue(encoded.contains("Aw==")); XCTAssertFalse(encoded.contains("Ag=="))
     }
     func testDiscoveryOnlyProtocolsRejectSendWithoutDroppingDraftOrLoadingCredentials() async throws {
-        for kind in [ProviderProtocol.anthropic, .gemini] {
+        for kind in [ProviderKind.anthropic, .gemini] {
             let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false)
             let id = model.createConversation(mode: .live)
             var profile = ProviderProfile(name: "Synthetic", settings: .init(baseURL: kind.defaultBase, model: "fixture"))

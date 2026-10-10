@@ -47,7 +47,7 @@ final class ModelDiscoveryClient: @unchecked Sendable {
         return result
     }
     func request(profile: ProviderProfile, key: String, cursor: String? = nil, offset: Int = 0, model: String? = nil) throws -> URLRequest {
-        let kind = profile.protocolType, base = try kind.baseURL(profile.settings.baseURL)
+        let kind = profile.providerKind, base = try kind.baseURL(profile.settings.baseURL)
         let endpoint = kind == .ollama ? base.appendingPathComponent(model == nil ? "api/tags" : "api/show") : base.appendingPathComponent("models")
         var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
         switch kind {
@@ -74,13 +74,13 @@ final class ModelDiscoveryClient: @unchecked Sendable {
         return request
     }
     func fetch(profile: ProviderProfile, key: String) async throws -> ModelCatalog {
-        let kind = profile.protocolType
+        let kind = profile.providerKind
         var models: [DiscoveredModel] = [], indices: [String: Int] = [:]
         var cursor: String?, seenCursors = Set<String>(), seenPages = Set<[String]>()
         var offset = 0
         while true {
             let value = try await json(request(profile: profile, key: key, cursor: cursor, offset: offset))
-            let page = try Self.parseList(value, protocolType: kind)
+            let page = try Self.parseList(value, providerKind: kind)
             for model in page {
                 if let index = indices[model.id] { models[index] = model }
                 else { indices[model.id] = models.count; models.append(model) }
@@ -124,18 +124,18 @@ final class ModelDiscoveryClient: @unchecked Sendable {
         try Task.checkCancellation()
         return ModelCatalog(endpoint: try profile.catalogEndpoint(), fetchedAt: Date(), models: models)
     }
-    static func parseList(_ value: [String: Any], protocolType: ProviderProtocol) throws -> [DiscoveredModel] {
-        let arrayKey = [.gemini, .ollama].contains(protocolType) ? "models" : "data"
+    static func parseList(_ value: [String: Any], providerKind: ProviderKind) throws -> [DiscoveredModel] {
+        let arrayKey = [.gemini, .ollama].contains(providerKind) ? "models" : "data"
         // Google omits an empty repeated field. Other missing arrays are format errors.
         let rows: [[String: Any]]
         if let list = value[arrayKey] as? [[String: Any]] { rows = list }
-        else if protocolType == .gemini && value.isEmpty { rows = [] }
+        else if providerKind == .gemini && value.isEmpty { rows = [] }
         else { throw AppError.invalid("模型列表格式与所选协议不匹配") }
         return try rows.map { row in
-            let raw = row[protocolType == .gemini ? "name" : protocolType == .ollama ? "name" : "id"] as? String
+            let raw = row[providerKind == .gemini ? "name" : providerKind == .ollama ? "name" : "id"] as? String
             guard let id = raw, !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.invalid("模型列表中有无效 ID") }
             var model = DiscoveredModel(id: id, name: row["display_name"] as? String ?? row["displayName"] as? String ?? row["name"] as? String ?? id)
-            switch protocolType {
+            switch providerKind {
             case .openAI, .ollama: break
             case .anthropic:
                 let caps = row["capabilities"] as? [String: [String: Any]]

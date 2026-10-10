@@ -79,29 +79,53 @@ private struct ProviderEditor: View {
             Form {
                 Section("服务商") {
                     TextField("名称", text: $profile.name).accessibilityIdentifier("providerName")
-                    Picker("协议", selection: Binding(get: { profile.protocolType }, set: { kind in
-                        let wasDefault = profile.settings.baseURL == profile.protocolType.defaultBase
+                    Picker("服务商", selection: Binding<ProviderKind?>(get: { profile.providerKind.isSelectable ? profile.providerKind : nil }, set: { selection in
+                        guard let kind = selection else { return }
+                        let wasDefault = profile.settings.baseURL == profile.providerKind.defaultBase
                         profile.protocolKind = kind
+                        if !kind.supportsResponses { profile.inferenceKind = .chatCompletions }
+                        if !kind.supportsResponseChain { profile.contextKind = .stateless }
                         if wasDefault { profile.settings.baseURL = kind.defaultBase }
                     })) {
-                        ForEach(ProviderProtocol.allCases) { Text($0.title).tag($0) }
+                        if !profile.providerKind.isSelectable { Text("请选择服务商").tag(Optional<ProviderKind>.none) }
+                        ForEach(ProviderKind.selectableKinds) { Text($0.title).tag(Optional($0)) }
                     }.accessibilityIdentifier("providerProtocol")
+                    if !profile.providerKind.isSelectable {
+                        Text("此服务商类型已从列表移除。原配置与密钥保留；请选择服务商并核对地址后保存。")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                     TextField("HTTPS API 基础地址", text: $profile.settings.baseURL)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                         .accessibilityIdentifier("providerURL")
                     SecureField("API 密钥（留空保留原值）", text: $key)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .accessibilityIdentifier("providerKey")
-                    Text(profile.protocolType.baseHint).font(.caption).foregroundStyle(.secondary)
-                    Text(profile.protocolType.inferenceNotice).font(.caption)
-                        .foregroundStyle(profile.protocolType.supportsInference ? Color.secondary : Color.orange)
+                    Text(profile.providerKind.baseHint).font(.caption).foregroundStyle(.secondary)
+                    if profile.providerKind.supportsResponses {
+                        Picker("推理接口", selection: Binding(get: { profile.inferenceAPI }, set: { api in
+                            profile.inferenceKind = api
+                            if api == .chatCompletions { profile.contextKind = .stateless }
+                        })) { ForEach(InferenceAPI.allCases) { Text($0.title).tag($0) } }.accessibilityIdentifier("providerInferenceAPI")
+                        if profile.inferenceAPI == .responses {
+                            if profile.providerKind.supportsResponseChain { Picker("上下文", selection: Binding(get: { profile.contextPolicy }, set: { profile.contextKind = $0 })) {
+                                ForEach(ProviderContextPolicy.allCases) { Text($0.title).tag($0) }
+                            }.accessibilityIdentifier("providerContextPolicy") }
+                            if !profile.providerKind.supportsResponseChain { Text("此服务商 Responses 仅支持本地回放，store=false；不支持 previous_response_id。 ").font(.caption).foregroundStyle(.secondary) }
+                            Text(profile.contextPolicy == .stateless
+                                 ? "每轮发送有效本地上下文，store=false；不代表服务商所有日志均不留存。网关须明确支持 Responses。"
+                                 : "明确启用 store=true 与 previous_response_id。每轮只传新输入；旧截图可能仍在远端上下文，减少上传不等于删除。续接仅在当前任务内使用。")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(profile.providerKind.inferenceNotice).font(.caption)
+                        .foregroundStyle(profile.providerKind.supportsInference ? Color.secondary : Color.orange)
                 }
                 Section {
                     TextField("默认模型 ID", text: $profile.settings.model)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("providerModel")
                     HStack {
                         Button(profile.currentCatalog == nil ? "获取模型" : "刷新模型") { refresh() }
-                            .disabled(discovery.loading).accessibilityIdentifier("fetchModels")
+                            .disabled(discovery.loading || !profile.providerKind.isSelectable).accessibilityIdentifier("fetchModels")
                         Spacer()
                         if discovery.loading {
                             ProgressView()
@@ -120,7 +144,7 @@ private struct ProviderEditor: View {
                 } header: { Text("模型") } footer: { Text("无法获取列表时仍可手动填写 ID。列表不代表推理兼容性；未提供的能力显示未知。保存不会发起网络请求。") }
                 if let metadata = profile.metadata(for: profile.settings.model) { ModelMetadataSection(metadata: metadata) }
                 if !profile.settings.model.isEmpty {
-                    ModelParameterSection(protocolType: profile.protocolType, metadata: profile.metadata(for: profile.settings.model),
+                    ModelParameterSection(providerKind: profile.providerKind, metadata: profile.metadata(for: profile.settings.model),
                         parameters: Binding(get: { profile.parameters(for: profile.settings.model) }, set: { value in
                             if profile.modelParameters == nil { profile.modelParameters = [:] }
                             profile.modelParameters?[profile.settings.model] = value
@@ -143,7 +167,7 @@ private struct ProviderEditor: View {
                     Button("保存") {
                         profile.models = modelList.components(separatedBy: .newlines)
                         if model.saveProvider(profile, key: key) { key = ""; dismiss() }
-                    }.disabled(model.hasBusySessions).accessibilityIdentifier("saveProvider")
+                    }.disabled(model.hasBusySessions || !profile.providerKind.isSelectable).accessibilityIdentifier("saveProvider")
                 }
             }
         }
@@ -202,22 +226,22 @@ private struct ModelMetadataSection: View {
 }
 
 private struct ModelParameterSection: View {
-    let protocolType: ProviderProtocol
+    let providerKind: ProviderKind
     let metadata: DiscoveredModel?
     @Binding var parameters: ModelParameters
     var body: some View {
         Section {
-            ForEach(ModelParameter.fields(for: protocolType)) { field in
+            ForEach(ModelParameter.fields(for: providerKind)) { field in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(field.rawValue + " · " + field.support(protocolType: protocolType, model: metadata).label).font(.subheadline)
+                    Text(field.rawValue + " · " + field.support(providerKind: providerKind, model: metadata).label).font(.subheadline)
                     TextField("未设置，使用服务商默认值", text: Binding(get: { parameters.values[field.rawValue] ?? "" }, set: { parameters.values[field.rawValue] = $0 }))
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .disabled(field.support(protocolType: protocolType, model: metadata) == .unsupported)
+                        .disabled(field.support(providerKind: providerKind, model: metadata) == .unsupported)
                         .accessibilityIdentifier("parameter-" + field.rawValue)
-                    Text(field.hint(protocolType: protocolType, model: metadata)).font(.caption).foregroundStyle(.secondary)
+                    Text(field.hint(providerKind: providerKind, model: metadata)).font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if !protocolType.supportsInference { Text("原生推理尚未接入，暂不提供推理参数设置。") }
+            if !providerKind.supportsInference { Text("原生推理尚未接入，暂不提供推理参数设置。") }
         } header: { Text("此服务商／模型的参数") }
         footer: { Text("留空不发送参数。未知表示模型接口未声明：可手动填写协议已知字段，但服务商仍可能拒绝。明确不支持的字段不会发送。设置仅用于此服务商的当前模型。") }
     }

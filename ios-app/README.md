@@ -4,9 +4,9 @@
 
 真实模型使用 screenshot / tap / drag / wait 设备工具，最终文字回复结束本轮。启用用户导入的技能后，系统提示词包含已启用技能的名称、描述、id 和 revision；额外提供 load_skill，只按需读取该技能包的文本。同一响应可含多个工具，按返回顺序串行执行；每个动作仍须经过原有授权、截图与故障检查，ID 不得重复或重用。模型调用数、输入数、累计 token 与固定运行时长不再作为产品预算。图像/协议大小、网络故障、系统后台资格、锁屏、手动停止、未知动作不重放仍然生效。App 不保证系统无限后台执行。
 
-输入区支持系统照片／文件选择、预览与移除；仅显式发送时传给所选模型。截图与消息图片可保存原图并在重启后查看；历史资源不恢复设备授权。设置内可管理用户主动导入的 SKILL.md／文本技能包，导入不执行脚本。服务商支持模型发现、能力缓存和每模型参数；原生 Anthropic/Gemini 目前仅支持发现，尚不提供原生推理。详细范围和验收见 [本次证据](../docs/PROJECT-TODOS.md)。
+输入区支持系统照片／文件选择、预览与移除；仅显式发送时传给所选模型。截图与消息图片可保存原图并在重启后查看；历史资源不恢复设备授权。设置内可管理用户主动导入的 SKILL.md／文本技能包，导入不执行脚本。服务商支持模型发现、能力缓存和每模型参数；选择列表仅提供 OpenAI-compatible 和 OpenRouter，旧 Anthropic、Gemini、Ollama 配置仍可读取，编辑时需明确选择可用服务商。详细范围和验收见 [本次证据](../docs/PROJECT-TODOS.md)。
 
-服务商明确返回的可读思考内容／摘要会在消息中单独折叠展示，支持流式状态、取消／失败后保留以及历史恢复。仅解析现有 Chat Completions 路径的 reasoning_content、reasoning 和可读 reasoning_details；不生成思考正文，不解释加密块，不从普通回复抽取，也不自动把历史思考发送到新任务。
+服务商明确返回的可读思考内容／摘要会在消息中单独折叠展示，支持流式状态、取消／失败后保留以及历史恢复。Chat Completions 解析 reasoning_content、reasoning 和可读 reasoning_details；Responses 展示明确返回的 summary，并将 encrypted_content 仅用于同域回放；不生成思考正文，不解释加密块，不从普通回复抽取，也不自动把历史思考发送到新任务。
 
 ## 构建
 
@@ -46,3 +46,7 @@ RUN_UI_TESTS=1 bash ios-app/scripts/test_core.sh <隔离模拟器-UDID>
 “执行任务” App Intent 收到任务文本后直接调用现有任务启动路径，不再等待 App 内确认。启动失败在 App 中显示具体原因，并保留草稿供检查；相同命令 ID 的已提交任务不会重放。设备授权、锁屏和停止机制继续生效。
 
 该入口使用前台执行模式，为新会话绑定默认服务商。若 Siri 唤起时 App 尚未活跃，请求通过当前进程内的交接队列在前台就绪后自动启动，不要求再次确认；重启不会自动启动旧草稿。打开 App 后启动后台媒体和任务。Apple App Shortcut 的调用短语不支持任意自由文本参数，因此“用执言执行任务”缺少参数时仍由 Siri 询问任务内容。需要一句话执行固定任务时，可在系统“快捷指令”中新建快捷指令，添加执言的“执行任务”操作、预填任务文本，再通过该快捷指令名称唤起 Siri。
+
+## Provider 边界
+
+已用自有 ProviderCore 与远程 SPM MacPaw/OpenAI 0.5.2 替换旧 Kit。SDK 源码未复制入工程。设置可选择 Chat Completions 或 Responses；原配置保持 Chat 默认。Responses 默认本地回放/store=false，明确选择服务端响应链后才使用 store=true/previous_response_id；续接仅限当前任务，每轮重发 instructions。旧截图不再上传不等于远端历史已删除。OpenRouter 保留 Chat 默认，也可显式使用无状态 Responses；其 store=true/previous_response_id 在本地拒绝。服务商类型与 wire 协议独立。其他原生协议推理、Conversations、background、compaction 和 hosted tools 尚未启用。细节与验证边界见 [Provider 模块](ProviderKit/README.md)。

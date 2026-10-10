@@ -109,3 +109,12 @@ Copyright (c) 2009-2017 Dave Gamble and cJSON contributors; its full license
 remains at ESP-IDF `components/json/cJSON/LICENSE`. Existing ESP-IDF, lwIP,
 esp_tinyusb and TinyUSB notices above apply to this independent target as well.
 No Apple developer image or private framework is included.
+
+## MacPaw/OpenAI
+
+Remote Swift Package Manager dependency, fixed at 0.5.2 /
+975fff8a1e1ef92fc7fc04097b0cfe253b840cb7. MIT license. No SDK source is
+vendored or patched. Actell's own adapter uses public SDK request/output DTOs
+plus a privacy-bounded local transport. The former model Kit is no longer a
+direct or transitive runtime dependency; its existing license records remain
+for historical attribution. See ios-app/ProviderKit/README.md.

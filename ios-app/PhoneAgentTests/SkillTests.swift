@@ -1,6 +1,6 @@
 import XCTest
 import SwiftAgentKit
-import LLMProviderKit
+import ProviderCore
 @testable import PhoneAgent
 
 @MainActor final class SkillTests: XCTestCase {
@@ -151,10 +151,10 @@ import LLMProviderKit
     }
 }
 
-private struct SkillRoundTripProvider: LLMProvider {
+private struct SkillRoundTripProvider: ModelProvider {
     static let name = "skill-roundtrip-fixture"
-    let configuration = LLMProviderConfiguration(name: name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
-    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
+    let configuration = ProviderConfiguration(name: name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
+    func stream(_ request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         AsyncThrowingStream { continuation in
             do {
                 let response = try respond(request)
@@ -164,8 +164,8 @@ private struct SkillRoundTripProvider: LLMProvider {
             } catch { continuation.finish(throwing: error) }
         }
     }
-    func complete(_ request: LLMRequest) async throws -> LLMResponse { try respond(request) }
-    private func respond(_ request: LLMRequest) throws -> LLMResponse {
+    func complete(_ request: ModelRequest) async throws -> ModelResponse { try respond(request) }
+    private func respond(_ request: ModelRequest) throws -> ModelResponse {
         let system = request.messages.filter { $0.role == .system }.map(\.content).joined(separator: "\n")
         XCTAssertTrue(system.contains("Synthetic Guide"))
         XCTAssertTrue(system.contains("Read synthetic fixtures"))
@@ -200,9 +200,9 @@ private struct SkillRoundTripProvider: LLMProvider {
         } else {
             XCTAssertTrue(results.contains { $0.content.contains("BODY_NOT_A_SUMMARY") })
             XCTAssertTrue(results.contains { $0.content.contains("REFERENCE_BODY") })
-            return LLMResponse(text: "合成技能与参考已读取。", finishReason: .stop, request: request, providerName: Self.name)
+            return ModelResponse(text: "合成技能与参考已读取。", finishReason: .stop, request: request, providerName: Self.name)
         }
-        return LLMResponse(text: "", finishReason: .toolCalls, toolCalls: [.init(id: "skill-\(stage)", name: name,
+        return ModelResponse(text: "", finishReason: .toolCalls, toolCalls: [.init(id: "skill-\(stage)", name: name,
             arguments: String(decoding: try JSONEncoder().encode(arguments), as: UTF8.self))], request: request, providerName: Self.name)
     }
 }

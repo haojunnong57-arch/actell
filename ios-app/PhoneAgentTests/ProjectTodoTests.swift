@@ -1,6 +1,6 @@
 import XCTest
 import CoreVideo
-import LLMProviderKit
+import ProviderCore
 import SwiftAgentKit
 @testable import PhoneAgent
 
@@ -176,20 +176,20 @@ final class RunCleanupTests: XCTestCase {
     }
 }
 
-private final class LongRunProvider: LLMProvider, @unchecked Sendable {
+private final class LongRunProvider: ModelProvider, @unchecked Sendable {
     static let name = "long-run-fixture"
-    let configuration = LLMProviderConfiguration(name: LongRunProvider.name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
+    let configuration = ProviderConfiguration(name: LongRunProvider.name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
     private var calls = 0
-    func complete(_ request: LLMRequest) async throws -> LLMResponse {
+    func complete(_ request: ModelRequest) async throws -> ModelResponse {
         calls += 1
         XCTAssertNil(request.maxTokens, "No forced output-token budget")
         XCTAssertFalse(request.tools.contains { $0.name == "finish" }, "Live runs use the final answer")
         let done = calls > 14
-        return LLMResponse(text: done ? "Observed fourteen frames" : "", finishReason: done ? .stop : .toolCalls,
-            usage: LLMUsage(totalTokens: 25_000),
-            toolCalls: done ? [] : [LLMToolCall(id: "screen-\(calls)", name: "screenshot", arguments: "{}")], request: request, providerName: Self.name)
+        return ModelResponse(text: done ? "Observed fourteen frames" : "", finishReason: done ? .stop : .toolCalls,
+            usage: ModelUsage(totalTokens: 25_000),
+            toolCalls: done ? [] : [ModelToolCall(id: "screen-\(calls)", name: "screenshot", arguments: "{}")], request: request, providerName: Self.name)
     }
-    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
+    func stream(_ request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
