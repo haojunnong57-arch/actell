@@ -18,54 +18,77 @@ struct PhoneAgentLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AgentActivityAttributes.self) { context in
             let _ = traceActivityContext(context, destination: "card")
-            ActivityCard(context: context)
-                .activityBackgroundTint(Color.black)
+            Group {
+                if context.state.phase == .standby {
+                    Color.clear.frame(height: 1).accessibilityHidden(true)
+                } else {
+                    ActivityCard(context: context)
+                }
+            }
+                .activityBackgroundTint(context.state.phase == .standby ? Color.clear : Color.black)
                 .activitySystemActionForegroundColor(.white)
-                .widgetURL(route(context).url)
+                .widgetURL(activityURL(context))
         } dynamicIsland: { context in
             let _ = traceActivityContext(context, destination: "island")
+            let standby = context.state.phase == .standby
             let stale = context.isStale && !context.state.phase.isTerminal
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Label(context.attributes.isDemo ? "\(AppIdentity.displayName) · 离线演示" : AppIdentity.displayName, systemImage: "sparkles")
-                        .font(.caption).foregroundStyle(.secondary)
+                    if !standby {
+                        Label((context.state.isDemo ?? context.attributes.isDemo) ? "\(AppIdentity.displayName) · 离线演示" : AppIdentity.displayName, systemImage: "sparkles")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    Label(stale ? "查看" : context.state.compactTitle,
-                          systemImage: stale ? "exclamationmark.circle" : context.state.symbol)
-                        .font(.headline).foregroundStyle(activityTint(context))
+                    if !standby {
+                        Label(stale ? "查看" : context.state.title,
+                              systemImage: stale ? "exclamationmark.circle" : context.state.symbol)
+                            .font(.headline).foregroundStyle(activityTint(context)).lineLimit(2)
+                    }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if stale || !context.state.phase.detail.isEmpty {
-                            Text(stale ? "状态已过期；执行情况需在 App 核对" : context.state.phase.detail)
-                                .font(.caption).foregroundStyle(.secondary)
+                    if !standby {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if context.state.completedTools > 0 {
+                                Text("已完成 \(context.state.completedTools) 个步骤")
+                                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                            }
+                            if stale || !context.state.phase.detail.isEmpty {
+                                Text(stale ? "状态已过期；执行情况需在 App 核对" : context.state.phase.detail)
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Link(destination: activityURL(context)) {
+                                Label(!stale && context.state.phase == .awaitingApproval ? "查看并确认" : (context.state.phase == .standby ? "打开 App" : "查看会话"), systemImage: "arrow.up.forward.app")
+                                    .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8).background(.white.opacity(0.12), in: Capsule())
+                            }.tint(.white)
                         }
-                        Link(destination: route(context).url) {
-                            Label(!stale && context.state.phase == .awaitingApproval ? "查看并确认" : "查看会话", systemImage: "arrow.up.forward.app")
-                                .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity)
-                                .padding(.vertical, 8).background(.white.opacity(0.12), in: Capsule())
-                        }.tint(.white)
                     }
                 }
             } compactLeading: {
-                Image(systemName: "sparkles").foregroundStyle(.cyan)
+                if !standby {
+                    Image(systemName: "sparkles").foregroundStyle(.cyan)
+                }
             } compactTrailing: {
-                HStack(spacing: 3) {
-                    Image(systemName: stale ? "exclamationmark.circle" : context.state.symbol)
-                    Text(stale ? "查看" : context.state.compactTitle).lineLimit(1)
-                }.font(.caption2).foregroundStyle(activityTint(context))
+                if !standby {
+                    HStack(spacing: 3) {
+                        Image(systemName: stale ? "exclamationmark.circle" : context.state.symbol)
+                        Text(stale ? "查看" : context.state.compactTitle).lineLimit(1)
+                    }.font(.caption2).foregroundStyle(activityTint(context))
+                }
             } minimal: {
-                Image(systemName: stale ? "exclamationmark.circle" : context.state.symbol).foregroundStyle(activityTint(context))
+                if !standby {
+                    Image(systemName: stale ? "exclamationmark.circle" : context.state.symbol).foregroundStyle(activityTint(context))
+                }
             }
-            .widgetURL(route(context).url)
-            .keylineTint(activityTint(context))
+            .widgetURL(activityURL(context))
+            .keylineTint(standby ? Color.clear : activityTint(context))
         }
     }
 }
 
-private func route(_ context: ActivityViewContext<AgentActivityAttributes>) -> AgentActivityRoute {
-    AgentActivityRoute(sessionID: context.attributes.sessionID, runID: context.attributes.runID, approvalID: context.state.approvalID)
+private func activityURL(_ context: ActivityViewContext<AgentActivityAttributes>) -> URL {
+    context.state.route(attributes: context.attributes)?.url ?? URL(string: "phoneagent://home")!
 }
 private func activityTint(_ context: ActivityViewContext<AgentActivityAttributes>) -> Color {
     context.isStale || context.state.phase == .awaitingApproval ? .orange : .cyan
@@ -76,7 +99,7 @@ private struct ActivityCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label(context.attributes.isDemo ? "\(AppIdentity.displayName) · 离线演示" : AppIdentity.displayName, systemImage: "sparkles")
+                Label((context.state.isDemo ?? context.attributes.isDemo) ? "\(AppIdentity.displayName) · 离线演示" : AppIdentity.displayName, systemImage: "sparkles")
                     .font(.caption).foregroundStyle(.white.opacity(0.7))
                 Spacer()
             }
@@ -87,8 +110,8 @@ private struct ActivityCard: View {
                 Text(stale ? "状态已过期；执行情况需在 App 核对" : context.state.phase.detail)
                     .font(.caption).foregroundStyle(.white.opacity(0.7))
             }
-            Link(destination: route(context).url) {
-                Label(!stale && context.state.phase == .awaitingApproval ? "查看并确认" : "查看会话", systemImage: "arrow.up.forward.app")
+            Link(destination: activityURL(context)) {
+                Label(!stale && context.state.phase == .awaitingApproval ? "查看并确认" : (context.state.phase == .standby ? "打开 App" : "查看会话"), systemImage: "arrow.up.forward.app")
                     .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity)
                     .padding(.vertical, 8).background(.white.opacity(0.12), in: Capsule())
             }.tint(.white)

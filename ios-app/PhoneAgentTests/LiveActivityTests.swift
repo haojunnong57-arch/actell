@@ -118,6 +118,187 @@ import ActivityKit
         .init(attributes: .init(sessionID: UUID(), runID: run, isDemo: true),
               state: .init(phase: phase, completedTools: 3, updatedAt: Date()), staleDate: Date().addingTimeInterval(30))
     }
+    func testResidentCreatesStandbyInForegroundAndReusesItForBackgroundTasks() async throws {
+        let handle = RecordingActivityHandle()
+        var created: [AgentActivitySnapshot] = []
+        let controller = AgentLiveActivityController(createActivity: { snapshot in
+            created.append(snapshot); return handle
+        })
+        let store = ConversationStore(inMemory: true)
+        _ = AgentViewModel(sessions: store, loadPersistentState: false, sharedActivities: controller)
+        controller.setBackgroundResident(true)
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(created.count, 1)
+        let standby = try XCTUnwrap(created.first)
+        XCTAssertEqual(standby.state.phase, .standby)
+        XCTAssertNil(standby.state.route(attributes: standby.attributes))
+        XCTAssertTrue(store.conversations.isEmpty)
+        controller.setForeground(false)
+        let run = snapshot(.awaitingApproval, run: UUID())
+        controller.submit(run)
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(created.count, 1, "background submission must only update the reserved activity")
+        let state = try XCTUnwrap(handle.states.last)
+        XCTAssertEqual(state.phase, .awaitingApproval)
+        XCTAssertEqual(handle.alerts, 1, "the first background task update requests expansion")
+        XCTAssertEqual(state.route(attributes: standby.attributes),
+            AgentActivityRoute(sessionID: run.attributes.sessionID, runID: run.attributes.runID, approvalID: run.state.approvalID))
+        controller.submit(snapshot(.completed, run: run.attributes.runID))
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.alerts, 2, "task start and completion each alert once")
+        XCTAssertTrue(handle.ended.isEmpty)
+        let next = snapshot(.thinking, run: UUID())
+        controller.submit(next)
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(created.count, 1)
+        XCTAssertEqual(handle.states.last?.runID, next.attributes.runID)
+        controller.setForeground(true)
+        controller.submit(snapshot(.completed, run: next.attributes.runID))
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.states.last?.phase, .standby)
+        XCTAssertNil(handle.states.last?.runID)
+        XCTAssertNil(handle.staleDates.last!)
+        controller.setBackgroundResident(false)
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.ended.count, 1)
+    }
+    func testResidentDoesNotRequestStandbyInBackgroundOrAfterDisable() async {
+        var requests = 0
+        let controller = AgentLiveActivityController(createActivity: { _ in requests += 1; return RecordingActivityHandle() })
+        controller.setForeground(false)
+        controller.setBackgroundResident(true)
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(requests, 0)
+        controller.setForeground(true)
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(requests, 1)
+        controller.setBackgroundResident(false)
+        await controller.waitForPendingUpdates()
+        controller.setBackgroundResident(true)
+        controller.setBackgroundResident(false)
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(requests, 1, "a superseded enable cannot create an idle activity")
+    }
+    func testBackgroundExecutionExpansionIsOncePerRunAndNeverForIdleOrForeground() async {
+        let handle = RecordingActivityHandle()
+        let controller = AgentLiveActivityController(createActivity: { _ in handle })
+        controller.setBackgroundResident(true)
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.alerts, 0)
+        let run = UUID()
+        controller.submit(snapshot(.thinking, run: run))
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.alerts, 0)
+        controller.setForeground(false)
+        let working = snapshot(.working, run: run)
+        controller.submit(working)
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.alerts, 1)
+        controller.submit(working)
+        controller.submit(snapshot(.executing, run: run))
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.alerts, 1, "duplicate and progress updates cannot repeatedly expand")
+        controller.submit(snapshot(.stopped, run: run))
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.alerts, 1)
+        controller.submit(snapshot(.thinking, run: UUID()))
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.alerts, 2, "the next task gets its own expansion")
+    }
+    func testResidentSkipsIdenticalProgressButRefreshesExpiryAndApprovalChanges() async {
+        let handle = RecordingActivityHandle()
+        let controller = AgentLiveActivityController(createActivity: { _ in handle })
+        controller.setBackgroundResident(true)
+        await controller.waitForPendingUpdates()
+        controller.setForeground(false)
+        let initial = snapshot(.working, run: UUID())
+        var state = initial.state
+        var staleDate = initial.staleDate
+        func progress() -> AgentActivitySnapshot {
+            .init(attributes: initial.attributes, state: state, staleDate: staleDate)
+        }
+        controller.submit(progress())
+        await controller.waitForPendingUpdates()
+        let count = handle.updates.count
+        state.updatedAt += 1
+        staleDate += 1
+        controller.submit(progress())
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.updates.count, count)
+        state.updatedAt += 15
+        staleDate += 15
+        controller.submit(progress())
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.updates.count, count + 1, "unchanged processing still refreshes stale deadline")
+        state.completedTools += 1
+        controller.submit(progress())
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.states.last?.completedTools, state.completedTools)
+        state.phase = .awaitingApproval
+        state.approvalID = UUID()
+        controller.submit(progress())
+        await controller.waitForPendingUpdates()
+        let approvalCount = handle.updates.count
+        staleDate += 1
+        controller.submit(progress())
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.updates.count, approvalCount + 1, "approval expiry changes cannot be deferred")
+        XCTAssertEqual(handle.alerts, 1)
+    }
+    func testBurstProgressIsCoalescedWithoutLosingApprovalOrStop() async throws {
+        let handle = RecordingActivityHandle()
+        let controller = AgentLiveActivityController(createActivity: { _ in handle })
+        let initial = snapshot(.thinking, run: UUID())
+        controller.submit(initial)
+        await controller.waitForPendingUpdates()
+        let progress = AgentActivitySnapshot(attributes: initial.attributes,
+            state: .init(phase: .working, completedTools: 3, updatedAt: Date()), staleDate: initial.staleDate)
+        controller.submit(progress)
+        try await Task.sleep(for: .milliseconds(50))
+        let approval = AgentActivitySnapshot(attributes: initial.attributes,
+            state: .init(phase: .awaitingApproval, completedTools: 3, approvalID: UUID(), updatedAt: Date()),
+            staleDate: initial.staleDate)
+        controller.submit(approval)
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.updates, [.awaitingApproval])
+        XCTAssertEqual(handle.states.last?.approvalID, approval.state.approvalID)
+        controller.submit(.init(attributes: initial.attributes,
+            state: .init(phase: .stopped, completedTools: 3, updatedAt: Date()), staleDate: initial.staleDate))
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.ended, [.stopped])
+    }
+    func testDisablingResidentKeepsCurrentRunAndOldCompletionCannotReplaceNewRun() async {
+        let handle = RecordingActivityHandle()
+        var requests = 0
+        let controller = AgentLiveActivityController(createActivity: { _ in requests += 1; return handle })
+        controller.setBackgroundResident(true)
+        await controller.waitForPendingUpdates()
+        controller.setForeground(false)
+        let a = snapshot(.working, run: UUID()), b = snapshot(.thinking, run: UUID())
+        controller.submit(a); controller.submit(b)
+        await controller.waitForPendingUpdates()
+        controller.submit(snapshot(.stopped, run: a.attributes.runID))
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.states.last?.runID, b.attributes.runID)
+        XCTAssertEqual(handle.states.last?.phase, .thinking)
+        controller.setBackgroundResident(false)
+        await controller.waitForPendingUpdates()
+        XCTAssertTrue(handle.ended.isEmpty)
+        controller.submit(snapshot(.stopped, run: b.attributes.runID))
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.ended, [.stopped])
+        XCTAssertEqual(requests, 1)
+    }
+    func testStandbyContentAndLegacyContentDecodeWithoutMutableRunIdentity() throws {
+        let attributes = AgentActivityAttributes(sessionID: UUID(), runID: UUID(), isDemo: true)
+        let old = AgentActivityAttributes.ContentState(phase: .thinking, completedTools: 0, updatedAt: Date())
+        let decoded = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: JSONEncoder().encode(old))
+        XCTAssertEqual(decoded.route(attributes: attributes), AgentActivityRoute(sessionID: attributes.sessionID, runID: attributes.runID))
+        var standby = decoded; standby.phase = .standby
+        XCTAssertNil(standby.route(attributes: attributes))
+        XCTAssertEqual(standby.title, "后台待命")
+        XCTAssertEqual(standby.compactTitle, "待命")
+    }
     func testBackgroundCompletionAlertsOnceAndRemainsUntilForeground() async throws {
         let handle = RecordingActivityHandle()
         var created = 0
@@ -176,8 +357,67 @@ import ActivityKit
         handle.releaseCompletion()
         try await waitUntil { !model.running }
         XCTAssertEqual(model.activitySnapshot?.state.phase, .completed)
-        XCTAssertEqual(handle.alerts, 1)
+        // A very short background continuation can finish before its coalesced
+        // progress is shown. Completion still alerts and cannot release early.
+        XCTAssertGreaterThanOrEqual(handle.alerts, 1)
+        XCTAssertLessThanOrEqual(handle.alerts, 2)
         XCTAssertTrue(handle.ended.isEmpty)
+    }
+    func testSiriSubmissionWaitsForActivityCreationBehindAnOlderWrite() async throws {
+        let oldHandle = RecordingActivityHandle()
+        oldHandle.holdCompletion = true
+        let oldRun = UUID()
+        var createdRuns: [UUID] = []
+        let activities = AgentLiveActivityController(createActivity: { snapshot in
+            createdRuns.append(snapshot.attributes.runID)
+            return snapshot.attributes.runID == oldRun ? oldHandle : RecordingActivityHandle()
+        })
+        activities.submit(snapshot(.working, run: oldRun))
+        await activities.waitForPendingUpdates()
+        activities.setForeground(false)
+        activities.submit(snapshot(.completed, run: oldRun))
+        try await waitUntil { oldHandle.completionPending }
+        let store = ConversationStore(inMemory: true)
+        let model = AgentViewModel(sessions: store, loadPersistentState: false,
+                                   runServices: .init(provider: DemoProvider(), bridge: DemoBridge()), sharedActivities: activities)
+        defer { oldHandle.releaseCompletion(); model.stop() }
+        // Synthetic demo remains offline and stops at its existing approval gate.
+        let service = SessionCommandService(sessions: store, runner: model)
+        let command = SessionCommand(.execute("Siri activity ordering"))
+        var returned = false
+        let submission = Task { @MainActor in
+            try await PrepareAgentTaskIntent().submit(command, using: service, activities: activities)
+            returned = true
+        }
+        try await waitUntil { model.hasBusySessions }
+        XCTAssertFalse(returned)
+        oldHandle.releaseCompletion()
+        try await submission.value
+        let run = try XCTUnwrap(store.conversations.first(where: { $0.entry?.commandID == command.commandID })?.entry?.runID)
+        XCTAssertTrue(createdRuns.contains(run), "Create the new activity before the intent returns")
+        try await PrepareAgentTaskIntent().submit(command, using: service, activities: activities)
+        XCTAssertEqual(createdRuns.filter { $0 == run }.count, 1, "A command retry must not create another activity")
+    }
+
+    func testSiriActivityDenialDoesNotRetryTheTask() async throws {
+        var requests = 0
+        let activities = AgentLiveActivityController(createActivity: { _ in
+            requests += 1
+            throw AppError.unavailable("Synthetic activity denial")
+        })
+        let store = ConversationStore(inMemory: true)
+        let model = AgentViewModel(sessions: store, loadPersistentState: false,
+                                   runServices: .init(provider: DemoProvider(), bridge: DemoBridge()), sharedActivities: activities)
+        defer { model.stop() }
+        let service = SessionCommandService(sessions: store, runner: model)
+        let command = SessionCommand(.execute("Siri denied activity"))
+        try await PrepareAgentTaskIntent().submit(command, using: service, activities: activities)
+        XCTAssertGreaterThan(requests, 0)
+        XCTAssertNotNil(activities.notice)
+        let run = try XCTUnwrap(store.conversations.first?.entry?.runID)
+        try await PrepareAgentTaskIntent().submit(command, using: service, activities: activities)
+        XCTAssertEqual(store.conversations.first?.entry?.runID, run)
+        XCTAssertEqual(store.conversations.count, 1)
     }
     func testStopWhileCompletionUpdateWaitsCannotRestoreCompletedRun() async throws {
         let handle = RecordingActivityHandle()
@@ -343,6 +583,8 @@ import ActivityKit
 @MainActor private final class RecordingActivityHandle: AgentActivityHandle {
     var isActive = true
     var updates: [AgentActivityAttributes.Phase] = []
+    var states: [AgentActivityAttributes.ContentState] = []
+    var staleDates: [Date?] = []
     var ended: [AgentActivityAttributes.Phase] = []
     var alerts = 0
     var holdCompletion = false
@@ -353,7 +595,8 @@ import ActivityKit
         pending?.resume()
     }
     func update(_ content: ActivityContent<AgentActivityAttributes.ContentState>, alert: AlertConfiguration?) async {
-        updates.append(content.state.phase); if alert != nil { alerts += 1 }
+        updates.append(content.state.phase); states.append(content.state); staleDates.append(content.staleDate)
+        if alert != nil { alerts += 1 }
         if content.state.phase == .completed, holdCompletion {
             await withCheckedContinuation { completion = $0 }
         }

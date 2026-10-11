@@ -34,29 +34,12 @@ public final class ResponsesTransport: @unchecked Sendable {
     /// A per-operation data task is cancelled on parser failure, consumer stop,
     /// HTTP error or EOF. It never logs request/response payloads.
     public func payloads(_ request: URLRequest) -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream(bufferingPolicy: .bufferingOldest(32)) { continuation in
-            let cancellation = TransportCancellation()
-            let task = Task {
-                do {
-                    try Task.checkCancellation()
-                    let (bytes, response) = try await session.bytes(for: request)
-                    cancellation.install(bytes.task)
-                    defer { cancellation.cancel() }
-                    try Self.verify(response)
-                    var decoder = SSEFrameDecoder()
-                    for try await byte in bytes {
-                        try Task.checkCancellation()
-                        if let frame = try decoder.consume(byte) {
-                            if case .dropped = continuation.yield(frame) { throw ModelError.protocolViolation("Stream consumer buffer exceeded") }
-                        }
-                    }
-                    try decoder.finish(); continuation.finish()
-                } catch { continuation.finish(throwing: Task.isCancelled ? CancellationError() : error) }
-            }
-            continuation.onTermination = { _ in cancellation.cancel(); task.cancel() }
-        }
+        // Pull one frame per consumer request. A fast model must not fail just
+        // because parsing/tool validation temporarily consumes frames more slowly.
+        let cursor = SSEPayloadCursor(session: session, request: request)
+        return AsyncThrowingStream(unfolding: { try await cursor.next() })
     }
-    private static func verify(_ response: URLResponse) throws {
+    fileprivate static func verify(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else { throw ModelError.networkError("Non-HTTP response") }
         guard (200..<300).contains(http.statusCode) else { throw ModelError.httpError(http.statusCode, nil) }
     }
@@ -71,4 +54,42 @@ private final class TransportCancellation: @unchecked Sendable {
     private var cancelled = false
     func install(_ task: URLSessionTask) { lock.withLock { if cancelled { task.cancel() } else { self.task = task } } }
     func cancel() { lock.withLock { cancelled = true; task?.cancel(); task = nil } }
+}
+
+/// AsyncThrowingStream's unfolding iterator calls next serially; only cancellation
+/// crosses threads. Retaining no producer task/queue also cancels on early break.
+private final class SSEPayloadCursor: @unchecked Sendable {
+    private let session: URLSession
+    private let request: URLRequest
+    private let cancellation = TransportCancellation()
+    private var iterator: URLSession.AsyncBytes.Iterator?
+    private var decoder = SSEFrameDecoder()
+    private var finished = false
+    init(session: URLSession, request: URLRequest) { self.session = session; self.request = request }
+    deinit { cancellation.cancel() }
+    func next() async throws -> String? {
+        try await withTaskCancellationHandler {
+            do {
+                try Task.checkCancellation()
+                guard !finished else { return nil }
+                if iterator == nil {
+                    let (bytes, response) = try await session.bytes(for: request)
+                    cancellation.install(bytes.task)
+                    try Task.checkCancellation()
+                    try ResponsesTransport.verify(response)
+                    iterator = bytes.makeAsyncIterator()
+                }
+                while let byte = try await iterator!.next() {
+                    try Task.checkCancellation()
+                    if let frame = try decoder.consume(byte) { return frame }
+                }
+                try decoder.finish()
+                finished = true; cancellation.cancel()
+                return nil
+            } catch {
+                finished = true; cancellation.cancel()
+                throw Task.isCancelled ? CancellationError() : error
+            }
+        } onCancel: { cancellation.cancel() }
+    }
 }

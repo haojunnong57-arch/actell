@@ -1,12 +1,13 @@
 import AppIntents
+import UIKit
 
-struct PrepareAgentTaskIntent: AppIntent, TargetContentProvidingIntent {
+struct PrepareAgentTaskIntent: LiveActivityIntent, TargetContentProvidingIntent {
     var contentIdentifier: String { "execute-task" }
     static let title: LocalizedStringResource = "Execute a task"
-    static let description = IntentDescription("Open Zhiyan and immediately execute the supplied task.")
+    static let description = IntentDescription("Create a conversation and execute the supplied task.")
     static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
-    static var openAppWhenRun: Bool { true } // iOS 17–25
-    @available(iOS 26.0, *) static var supportedModes: IntentModes { .foreground(.immediate) }
+    static var openAppWhenRun: Bool { false }
+    @available(iOS 26.0, *) static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
     @available(iOS 27.0, *) static var allowedExecutionTargets: IntentExecutionTargets { .main }
 
     @Parameter(title: "Task", requestValueDialog: "What would you like Zhiyan to do?")
@@ -16,11 +17,19 @@ struct PrepareAgentTaskIntent: AppIntent, TargetContentProvidingIntent {
 
     @MainActor func perform() async throws -> some IntentResult {
         try Task.checkCancellation()
-        let service = PhoneAgentRuntime.shared.commands
+        let runtime = PhoneAgentRuntime.shared
+        runtime.model.setProtectedDataAvailable(UIApplication.shared.isProtectedDataAvailable)
+        let needsForeground = runtime.model.commandNeedsForeground
+        runtime.model.usbDiagnostics.record("siri.execute handoffRequired=\(needsForeground) mediaActive=\(PiPExecutionActivity.shared.active)")
+        if needsForeground {
+            try await continueInForeground(alwaysConfirm: false)
+            try Task.checkCancellation()
+        }
+        let service = runtime.commands
         PhoneAgentRuntime.shared.model.usbDiagnostics.record("siri.execute received=true ready=\(PhoneAgentRuntime.shared.model.commandCanStart)")
         let command = SessionCommand(.execute(task))
         do {
-            _ = try service.perform(command)
+            try await submit(command, using: service, activities: runtime.model.liveActivities)
         } catch {
             let model = PhoneAgentRuntime.shared.model
             model.errorMessage = error.localizedDescription
@@ -30,6 +39,16 @@ struct PrepareAgentTaskIntent: AppIntent, TargetContentProvidingIntent {
             }
         }
         return .result()
+    }
+
+    @MainActor func submit(_ command: SessionCommand, using service: SessionCommandService,
+                           activities: AgentLiveActivityController) async throws {
+        if case .started = try service.perform(command) {
+            // send() queues the initial activity synchronously. Keep the
+            // LiveActivityIntent scope alive until that request has returned;
+            // do not wait for the model run or retry a rejected activity request.
+            await activities.waitForPendingUpdates()
+        }
     }
 }
 

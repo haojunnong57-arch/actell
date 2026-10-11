@@ -33,33 +33,8 @@ struct ConversationView: View {
                 VStack(spacing: 0) {
                     Group {
                         ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 12) {
-                                if presentation.awaitingTaskConfirmation {
-                                    VStack(alignment: .leading, spacing: 12) {
-                                        Label("Siri · 待确认", systemImage: "waveform").font(.headline)
-                                        Text("请核对或编辑下方文本，再点“确认开始”。")
-                                            .foregroundStyle(.secondary)
-                                        Text(session.draft).textSelection(.enabled).accessibilityIdentifier("siriRecognizedTask")
-                                        Button("取消这份草稿", role: .cancel) {
-                                            presentation.dismissPreparedTask()
-                                            if !presentation.awaitingTaskConfirmation { draft = "" }
-                                        }.accessibilityIdentifier("dismissSiriTask")
-                                    }.padding(.vertical, 20)
-                                } else if session.messages.isEmpty { welcome(session.mode) }
-                                ForEach(ConversationTurn.group(session.messages)) { turn in
-                                    if let runID = turn.runID, runID == presentation.activeTurnID {
-                                        ForEach(turn.messages) { message in messageView(message).id(message.id) }
-                                    } else {
-                                        completedTurn(turn)
-                                    }
-                                }
-                                if running && presentation.pendingApproval == nil { HStack(spacing: 8) { ProgressView().controlSize(.small); Text(presentation.status).font(.caption).foregroundStyle(.secondary) } }
-                                Color.clear.frame(height: 1).id("latest")
-                                    .onScrollVisibilityChange(threshold: 0.01) { visible in
-                                        lastMessageVisible = visible
-                                        if userScrolling { followLatest = visible }
-                                    }
-                            }.padding(.horizontal, 20).padding(.vertical, 12).frame(maxWidth: 780).frame(maxWidth: .infinity)
+                            messageStack(session)
+                                .padding(.horizontal, 20).padding(.vertical, 12).frame(maxWidth: 780).frame(maxWidth: .infinity)
                         }
                         .accessibilityIdentifier("conversationMessages")
                         .accessibilityValue(scrollDiagnostic)
@@ -97,6 +72,14 @@ struct ConversationView: View {
                             }
                         }
                         .onChange(of: session.messages) { _, _ in if followLatest && !userScrolling { scrollPosition.scrollTo(edge: .bottom) } }
+                        .onChange(of: presentation.activeTurnID) { old, new in
+                            guard old != nil, new == nil else { return }
+                            userScrolling = false
+                            deferredViewportShift = 0
+                            followLatest = true
+                            scrollPosition = ScrollPosition()
+                            scrollPosition.scrollTo(edge: .bottom)
+                        }
                         .onChange(of: presentation.approvalID) { _, _ in if followLatest && !userScrolling { scrollPosition.scrollTo(edge: .bottom) } }
                         .onChange(of: followLatest) { _, follows in
                             // Drop a programmatic target when reading history,
@@ -131,6 +114,42 @@ struct ConversationView: View {
         .environment(\.conversationDisclosureChanged, {
             followLatest = false
         })
+    }
+    @ViewBuilder private func messageStack(_ session: AgentConversation) -> some View {
+        if presentation.activeTurnID != nil {
+            LazyVStack(alignment: .leading, spacing: 12) { messageRows(session) }
+        } else {
+            // Completed turns are folded and short. Eager layout avoids keeping
+            // an expanded lazy stack's stale geometry after foreground cleanup.
+            VStack(alignment: .leading, spacing: 12) { messageRows(session) }
+        }
+    }
+    @ViewBuilder private func messageRows(_ session: AgentConversation) -> some View {
+        if presentation.awaitingTaskConfirmation {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Siri · 待确认", systemImage: "waveform").font(.headline)
+                Text("请核对或编辑下方文本，再点“确认开始”。")
+                    .foregroundStyle(.secondary)
+                Text(session.draft).textSelection(.enabled).accessibilityIdentifier("siriRecognizedTask")
+                Button("取消这份草稿", role: .cancel) {
+                    presentation.dismissPreparedTask()
+                    if !presentation.awaitingTaskConfirmation { draft = "" }
+                }.accessibilityIdentifier("dismissSiriTask")
+            }.padding(.vertical, 20)
+        } else if session.messages.isEmpty { welcome(session.mode) }
+        ForEach(ConversationTurn.group(session.messages)) { turn in
+            if let runID = turn.runID, runID == presentation.activeTurnID {
+                ForEach(turn.messages) { message in messageView(message).id(message.id) }
+            } else {
+                completedTurn(turn)
+            }
+        }
+        if running && presentation.pendingApproval == nil { HStack(spacing: 8) { ProgressView().controlSize(.small); Text(presentation.status).font(.caption).foregroundStyle(.secondary) } }
+        Color.clear.frame(height: 1).id("latest")
+            .onScrollVisibilityChange(threshold: 0.01) { visible in
+                lastMessageVisible = visible
+                if userScrolling { followLatest = visible }
+            }
     }
     private var scrollDiagnostic: String {
         #if DEBUG

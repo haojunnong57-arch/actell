@@ -90,6 +90,7 @@ struct AgentRunServices {
             sharedActivities: liveActivities, checkpointDirectory: directory, restoreLegacyState: false,
             runServicesFactory: runServicesFactory, makeUSBClient: makeUSBClient)
         worker.runtimeOwner = self; worker.primarySessionID = id; worker.selectedConversationID = id
+        worker.hasActivatedScene = hasActivatedScene
         worker.foreground = foreground; worker.currentScene = currentScene; worker.protectedDataAvailable = protectedDataAvailable
         worker.lifecycle.setForeground(foreground)
         sessionRuntimes[id] = worker
@@ -108,7 +109,15 @@ struct AgentRunServices {
     var isListening: Bool { listenerTask != nil }
     private var listenerTask: Task<Void, Never>?
     private var listenerGeneration = UUID()
-    var commandCanStart: Bool { foreground && protectedDataAvailable }
+    // A warm Siri invocation may submit a new run without changing the scene.
+    // Dispatch still requires the new run's own background lease.
+    var commandCanStart: Bool { (foreground || hasActivatedScene) && protectedDataAvailable }
+    var commandNeedsForeground: Bool {
+        // A retained process/scene is not proof of background execution time.
+        // Idle apps stop media playback and may already be suspended.
+        !hasActivatedScene || !commandCanStart || (!foreground && !PiPExecutionActivity.shared.active)
+    }
+    private var hasActivatedScene = false
     private var foreground = true
     private var healthObserver: UUID?
     private var agent: Agent?
@@ -315,7 +324,10 @@ struct AgentRunServices {
     private var currentScene = ScreenUSBExecutionContext.Scene.active
     private var canContinueUSBSetup: Bool { usbConnectionStatus.allowsSetup(in: currentScene) }
     func setScene(_ scene: ScreenUSBExecutionContext.Scene) {
-        if runtimeOwner == nil { sessions.setPresentationActive(scene != .background) }
+        if scene == .active { hasActivatedScene = true }
+        // Inactive still precedes a usable foreground scene during an app handoff.
+        // Publish accumulated messages only when the scene can render them.
+        if runtimeOwner == nil { sessions.setPresentationActive(scene == .active) }
         #if DEBUG
         // Explicit negative control for the finite, synthetic CPU probe only.
         let args = ProcessInfo.processInfo.arguments
@@ -524,9 +536,9 @@ struct AgentRunServices {
               current.draftAttachments == before.draftAttachments else { throw AppError.invalid("附件或模型选择已改变，请重新发送") }
         return send(text, in: id, cloudConsent: cloudConsent, prepared: prepared)
     }
-    @discardableResult func send(_ text: String, in conversationID: UUID, cloudConsent: Bool = false, prepared: PreparedAttachments = PreparedAttachments()) -> Bool {
+    @discardableResult func send(_ text: String, in conversationID: UUID, cloudConsent: Bool = false, prepared: PreparedAttachments = PreparedAttachments(), allowBackgroundStart: Bool = false) -> Bool {
         let worker = executionModel(for: conversationID)
-        if worker !== self { return worker.send(text, in: conversationID, cloudConsent: cloudConsent, prepared: prepared) }
+        if worker !== self { return worker.send(text, in: conversationID, cloudConsent: cloudConsent, prepared: prepared, allowBackgroundStart: allowBackgroundStart) }
         func reject(_ reason: String, _ message: String) -> Bool {
             errorMessage = message
             usbDiagnostics.record("run.startRejected reason=\(reason) foreground=\(foreground) protectedData=\(protectedDataAvailable)")
@@ -535,7 +547,7 @@ struct AgentRunServices {
         guard !running else { return reject("running", "此会话已有任务正在执行") }
         guard !stopping else { return reject("stopping", "此会话的上一任务正在停止，请稍后重试") }
         guard !appOwner.clearingAssets else { return reject("clearingAssets", "正在清理文件，请稍后重试") }
-        guard foreground else { return reject("notForeground", "执言尚未进入前台，任务未开始") }
+        guard foreground || (allowBackgroundStart && commandCanStart) else { return reject("notForeground", "执言尚未进入前台，任务未开始") }
         guard protectedDataAvailable else { return reject("protectedData", "请解锁设备后执行任务") }
         guard listenerTask == nil else { return reject("listenerBusy", "设备连接操作尚未结束，请稍后重试") }
         guard primarySessionID == conversationID, let session = sessions.conversation(conversationID) else {
@@ -606,8 +618,9 @@ struct AgentRunServices {
             return reject("sessionAlreadyActive", "此会话已有运行记录，任务未重复启动")
         }
         screenExecutionContext = selectedBridge.executionContext
-        executionScheduler.configure(context: screenExecutionContext, allowSystemProcessing: allowSystemProcessing)
-        do { try lifecycle.begin(identity: identity, generation: token) }
+        executionScheduler.configure(context: screenExecutionContext, allowSystemProcessing: allowSystemProcessing,
+                                     useSystemProcessing: BackgroundPlaybackMode.selected.usesSystemProcessing)
+        do { try lifecycle.begin(identity: identity, generation: token, allowBackgroundStart: allowBackgroundStart) }
         catch {
             stopHealthObservation()
             screenExecutionContext?.revoke(); screenExecutionContext = nil; executionScheduler.configure(context: nil, allowSystemProcessing: false)
@@ -672,6 +685,9 @@ struct AgentRunServices {
         }
         runTask = Task { [weak self, runner] in
             do {
+                if allowBackgroundStart {
+                    try await self?.lifecycle.awaitExecution(generation: token, backgroundCapable: true)
+                }
                 if let usb = selectedBridge as? USBDeviceBridge { try await usb.arm() }
                 var callbacks = AgentCallbacks()
                 callbacks.afterTool = { [weak self, weak runner] call, result, _ in

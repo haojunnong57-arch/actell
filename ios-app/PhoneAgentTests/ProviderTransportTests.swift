@@ -23,6 +23,41 @@ private final class ProviderURLProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() { Self.fixture.lock.withLock { Self.fixture.stopped += 1 } }
 }
 final class ProviderTransportTests: XCTestCase {
+    func testFastSSEWithSlowConsumerPreservesEveryFrameWithoutRetry() async throws {
+        let frames = (0..<160).map { "frame-\($0)" }
+        ProviderURLProtocol.fixture.reset(body: Data(frames.map { "data: \($0)\n\n" }.joined().utf8))
+        let transport = ResponsesTransport(protocolClasses: [ProviderURLProtocol.self])
+        defer { transport.cancel() }
+        var received: [String] = []
+        for try await payload in transport.payloads(URLRequest(url: URL(string: "https://fixture.invalid")!)) {
+            received.append(payload)
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertEqual(received, frames)
+        XCTAssertEqual(ProviderURLProtocol.fixture.lock.withLock { ProviderURLProtocol.fixture.requests.count }, 1)
+    }
+    func testBurstToolArgumentsAreReleasedOnlyAfterSuccessfulTerminal() async throws {
+        let arguments = "{\"text\":\"" + String(repeating: "x", count: 512) + "\"}"
+        var frames: [String] = []
+        for (index, character) in arguments.enumerated() {
+            var tool: [String: Any] = ["index": 0, "function": ["arguments": String(character)]]
+            if index == 0 { tool["id"] = "call-burst"; tool["function"] = ["name": "type_text", "arguments": String(character)] }
+            let object: [String: Any] = ["choices": [["delta": ["tool_calls": [tool]], "finish_reason": NSNull()]]]
+            frames.append("data: " + String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self) + "\n\n")
+        }
+        frames.append("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n")
+        ProviderURLProtocol.fixture.reset(body: Data(frames.joined().utf8))
+        let p = try PrivateVisionProvider(settings: .init(baseURL: "https://fixture.invalid/v1", model: "fixture"), apiKey: "synthetic", limits: .init(), transport: ResponsesTransport(protocolClasses: [ProviderURLProtocol.self]))
+        defer { p.cancel() }
+        var terminals: [ModelResponse] = []
+        for try await event in p.stream(request) {
+            if case .terminal(let response) = event { terminals.append(response) }
+            if case .toolCall = event { XCTFail("Calls must remain inside authoritative terminal") }
+        }
+        XCTAssertEqual(terminals.count, 1)
+        XCTAssertEqual(terminals.first?.toolCalls, [.init(id: "call-burst", name: "type_text", arguments: arguments)])
+        XCTAssertEqual(ProviderURLProtocol.fixture.lock.withLock { ProviderURLProtocol.fixture.requests.count }, 1)
+    }
     func testDeepSeekPlainReasoningSSECompletesWithoutDoneMarker() async throws {
         let reasoning: [String: Any] = ["type": "reasoning", "id": "reason", "content": [["type": "reasoning_text", "text": "public reasoning"]]]
         let message: [String: Any] = ["id": "msg", "type": "message", "role": "assistant", "status": "completed", "content": [["type": "output_text", "text": "answer", "annotations": []]]]

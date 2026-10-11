@@ -72,6 +72,17 @@
         }
       }
     },
+    "Create a conversation and execute the supplied task." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建会话并执行传入的任务。"
+          }
+        }
+      }
+    },
     "Draft saved. Review it in Zhiyan and tap Confirm and start. If another task is active, this draft will wait." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -170,17 +181,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "当前没有正在运行的任务。"
-          }
-        }
-      }
-    },
-    "Open Zhiyan and immediately execute the supplied task." : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开执言并直接执行传入的任务。"
           }
         }
       }
@@ -473,6 +473,9 @@
 
     },
     "只请求此消息已有的图源，不发送供应商密钥；缓存成功后可离线查看。" : {
+
+    },
+    "后台执行" : {
 
     },
     "启用" : {

@@ -21,6 +21,29 @@ import Foundation
         catch { model.errorMessage = error.localizedDescription }
     }
     #endif
+    #if DEBUG
+    private var delayedBackgroundUIRun: RunIdentity?
+    func completeBackgroundUIFixtureIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("--ui-testing"),
+              ProcessInfo.processInfo.arguments.contains("--ui-test-background-completion"),
+              let run = model.sessions.activeRun else { return }
+        model.sessions.completeAssistantTurn("后台任务最终回复", identity: run)
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-background-auto-route") {
+            model.openActivityURL(AgentActivityRoute(sessionID: run.conversationID, runID: run.runID).url)
+        }
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-background-delayed-finish") {
+            delayedBackgroundUIRun = run
+        } else { model.sessions.finish(run, phase: .completed, summary: "") }
+    }
+    func finishForegroundUIFixtureIfNeeded() {
+        guard let run = delayedBackgroundUIRun else { return }
+        delayedBackgroundUIRun = nil
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            model.sessions.finish(run, phase: .completed, summary: "")
+        }
+    }
+    #endif
     private static func makeModel() -> AgentViewModel {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--task-pip-probe") {
@@ -138,6 +161,19 @@ import Foundation
                 try? model.providers.save(ProviderProfile(name: "Fixture One", settings: .init(baseURL: "https://fixture.invalid/v1", model: "model-a")))
                 try? model.providers.save(ProviderProfile(name: "Fixture Two", settings: .init(baseURL: "https://fixture.invalid/v1", model: "model-b"), models: ["model-b-alt"]))
                 return model
+            }
+            if arguments.contains("--ui-test-background-completion") {
+                let id = sessions.create(mode: .live)
+                if let run = sessions.begin(in: id, query: "后台完成刷新验收") {
+                    for index in 0..<30 {
+                        sessions.beginAssistantTurn(run)
+                        sessions.completeAssistantTurn("中间回复 \(index)", reasoning: String(repeating: "合成思考内容。", count: 60), identity: run)
+                        sessions.updateTool(callID: "background-\(index)", name: "wait", state: .succeeded, result: "Synthetic receipt.", identity: run)
+                    }
+                    sessions.beginAssistantTurn(run)
+                    sessions.appendText("等待后台完成", identity: run)
+                }
+                return AgentViewModel(sessions: sessions, loadPersistentState: false)
             }
             if arguments.contains("--ui-test-composer-history") {
                 let id = sessions.create(mode: .live)

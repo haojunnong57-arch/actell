@@ -52,10 +52,10 @@ import AppIntents
         let model = AgentViewModel(sessions: store, loadPersistentState: false,
             runServices: AgentRunServices(provider: DemoProvider(), bridge: DemoBridge()), providers: providers)
         let service = SessionCommandService(sessions: store, runner: model)
-        model.setForeground(false)
+        model.setProtectedDataAvailable(false)
         XCTAssertEqual(try service.perform(SessionCommand(.execute("查看屏幕"))), .deferred)
         XCTAssertNil(model.currentRun)
-        model.setForeground(true)
+        model.setProtectedDataAvailable(true)
         service.resumePendingExecutions()
         let session = try XCTUnwrap(store.conversations.first)
         XCTAssertEqual(session.providerID, profile.id)
@@ -64,6 +64,66 @@ import AppIntents
         let run = try XCTUnwrap(model.currentRun)
         XCTAssertTrue(model.stop(run: run))
         try await waitUntil { !model.stopping }
+    }
+    func testBackgroundExecuteCreatesIndependentSessionWithoutForegroundOrReplay() async throws {
+        let store = ConversationStore(inMemory: true)
+        let activity = PiPExecutionActivity.shared
+        let owner = UUID()
+        activity.update(owner: owner, active: true)
+        defer { activity.update(owner: owner, active: false) }
+        let lifecycle = RunLifecycleCoordinator(scheduler: MediaOnlyRunScheduler(activity: activity), storage: MemoryRunCheckpointStore())
+        let model = AgentViewModel(sessions: store, loadPersistentState: false,
+            runServices: AgentRunServices(provider: DemoProvider(), bridge: DemoBridge()), lifecycle: lifecycle)
+        XCTAssertTrue(model.commandNeedsForeground)
+        model.setScene(.background) // A cold launch in background is not a warm App.
+        XCTAssertTrue(model.commandNeedsForeground)
+        model.setScene(.active)
+        let existing = store.create(mode: .live)
+        XCTAssertFalse(model.commandNeedsForeground)
+        model.setScene(.background)
+        XCTAssertFalse(model.commandNeedsForeground)
+        XCTAssertTrue(model.commandCanStart)
+        let service = SessionCommandService(sessions: store, runner: model)
+        let command = SessionCommand(.execute("后台新任务"))
+        guard case .started(let id) = try service.perform(command) else { return XCTFail("Should start in background") }
+        XCTAssertNotEqual(id, existing)
+        XCTAssertEqual(store.conversation(id)?.entry?.state, .submitted)
+        XCTAssertNil(service.pendingRoute)
+        let run = try XCTUnwrap(model.currentRun)
+        XCTAssertEqual(try service.perform(command), .started(id))
+        XCTAssertEqual(model.currentRun, run)
+        XCTAssertEqual(store.conversations.count, 2)
+        // A regular UI send still cannot start another turn from the background.
+        XCTAssertFalse(model.send("普通发送", in: existing, cloudConsent: true))
+        XCTAssertTrue(model.stop(run: run))
+        try await waitUntil { !model.hasBusySessions }
+    }
+    func testWarmIdleBackgroundRequiresForegroundUntilPlaybackIsActuallyActive() {
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false)
+        model.setScene(.active)
+        XCTAssertFalse(model.commandNeedsForeground)
+        model.setScene(.background)
+        XCTAssertTrue(model.commandNeedsForeground)
+        let owner = UUID()
+        PiPExecutionActivity.shared.update(owner: owner, active: true)
+        XCTAssertFalse(model.commandNeedsForeground)
+        PiPExecutionActivity.shared.update(owner: owner, active: false)
+        XCTAssertTrue(model.commandNeedsForeground)
+        model.setScene(.inactive) // Siri can cover an idle App without granting playback.
+        XCTAssertTrue(model.commandNeedsForeground)
+        model.setScene(.active)
+        XCTAssertFalse(model.commandNeedsForeground)
+    }
+    func testBackgroundExecuteWaitsForUnlockAndDoesNotCreateRun() throws {
+        let store = ConversationStore(inMemory: true)
+        let model = AgentViewModel(sessions: store, loadPersistentState: false)
+        model.setScene(.background)
+        model.setProtectedDataAvailable(false)
+        let service = SessionCommandService(sessions: store, runner: model)
+        XCTAssertFalse(model.commandCanStart)
+        XCTAssertEqual(try service.perform(SessionCommand(.execute("锁屏任务"))), .deferred)
+        XCTAssertNil(model.currentRun)
+        XCTAssertEqual(store.conversations.first?.entry?.state, .pendingConfirmation)
     }
     func testInactiveHandoffStartsOnlyOnceWhenActiveAndDoesNotSurviveRelaunch() throws {
         let store = ConversationStore(inMemory: true), runner = CommandMockRunner()
@@ -216,13 +276,14 @@ import AppIntents
         }
     }
     func testAuthenticationAndForegroundPolicy() {
-        // Siri hands execution to the foreground App; starting still requires
-        // an active scene and available protected data.
+        func requireLiveActivityIntent<T: LiveActivityIntent>(_: T.Type) {}
+        requireLiveActivityIntent(PrepareAgentTaskIntent.self)
+        // Siri prefers background execution and can request foreground on cold launch.
         XCTAssertEqual(PrepareAgentTaskIntent.authenticationPolicy, .alwaysAllowed)
         XCTAssertEqual(AgentTaskStatusIntent.authenticationPolicy, .requiresLocalDeviceAuthentication)
         XCTAssertEqual(StopAgentTaskIntent.authenticationPolicy, .requiresLocalDeviceAuthentication)
         if #available(iOS 26.0, *) {
-            XCTAssertEqual(PrepareAgentTaskIntent.supportedModes, .foreground(.immediate))
+            XCTAssertEqual(PrepareAgentTaskIntent.supportedModes, [.background, .foreground(.dynamic)])
             XCTAssertEqual(AgentTaskStatusIntent.supportedModes, .background)
             XCTAssertEqual(StopAgentTaskIntent.supportedModes, .background)
         }

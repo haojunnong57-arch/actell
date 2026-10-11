@@ -78,8 +78,15 @@ struct AgentActivitySnapshot: Equatable {
     private var activities: [UUID: any AgentActivityHandle] = [:]
     private let createActivity: ((AgentActivitySnapshot) throws -> any AgentActivityHandle)?
     private var terminalPresented: Set<UUID> = []
+    private var executionPresented: Set<UUID> = []
+    private var writtenContent: [ObjectIdentifier: ActivityContent<AgentActivityAttributes.ContentState>] = [:]
     private var tail: Task<Void, Never>?
+    private var submissionRevision = 0
     private var latest: [UUID: AgentActivitySnapshot] = [:]
+    private var backgroundResident = false
+    private var residentActivity: (any AgentActivityHandle)?
+    private var residentRunID: UUID?
+    private let residentAttributes = AgentActivityAttributes(sessionID: UUID(), runID: UUID(), isDemo: false)
 
     init(enabled: Bool = true, createActivity: ((AgentActivitySnapshot) throws -> any AgentActivityHandle)? = nil) {
         self.enabled = enabled
@@ -101,7 +108,7 @@ struct AgentActivitySnapshot: Equatable {
 
     #if DEBUG
     var activeCountForProbe: Int {
-        activities.values.filter(\.isActive).count
+        activities.values.filter(\.isActive).count + (residentActivity?.isActive == true ? 1 : 0)
     }
     #endif
 
@@ -110,6 +117,134 @@ struct AgentActivitySnapshot: Equatable {
         foreground = active
         // Returning to the App acknowledges the terminal presentation.
         if active { for snapshot in latest.values where snapshot.state.phase.isTerminal { submit(snapshot) } }
+        if active, backgroundResident || residentActivity != nil { enqueueResidentReconciliation() }
+    }
+
+    func setBackgroundResident(_ enabled: Bool) {
+        backgroundResident = enabled
+        enqueueResidentReconciliation()
+    }
+
+    private func enqueueResidentReconciliation() {
+        guard enabled else { return }
+        let previous = tail
+        submissionRevision += 1
+        tail = Task { [weak self] in
+            await previous?.value
+            await self?.reconcileResident()
+        }
+    }
+
+    private func projectedState(_ snapshot: AgentActivitySnapshot) -> AgentActivityAttributes.ContentState {
+        var state = snapshot.state
+        state.sessionID = snapshot.attributes.sessionID
+        state.runID = snapshot.attributes.runID
+        state.isDemo = snapshot.attributes.isDemo
+        return state
+    }
+
+    private var residentCandidate: AgentActivitySnapshot? {
+        latest.values.filter { !$0.state.phase.isTerminal && activities[$0.attributes.runID] == nil }
+            .max { $0.state.updatedAt < $1.state.updatedAt }
+    }
+
+    private func executionAlert(_ snapshot: AgentActivitySnapshot) -> AlertConfiguration? {
+        let run = snapshot.attributes.runID
+        guard !foreground, snapshot.state.phase != .standby, !snapshot.state.phase.isTerminal,
+              executionPresented.insert(run).inserted else { return nil }
+        // An alerting update requests a brief expanded presentation. The system
+        // owns its duration; progress updates must not repeatedly interrupt it.
+        return AlertConfiguration(title: "任务开始处理", body: "\(snapshot.state.title)", sound: .default)
+    }
+
+    private func update(_ activity: any AgentActivityHandle,
+                        content: ActivityContent<AgentActivityAttributes.ContentState>, alert: AlertConfiguration?) async {
+        let key = ObjectIdentifier(activity)
+        if alert == nil, !content.state.phase.isTerminal, let previous = writtenContent[key] {
+            var previousState = previous.state
+            previousState.updatedAt = content.state.updatedAt
+            let sameExpiry = previous.staleDate == content.staleDate
+            let deferredHeartbeat: Bool
+            if content.state.phase != .awaitingApproval, let old = previous.staleDate, let new = content.staleDate {
+                let extensionInterval = new.timeIntervalSince(old)
+                deferredHeartbeat = extensionInterval >= 0 && extensionInterval < 15
+            } else { deferredHeartbeat = false }
+            if previousState == content.state && (sameExpiry || deferredHeartbeat) {
+                AgentActivityTrace.record("activity.updateSkipped reason=unchanged phase=\(content.state.phase)")
+                return
+            }
+        }
+        await activity.update(content, alert: alert)
+        writtenContent[key] = content
+    }
+
+    private func reconcileResident() async {
+        guard enabled else { return }
+        if residentActivity?.isActive == false { residentActivity = nil; residentRunID = nil }
+        let candidate = residentCandidate
+        if residentActivity == nil {
+            // Standby requests are made only while foregrounded. Background
+            // task submission can update this handle without requesting another.
+            guard backgroundResident, foreground else { return }
+            let now = Date()
+            let standby = AgentActivitySnapshot(attributes: residentAttributes,
+                state: .init(phase: .standby, completedTools: 0, updatedAt: now), staleDate: .distantFuture)
+            guard createActivity != nil || ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+            do {
+                if let createActivity { residentActivity = try createActivity(standby) }
+                else {
+                    residentActivity = SystemAgentActivity(try Activity.request(attributes: standby.attributes,
+                        content: ActivityContent(state: standby.state, staleDate: nil, relevanceScore: 0), pushType: nil))
+                }
+                AgentActivityTrace.record("activity.standbyCreated foreground=\(foreground)")
+            } catch {
+                let error = error as NSError
+                AgentActivityTrace.record("activity.standbyFailed domain=\(error.domain) code=\(error.code)")
+                return
+            }
+            if candidate == nil { return }
+        }
+        guard let activity = residentActivity else { return }
+        if let candidate {
+            residentRunID = candidate.attributes.runID
+            await update(activity, content: ActivityContent(state: projectedState(candidate), staleDate: candidate.staleDate, relevanceScore: 100), alert: executionAlert(candidate))
+        } else if !backgroundResident {
+            let state = residentRunID.flatMap { latest[$0] }.map(projectedState)
+                ?? .init(phase: .stopped, completedTools: 0, updatedAt: Date())
+            await activity.end(ActivityContent(state: state, staleDate: nil), dismissAt: Date())
+            writtenContent.removeValue(forKey: ObjectIdentifier(activity))
+            residentActivity = nil; residentRunID = nil
+        } else if !foreground, let run = residentRunID, let snapshot = latest[run],
+                  snapshot.state.phase.isTerminal, snapshot.state.phase != .stopped {
+            // Preserve the existing background completion presentation; reuse
+            // this same handle for the next task or standby on foreground.
+            return
+        } else {
+            residentRunID = nil
+            let state = AgentActivityAttributes.ContentState(phase: .standby, completedTools: 0, updatedAt: Date())
+            await update(activity, content: ActivityContent(state: state, staleDate: nil, relevanceScore: 0), alert: nil)
+        }
+        for snapshot in Array(latest.values) where snapshot.state.phase.isTerminal &&
+            activities[snapshot.attributes.runID] == nil && snapshot.attributes.runID != residentRunID {
+            latest.removeValue(forKey: snapshot.attributes.runID)
+            terminalPresented.remove(snapshot.attributes.runID)
+            executionPresented.remove(snapshot.attributes.runID)
+        }
+    }
+
+    private func applyToResident(_ snapshot: AgentActivitySnapshot) async {
+        let run = snapshot.attributes.runID
+        if snapshot.state.phase.isTerminal {
+            if residentRunID == run, let activity = residentActivity {
+                let alert = !foreground && snapshot.state.phase == .completed && !terminalPresented.contains(run)
+                    ? AlertConfiguration(title: "任务已完成", body: "点击查看任务结果", sound: .default) : nil
+                await update(activity, content: ActivityContent(state: projectedState(snapshot), staleDate: nil, relevanceScore: 100), alert: alert)
+                terminalPresented.insert(run)
+            }
+        } else {
+            guard latest[run] == snapshot else { return }
+        }
+        await reconcileResident()
     }
 
     func submit(_ snapshot: AgentActivitySnapshot) {
@@ -119,6 +254,7 @@ struct AgentActivitySnapshot: Equatable {
             return
         }
         let previous = tail
+        submissionRevision += 1
         tail = Task { [weak self] in
             await previous?.value
             guard let self else { return }
@@ -128,11 +264,32 @@ struct AgentActivitySnapshot: Equatable {
 
     /// Keep the caller's execution capability until its queued update returns.
     func waitForPendingUpdates() async {
-        await tail?.value
+        // An initial snapshot can be superseded while an older write is in
+        // flight. Drain its replacement too before releasing the intent scope.
+        var revision: Int
+        repeat {
+            revision = submissionRevision
+            await tail?.value
+        } while revision != submissionRevision
     }
 
     private func apply(_ snapshot: AgentActivitySnapshot) async {
         let run = snapshot.attributes.runID
+        if !snapshot.state.phase.isTerminal {
+            guard latest[run] == snapshot else { return }
+            if snapshot.state.phase != .awaitingApproval,
+               activities[run] != nil || residentRunID == run {
+                // Tool and stream events often alternate within milliseconds.
+                // Coalesce obsolete progress without delaying an approval gate.
+                try? await Task.sleep(for: .milliseconds(300))
+                guard latest[run] == snapshot else { return }
+            }
+        }
+        if backgroundResident, residentActivity == nil { await reconcileResident() }
+        if residentActivity != nil, activities[run] == nil {
+            await applyToResident(snapshot)
+            return
+        }
         if snapshot.state.phase.isTerminal {
             AgentActivityTrace.record("activity.terminalRequested run=\(run) phase=\(snapshot.state.phase) foreground=\(foreground) active=\(activities[run]?.isActive == true)")
             if let current = activities[run] {
@@ -141,15 +298,17 @@ struct AgentActivitySnapshot: Equatable {
                     // terminal island until foreground or the next run instead.
                     let alert = snapshot.state.phase == .completed && !terminalPresented.contains(run)
                         ? AlertConfiguration(title: "任务已完成", body: "点击查看任务结果", sound: .default) : nil
-                    await current.update(ActivityContent(state: snapshot.state, staleDate: nil, relevanceScore: 100), alert: alert)
+                    await update(current, content: ActivityContent(state: snapshot.state, staleDate: nil, relevanceScore: 100), alert: alert)
                     terminalPresented.insert(run)
                     BackgroundExecutionTrace.record("activity.terminalUpdateReturned phase=\(snapshot.state.phase) alertRequested=\(alert != nil)")
                 } else {
                     await current.end(ActivityContent(state: snapshot.state, staleDate: nil), dismissAt: Date().addingTimeInterval(300))
                     BackgroundExecutionTrace.record("activity.ended phase=\(snapshot.state.phase) foreground=\(foreground)")
+                    writtenContent.removeValue(forKey: ObjectIdentifier(current))
                     activities.removeValue(forKey: run)
                     latest.removeValue(forKey: run)
                     terminalPresented.remove(run)
+                    executionPresented.remove(run)
                 }
             } else {
                 BackgroundExecutionTrace.record("activity.terminalSkipped phase=\(snapshot.state.phase) reason=noActivity")
@@ -164,8 +323,9 @@ struct AgentActivitySnapshot: Equatable {
                 let previousRun = previous.attributes.runID
                 if let activity = activities.removeValue(forKey: previousRun) {
                     await activity.end(ActivityContent(state: previous.state, staleDate: nil), dismissAt: Date().addingTimeInterval(300))
+                    writtenContent.removeValue(forKey: ObjectIdentifier(activity))
                 }
-                latest.removeValue(forKey: previousRun); terminalPresented.remove(previousRun)
+                latest.removeValue(forKey: previousRun); terminalPresented.remove(previousRun); executionPresented.remove(previousRun)
             }
         }
         let content = ActivityContent(state: snapshot.state, staleDate: snapshot.staleDate, relevanceScore: 100)
@@ -174,7 +334,7 @@ struct AgentActivitySnapshot: Equatable {
                 BackgroundExecutionTrace.record("activity.skipped inactive=true")
                 return
             }
-            await activity.update(content, alert: nil)
+            await update(activity, content: content, alert: executionAlert(snapshot))
             BackgroundExecutionTrace.record("activity.updated phase=\(snapshot.state.phase) tools=\(snapshot.state.completedTools) active=\(activity.isActive)")
         } else {
             guard createActivity != nil || ActivityAuthorizationInfo().areActivitiesEnabled else {
@@ -188,6 +348,9 @@ struct AgentActivitySnapshot: Equatable {
                 activities[run] = activity
                 BackgroundExecutionTrace.record("activity.created foreground=\(foreground) active=\(activity.isActive)")
                 notice = nil
+                if activity.isActive, let alert = executionAlert(snapshot) {
+                    await update(activity, content: content, alert: alert)
+                }
             } catch {
                 // Record system error metadata only, never task text or credentials.
                 let systemError = error as NSError

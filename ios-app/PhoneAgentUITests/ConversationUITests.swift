@@ -66,6 +66,93 @@ import XCTest
         XCTAssertTrue(app.staticTexts["保存第一条消息"].waitForExistence(timeout: 5))
         capture("first-message-creates-history")
     }
+    func testBackgroundCompletionRefreshesOpenConversationWithoutReentry() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-background-completion"]
+        app.launch()
+        app.staticTexts["后台完成刷新验收"].tap()
+        XCTAssertTrue(app.staticTexts["等待后台完成"].waitForExistence(timeout: 5))
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 1)
+        app.activate()
+        XCTAssertTrue(app.staticTexts["后台任务最终回复"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["后台任务最终回复"].isHittable, app.debugDescription)
+        XCTAssertTrue(app.textViews["messageInput"].exists)
+        capture("background-completion-direct-return")
+    }
+    func testBackgroundCompletionRoutesFromHistoryOnlyWhenForegroundReturns() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-background-completion", "--ui-test-background-auto-route"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["后台完成刷新验收"].waitForExistence(timeout: 5))
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 1)
+        app.activate()
+        let reply = app.staticTexts["后台任务最终回复"]
+        XCTAssertTrue(reply.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(reply.isHittable, app.debugDescription)
+        XCTAssertTrue(app.textViews["messageInput"].exists)
+        capture("background-completion-auto-route")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 1)
+        app.activate()
+        XCTAssertTrue(app.navigationBars["会话"].waitForExistence(timeout: 5), "Consumed completion must not route again")
+    }
+    func testBackgroundCompletionKeepsMessagesVisibleAfterLongTurnCollapses() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-background-completion"]
+        app.launch()
+        app.staticTexts["后台完成刷新验收"].tap()
+        XCTAssertTrue(app.staticTexts["等待后台完成"].waitForExistence(timeout: 5))
+        let messages = app.scrollViews["conversationMessages"]
+        messages.swipeDown(); messages.swipeDown()
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 1)
+        app.activate()
+        XCTAssertTrue(app.staticTexts["后台任务最终回复"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["后台任务最终回复"].isHittable, app.debugDescription)
+        capture("background-completion-history-position")
+        for second in 1...10 {
+            Thread.sleep(forTimeInterval: 1)
+            XCTAssertTrue(app.staticTexts["后台任务最终回复"].exists, "Reply disappeared at second \(second): " + app.debugDescription)
+            XCTAssertTrue(app.staticTexts["后台任务最终回复"].isHittable, "Reply moved out of viewport at second \(second): " + app.debugDescription)
+        }
+        capture("background-completion-history-position-stable")
+    }
+    func testReplyRemainsVisibleWhenCompletionFoldsAfterForegroundReturn() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-background-completion", "--ui-test-background-delayed-finish", "--ui-test-background-auto-route"]
+        app.launch()
+        app.staticTexts["后台完成刷新验收"].tap()
+        XCTAssertTrue(app.staticTexts["等待后台完成"].waitForExistence(timeout: 5))
+        let messages = app.scrollViews["conversationMessages"]
+        messages.swipeDown(); messages.swipeDown()
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 1)
+        app.activate()
+        let reply = app.staticTexts["后台任务最终回复"]
+        XCTAssertTrue(reply.waitForExistence(timeout: 5), app.debugDescription)
+        capture("foreground-before-delayed-fold")
+        for second in 1...10 {
+            Thread.sleep(forTimeInterval: 1)
+            XCTAssertTrue(reply.exists, "Reply disappeared at second \(second): " + app.debugDescription)
+            let frame = app.staticTexts["后台任务最终回复"].frame
+            let top = app.navigationBars.firstMatch.frame.maxY
+            let bottom = app.textViews["messageInput"].frame.minY
+            XCTAssertGreaterThan(frame.width, 0)
+            XCTAssertGreaterThan(frame.height, 0)
+            XCTAssertGreaterThan(frame.maxY, top, "Reply moved above viewport at second \(second)")
+            XCTAssertLessThan(frame.minY, bottom, "Reply moved below viewport at second \(second)")
+            if [1, 3, 10].contains(second) { capture("foreground-delayed-fold-second-\(second)") }
+        }
+        XCTAssertTrue(app.buttons["30 次工具调用 · 30 段思考"].exists, "Must reach the folded completed layout")
+        capture("foreground-after-delayed-fold-stable")
+    }
     private func launch(demo: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -178,6 +265,59 @@ import XCTest
         XCUIDevice.shared.system.open(route)
         assertAtBottom()
         capture("conversation-entry-at-latest")
+    }
+    func testBackgroundResidentSettingPersistsWithoutCreatingConversation() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-live-activity"]
+        app.launch()
+        app.buttons["设置"].tap()
+        let resident = app.switches["backgroundResidentEnabled"]
+        XCTAssertTrue(resident.waitForExistence(timeout: 5), app.debugDescription)
+        if resident.value as? String == "1" { resident.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap() }
+        XCTAssertEqual(resident.value as? String, "0")
+        resident.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(resident.value as? String, "1")
+        capture("settings-background-resident-enabled")
+        XCUIDevice.shared.press(.home)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        XCTAssertTrue(springboard.wait(for: .runningForeground, timeout: 5))
+        // Let the Home transition finish before collecting system presentation evidence.
+        Thread.sleep(forTimeInterval: 2)
+        capture("background-resident-standby-island")
+        app.activate()
+        XCTAssertTrue(resident.waitForExistence(timeout: 5))
+        app.terminate()
+        app.launch()
+        app.buttons["设置"].tap()
+        XCTAssertTrue(resident.waitForExistence(timeout: 5))
+        XCTAssertEqual(resident.value as? String, "1")
+        resident.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(resident.value as? String, "0")
+        app.buttons["关闭"].tap()
+        XCTAssertFalse(app.staticTexts["Siri · 待确认"].exists)
+        XCTAssertFalse(app.buttons["stopRun"].exists)
+    }
+    func testSystemBackgroundModePersistsAndCanReturnToAudio() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launch()
+        app.buttons["设置"].tap()
+        let mode = app.buttons["backgroundPlaybackMode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        mode.tap()
+        app.buttons["系统后台任务"].tap()
+        XCTAssertTrue(app.staticTexts["系统任务会显示系统进度。开启常驻后，空闲时用音频等待新任务。"].exists)
+        capture("settings-system-background-task")
+        app.terminate(); app.launch()
+        app.buttons["设置"].tap()
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["系统任务会显示系统进度。开启常驻后，空闲时用音频等待新任务。"].exists)
+        mode.tap()
+        app.buttons["音频"].tap()
+        XCTAssertTrue(app.staticTexts["开启后，无任务时也保持所选后台模式。"].exists)
+        XCTAssertFalse(app.buttons["stopRun"].exists)
     }
     func testDeviceControlsAndSettingsDoNotStartAnything() {
         let app = launch()

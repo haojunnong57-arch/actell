@@ -270,3 +270,97 @@ ProviderStore 的兼容 v1 归档新增可选 lastSelection，仅保存供应商
 聊天首页的新建入口改用 createConversationDraft。ConversationStore 内存 records 保存草稿与历史，公开 conversations 与所有归档写入仅包含正式历史，临时 draftIDs 不编码到磁盘；输入、供应商／模型切换、附件添加以及其他会话保存不会将未发送草稿落盘。首次 begin 原地转为正式会话，保持会话 UUID、模型选择、附件归属并保存首条用户消息。返回或导航替换时只丢弃未发送草稿并移除对应空闲运行容器；已经发送或运行中的会话保留。首次发送前的配置拒绝／取消不会留下正式会话。Siri prepare 的显式持久化路径和原有历史／授权／并发／checkpoint 行为保留。草稿附件在编辑期间纳入资源引用保护；返回丢弃后按现有孤立附件清理机制处理。
 
 新增 3 项核心测试覆盖未发送草稿从历史／重启／Siri 原子写入中排除，首次消息保存时保持 UUID／供应商／模型／附件，避免重复 begin，以及重复打开／丢弃草稿、默认模型继承与运行容器释放。默认核心 **400 tests，0 失败**：`.build/validation/core.xpTZgz/Tests.xcresult`。定向 UI **2 tests，0 失败**：`transient-conversation-ui.xcresult`／`transient-conversation-ui.log`，覆盖空白返回、输入但未发送返回、新草稿清空、首条离线回复后只出现一条历史，以及模型选择与默认继承回归。截图导出并检查：`transient-conversation-ui-shots/manifest.json`。无签名 iPhoneOS **BUILD SUCCEEDED**：`transient-conversation-iphoneos.log`。`git diff --check` 通过。未调用线上模型 API、未做签名真机或完整 UI／USB 验收，未提交／推送。
+
+
+## 2026-10-11 · Siri 后台新建会话
+
+执行任务 Intent 改为 background + dynamic foreground，并关闭固定 openAppWhenRun。已在前台初始化过且实际媒体保活有效的 App 在后台或 Siri 引起的 inactive 状态直接提交新的独立会话；冷启动或保护数据不可用时请求前台继续。每次话语保留独立 commandID，相同请求重试不重复执行。普通 UI 发送仍要求前台。后台发起的新轮次独立申请执行资格，模型启动前等待有效 lease；设备工具仍校验后台能力、授权与 checkpoint，停止释放及未知结果不重放保持原行为。
+
+新增覆盖后台新会话与重试去重、锁屏等待，以及后台启动默认拒绝／显式申请／lease 与工具能力门禁。真机 Siri 保持当前界面与冷启动切换尚待验收。
+
+最终默认 App target **405 tests，0 失败**：`.build/validation/core.g16vpO/Tests.xcresult`。无签名 iPhoneOS **BUILD SUCCEEDED**：`.build/validation/siri-background-iphoneos.log`。`git diff --check` 通过；未调用线上模型、未做真机 Siri 或归档 UI 验收，未提交／推送。
+
+
+## 2026-10-11 · 可选后台常驻
+
+设置 → 后台执行新增“后台常驻”，默认关闭，保存到 backgroundResidentEnabled。开启后 StatusPiPController 的媒体需求为任务运行或常驻开启，空闲时也沿用所选音频／PiP 模式；最后一个任务结束不停止常驻，关闭常驻时仍保留正在执行任务的媒体，全部需求结束才释放。空闲常驻切换模式立即生效，执行中的任务保留本轮模式。不会为保活创建会话、运行 checkpoint 或启动模型。实际播放回执仍由 PiPExecutionActivity 管理，中断或失效不伪造后台执行资格。
+
+修正 Siri 判断：曾进入前台不代表仍有后台资格；空闲后台无实际媒体保活时请求前台继续。有实际保活才直接后台新建会话。新增 handoffRequired/mediaActive 诊断。系统挂起／终止、Siri 音频中断、真机空闲常驻后接收任务仍需实体设备验收。
+
+## 2026-10-11 · Siri 接入 LiveActivityIntent
+
+执行任务入口采用 `LiveActivityIntent`，保留 background + dynamic foreground、现有保护数据／实际媒体资格与任务去重规则。成功提交任务后，在 Intent 返回前等待实时活动队列处理完成；等待期间被替换的首次状态也纳入队列等待，避免后台创建请求落在 Intent 执行结束之后。系统拒绝创建活动只保留现有诊断与提示，不重复提交任务。该接入不提供持续后台时间或 PiP 启动权限。
+
+新增离线回归覆盖旧活动写入阻塞时等待新活动创建、命令重试不重复创建、活动拒绝不重放任务；编译约束确认执行入口遵循 `LiveActivityIntent`。默认核心 **411 tests，0 失败**：`.build/validation/core.F1xd1p/Tests.xcresult`；无签名 iPhoneOS **BUILD SUCCEEDED**：`.build/validation/siri-live-activity-iphoneos.log`。首轮 `.build/validation/core.SUt9aZ` 在测试进程启动前被系统终止，未产生用例结果；改用本次专用隔离模拟器后通过。`git diff --check` 通过。后台 Siri 新任务的实际灵动岛显示及媒体中断行为仍待真机验收，未调用线上模型、未提交／推送。
+
+默认 App target **409 tests，0 失败**：`.build/validation/core.g1OAZV/Tests.xcresult`；常驻设置 UI **1 test，0 失败**：`.build/validation/background-resident-ui-reboot.xcresult`，验证实际开关点击、重启保存、关闭以及无自动任务，成功截图已导出并检查。首次 UI 点击整行空白导致断言失败，改点原生开关后，一次测试运行器启动异常／模拟器退出；重启专用模拟器后通过。无签名 iPhoneOS **BUILD SUCCEEDED**：`.build/validation/background-resident-iphoneos.log`。`git diff --check` 通过，未提交／推送。真机长时间常驻、Siri 音频中断与后台收任务尚未验收。
+
+## 2026-10-11 · 常驻预建待命实时活动
+
+开启后台常驻后，在前台预建一个“后台待命”实时活动；常驻已开启时重新进入前台也会补建。后台任务更新同一个活动，不依赖后台重新创建。可变 ContentState 保存当前会话／运行／演示标记，组件链接随任务切换；旧版本 payload 缺少字段时回退原 attributes，待命链接只打开首页，不创建会话或授权。连续任务及并行任务选用最新活跃状态，旧任务结束不覆盖新任务。后台完成状态保留结果提示，下一任务复用，回前台后恢复待命。关闭常驻时保留正在运行的任务，空闲或任务结束后释放；系统结束活动后前台可重新建立。实时活动只负责展示，执行资格继续取决于实际媒体保活。
+
+默认核心 **415 tests，0 失败**：`.build/validation/core.RuY4i8/Tests.xcresult`，新增待命预建、后台复用、连续任务路由、开关竞争、关闭后活动释放及旧 payload 兼容覆盖。定向设置 UI **1 test，0 失败**：`.build/validation/resident-live-activity-ui-settled.xcresult`，覆盖开启、后台切换、重启持久化、关闭与无自动任务。无签名 iPhoneOS **BUILD SUCCEEDED**：`.build/validation/resident-live-activity-iphoneos.log`。系统日志 `.build/validation/resident-live-activity-system-events.log` 确认 standbyCreated、standby content 与 active 状态；已检查稳定主屏截图 `.build/validation/resident-live-activity-ui-settled-shots/manifest.json`，截图未显示灵动岛，因此不将请求成功作为可见展示证据。真机录屏／Siri 后台触发后的实际灵动岛展示仍待验收。`git diff --check` 通过，未调用线上模型、未提交／推送。
+
+## 2026-10-11 · 弱化常驻待命展示
+
+保留前台预建的待命活动，待命时锁屏组件改为透明、1 点高的空内容，移除标题／图标／说明／按钮；灵动岛 expanded／compact／minimal 均不绘制待命内容，keyline 透明。待命创建与更新 relevanceScore 为 0，任务更新仍为 100；该值只影响排序，不承诺隐藏活动。任务及结果状态沿用完整展示与当前会话链接。系统仍可能保留活动外框或灵动岛占位，实际弱化效果待真机验收，未将空布局当作系统隐藏 API。
+
+默认核心 **415 tests，0 失败**：`.build/validation/core.aNsYCL/Tests.xcresult`；无签名 iPhoneOS **BUILD SUCCEEDED**（含实时活动组件）：`.build/validation/quiet-standby-iphoneos.log`。`git diff --check` 通过。未进行真机锁屏／录屏／Siri 展示验证，未提交／推送。
+
+## 2026-10-11 · 后台任务开始时请求灵动岛展开
+
+后台运行首次有效活动更新使用 AlertConfiguration 请求系统短暂展示 expanded 灵动岛；常驻预建活动复用与按任务创建两条路径均接入。每轮任务只请求一次，前台与待命不请求，重复或后续进度更新不重复提醒；完成提醒继续单独去重。提醒使用系统默认声音。展开持续时间与最终可见性由系统决定，不提供持续强制展开。展开概要从 compact 短词改为完整处理状态（思考／查看屏幕／点击等），另显示已完成工具步数，继续实时更新；活动 payload 不新增用户文本或工具参数。
+
+新增覆盖后台首次更新、重复进度不重复展开、前台／待命不提醒及下一轮独立提醒。默认核心 **416 tests，0 失败**：`.build/validation/core.sLsGDP/Tests.xcresult`；无签名 iPhoneOS **BUILD SUCCEEDED**：`.build/validation/task-island-expansion-iphoneos.log`。首轮 `core.pvxcCS` 的完成时序用例沿用旧单次提醒断言，实际新增开始提醒后为两次，已更新断言并完整重跑。`git diff --check` 通过。尚未真机验证 Siri／录屏时的系统展开与概要可见效果，未提交／推送。
+
+## 2026-10-11 · 合并实时活动密集进度更新
+
+针对手动展开后更新即收起的反馈，只读复制已连接 iPhone 15 Pro 的后台诊断到 `.build/validation/island-collapse-device-events.log`，未安装／启动／停止设备 App。日志显示同一个 activity ID 持续更新，存在几十毫秒内 working／executing／thinking 切换和完全相同内容重复写入，未证实执行中重建；诊断不包含展开状态，无法证明每次收起由更新或屏幕触控造成。
+
+更新层按可见 ContentState（忽略 updatedAt）去重，普通状态无变化时合并小于 15 秒的有效期延长，避免每个心跳刷新组件；到期续期仍保留，审批到期变更不延后，提醒与终态不去重。已有活动进度采用 300 毫秒合并窗口，替代后的旧进度不再写入，审批和终态不进入该合并等待。活动与会话身份、授权和执行 lease 不改变，不承诺系统保持 expanded。真实设备手动展开后是否改善仍需复测。
+
+最终核心 **418 tests，0 失败**：`.build/validation/core.99el6N/Tests.xcresult`；无签名 iPhoneOS **BUILD SUCCEEDED**：`.build/validation/island-update-coalescing-iphoneos.log`。新增去重／续期／审批截止更新、密集状态合并与停止覆盖。首轮新增测试对不可变 snapshot 直接赋值导致编译失败（`core.c6jWUv`），改用重新构造快照后去重版本 **417 tests 全通过**（`core.0huTMU`）；加入合并窗口后短任务跳过了开始进度，旧提醒次数断言失败（`core.l7gULZ`），调整为保留完成提醒与 lease 时序约束后完整重跑通过。`git diff --check` 通过，未签名安装修正版／验证系统展开像素，未提交／推送。
+
+## 2026-10-11 · 可选系统后台任务模式
+
+设置 → 后台执行新增“系统后台任务”，保留音频默认值与已保存选择。每轮任务开始时读取选择，系统模式接入现有 ContinuedProcessingScheduler：申请 BGContinuedProcessingTask，使用真实短时 UIKit grant 衔接，实际持续任务到达后升级；提交接受不冒充持续任务已授予。保留到期停止、后台工具独立能力门禁、取消原请求 owner、checkpoint 与不重放。系统自带进度活动可能占用灵动岛，UI 明确说明；未尝试隐藏系统进度或强制 expanded。
+
+系统模式不开常驻时不播放保活音频或启动 PiP；打开后台常驻仍使用音频等待新任务，空闲不反复申请系统持续任务。已有实际媒体仍可在系统任务结束后提供独立执行来源，原有多会话／媒体 fallback 逻辑保留；修正 RunExecutionScheduler 的系统组合调度以复用注入的同一媒体活动实例。无实际媒体的空闲后台 Siri 仍按原门禁请求前台继续，不把所选模式当作已获得执行资格。
+
+默认核心 **420 tests，0 失败**：`.build/validation/core.4PVP91/Tests.xcresult`；定向设置 UI **1 test，0 失败**：`.build/validation/system-background-mode-ui.xcresult`，覆盖原生模式菜单、重启保存与恢复音频，截图导出并检查 `.build/validation/system-background-mode-ui-shots/manifest.json`。无签名 iPhoneOS **BUILD SUCCEEDED**：`.build/validation/system-background-mode-iphoneos.log`。新增系统 grant 在无媒体时支持后台、到期暂停、请求未授予禁止执行及常驻音频隔离测试。`git diff --check` 通过。尚未签名安装／真机验证系统授予与灵动岛占用效果，未提交／推送。
+
+## 2026-10-11 · 移除活动卡片冗余执行文案
+
+思考／处理状态 detail 改为空字符串，卡片与灵动岛展开布局沿用现有空内容隐藏规则，不再显示“任务执行中”。主状态标题、已完成步数以及审批／发送结果核对提示保留。默认核心 **420 tests，0 失败**：`.build/validation/core.DXNCAy/Tests.xcresult`；无签名 iPhoneOS **BUILD SUCCEEDED**：`.build/validation/activity-remove-running-copy-iphoneos.log`。`git diff --check` 通过，未提交／推送。
+
+## 2026-10-11 · DeepSeek 快速工具流接收失败定位与修复
+
+读取已配对 iPhone 15 Pro 的近期会话、供应商配置及限定时间设备日志；配置名为“DeepSeek Responses”，实际 wire 为 Chat Completions，地址 `https://api.deepseek.com`、模型 `deepseek-flash`。23:48:14 真机 LLM 诊断在 `stage=stream.receive` 报 `ModelError.protocolViolation` / `Stream consumer buffer exceeded`；事件结构为 `toolFragments=1`、`hasServerError=false`，随后包装为 providerRefused 并显示通用“模型请求失败”。这次中断发生在接收工具参数流阶段，未完成终态／未执行本批工具；后台媒体保活当时仍在运行。已确认这一条故障，不能据此把其它历史失败全部归为同一原因。
+
+原 ResponsesTransport 的 SSE 生产任务用 bufferingOldest(32)，快速输出遇到消费调度延迟会丢弃帧并主动失败。改为 unfolding 按消费请求逐帧读取 URLSession.AsyncBytes，不再设置独立 32 帧生产队列；保留 4 MiB 流限制、256 KiB 帧限制、HTTP 检查、取消、EOF 检查及单次请求，不增加重试或提前释放工具。设备归档只用于提取 LLM 结构诊断，未读取密钥／输出任务正文；提取证据 `.build/validation/deepseek-llm.log`。
+
+默认核心 **422 tests，0 失败**：`.build/validation/core.RGGGxg/Tests.xcresult`，新增快流慢消费保持 160 帧有序、500 多片工具参数仅在成功终态释放的回归；现有取消、HTTP 错误与 EOF／格式失败覆盖继续通过。无签名 iPhoneOS **BUILD SUCCEEDED**：`.build/validation/deepseek-stream-backpressure-iphoneos.log`。`git diff --check` 通过。尚未签名安装或真机重新执行 DeepSeek 任务，未提交／推送。
+
+## 2026-10-12 · 后台任务结束返回会话的导航与刷新时序
+
+用户报告自动回 App 后仅标题显示、消息为空，返回再进入恢复。源码确认 closeRun 在后台发布 activityNavigation、再请求前台，而 ContentView 原先立即修改 NavigationStack，不检查场景；ConversationStore 原先从 background 到 inactive 就发布累积消息，早于 active。修复为完成导航留待 active 后消费一次，显式首页链接取消待处理活动导航；消息展示只在 active 恢复集中发布。执行、落盘和后台资格仍走原路径。
+
+隔离 iOS 27 模拟器修复前的已打开会话返回、后台自动导航两个用例均通过（`background-completion-before.xcresult`、`background-auto-route-before.xcresult`），没有稳定复现用户的真机空白，不能把上述时序隐患认定为已证实的唯一原因。修复后新增 background→inactive→active 的累积消息／展示适配器刷新回归，默认核心 **423 tests，0 失败**：`.build/validation/core.DIeElC/Tests.xcresult`；两条返回路径 UI **2 tests，0 失败**：`.build/validation/background-conversation-return-ui.xcresult`，覆盖消息可见、输入框和已消费导航不再次回跳。截图已导出并检查：`.build/validation/background-conversation-return-ui-shots/manifest.json`。仅 DEBUG 合成夹具填充 30 组工具和思考，在后台完成并可触发自动导航；不调用模型／真实设备。
+
+最终无签名 iPhoneOS **BUILD SUCCEEDED**：`.build/validation/background-conversation-return-final-iphoneos.log`；`git diff --check` 通过。XcodeBuildMCP 默认 xcrun 未找到 simctl，使用显式 DEVELOPER_DIR 的已启动隔离模拟器完成验证。尚未签名安装或真机复测，未提交／推送。
+
+## 2026-10-12 · 已复现消息滚动区后台完成后空白
+
+用户补充输入框／发送按钮仍在，只有消息区空白。加入“在长执行过程中向上阅读两次 → 后台完成并折叠 → 直接返回”的 UI 用例，稳定复现最终回复不存在于可访问性树、ScrollView 无消息元素但标题与输入框仍在；证据 `.build/validation/background-collapsed-history-before.xcresult` / `.log`。前一轮导航门禁不足以修复这条路径。旧滚动容器在长过程切换成短完成摘要后未正确恢复懒加载内容；单纯限位、子视图／ForEach 行标识更新都未消除复现，已撤掉尝试（`background-collapsed-history-clamp`、`-layout`、`-row` 为失败诊断结果）。
+
+最终只在运行轮次变化时用 activeTurnID 重建消息 ScrollView；完成时清掉旧 ScrollPosition、拖动标记和延期视口位移，恢复跟随最终回复。输入框位于滚动容器之外；不为流式片段反复重建，不修改消息归档／执行状态／模型请求。原空白用例在 `background-collapsed-history-container.xcresult` 首次通过。
+
+最终默认核心 **423 tests，0 失败**：`.build/validation/core.tnqqNz/Tests.xcresult`；定向 UI **4 tests，0 失败**：`.build/validation/background-message-viewport-ui.xcresult`，覆盖阅读位置下完成后消息可见、已打开会话直接返回、后台自动导航与消费、历史工具／思考折叠顺序及最终答复保留。截图已导出并检查 `.build/validation/background-message-viewport-ui-shots/manifest.json`。无签名 iPhoneOS **BUILD SUCCEEDED**：`.build/validation/background-message-viewport-iphoneos.log`。`git diff --check` 通过。真机同场景仍待安装复测，未提交／推送。
+
+## 2026-10-12 · 返回后延迟折叠导致消息消失
+
+用户进一步确认返回时先有消息，几秒内自动消失。closeRun 先请求回前台，随后等待 coordinator.stop，最后 end 调用 sessions.finish；因此页面恢复时可能仍显示活动轮次，稍后才切换完成摘要。加入 DEBUG 延迟完成夹具，在回前台两秒后 finish，原先重建 ScrollView 的方案再次失败：`.build/validation/background-message-delayed-fold-before.xcresult` 显示回复先出现，随后折叠时失去可见命中点。此前仅覆盖后台已经完成的即时返回，不能覆盖该延迟变化。
+
+最终撤掉 ScrollView 的 activeTurnID 标识重建；执行中保留 LazyVStack，已完成历史使用 VStack，避免长执行过程折叠后沿用懒加载视口几何。完成切换继续重置 ScrollPosition、拖动与延期位移并滚到最终回复；消息存储和执行清理顺序不变。此方案替代上一节的容器重建方案。通过合成场景确认这一布局路径；尚未取得用户真机现场的布局诊断，不能将 SwiftUI 内部缓存机制当作已观测事实。
+
+默认核心 **423 tests，0 失败**：`.build/validation/core.tEEjdB/Tests.xcresult`；无签名 iPhoneOS **BUILD SUCCEEDED**：`.build/validation/background-message-stable-history-iphoneos.log`。六项 UI 批次中五项通过，延迟完成用例一次静态文本 isHittable 断言失败，但当时可访问性树的文字及坐标仍在可见区域（`background-message-stable-history-ui.xcresult`）。将该用例改为连续十秒检查文字存在、非零尺寸及导航栏和输入框之间的可见区域，并在第 1、3、10 秒截图，单独重跑通过：`.build/validation/background-message-delayed-visibility-ui.xcresult`。三张截图已逐张检查，最终回复和折叠摘要持续可见：`background-message-delayed-visibility-shots/manifest.json`。这些检查验证真实显示，不要求静态文本能点击；未声称整批六项原断言全部通过。真机同场景仍待安装复测，未提交／推送。

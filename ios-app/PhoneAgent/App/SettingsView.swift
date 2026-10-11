@@ -4,6 +4,7 @@ struct SettingsView: View {
     @ObservedObject var model: AgentViewModel
     @Environment(\.dismiss) private var dismiss
     @AppStorage(BackgroundPlaybackMode.defaultsKey) private var backgroundMode = BackgroundPlaybackMode.defaultMode.rawValue
+    @AppStorage(BackgroundPlaybackMode.residentDefaultsKey) private var backgroundResident = false
     @State private var control = PairingFlow.shared
     @State private var clear = false
     @State private var clearAssets = false
@@ -26,10 +27,18 @@ struct SettingsView: View {
                         Text("连接与验证")
                     }.accessibilityIdentifier("esp32ControlSettings")
                 }
-                Section("后台执行") {
+                Section {
                     Picker("执行模式", selection: $backgroundMode) {
                         ForEach(BackgroundPlaybackMode.allCases) { mode in Text(mode.title).tag(mode.rawValue) }
                     }.accessibilityIdentifier("backgroundPlaybackMode")
+                    Toggle("后台常驻", isOn: $backgroundResident)
+                        .accessibilityIdentifier("backgroundResidentEnabled")
+                } header: {
+                    Text("后台执行")
+                } footer: {
+                    Text(backgroundMode == BackgroundPlaybackMode.systemTask.rawValue
+                         ? "系统任务会显示系统进度。开启常驻后，空闲时用音频等待新任务。"
+                         : "开启后，无任务时也保持所选后台模式。")
                 }
                 Section("扩展能力") {
                     NavigationLink { SkillsView(model: model, store: model.skills) } label: {

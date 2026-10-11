@@ -6,6 +6,7 @@ import Darwin
     @StateObject private var model = PhoneAgentRuntime.shared.model
     @StateObject private var statusPiP = StatusPiPController()
     @AppStorage(BackgroundPlaybackMode.defaultsKey) private var backgroundMode = BackgroundPlaybackMode.defaultMode.rawValue
+    @AppStorage(BackgroundPlaybackMode.residentDefaultsKey) private var backgroundResident = false
     @Environment(\.scenePhase) private var scenePhase
     init() {
         PhoneAgentShortcuts.updateAppShortcutParameters()
@@ -41,6 +42,8 @@ import Darwin
                     let streamProbe = ProcessInfo.processInfo.arguments.contains("--task-pip-probe") && ProcessInfo.processInfo.arguments.contains("--background-stream-probe")
                     if !streamProbe { PairingFlow.shared.restoreConnection() }
                     statusPiP.setBackgroundMode(BackgroundPlaybackMode(rawValue: backgroundMode) ?? .defaultMode)
+                    statusPiP.setBackgroundResident(backgroundResident)
+                    model.liveActivities.setBackgroundResident(backgroundResident)
                     statusPiP.observeTasks(in: model)
                     #if DEBUG
                     if ProcessInfo.processInfo.arguments.contains("--task-pip-probe") {
@@ -62,6 +65,10 @@ import Darwin
                 .onChange(of: backgroundMode) { _, value in
                     statusPiP.setBackgroundMode(BackgroundPlaybackMode(rawValue: value) ?? .defaultMode)
                 }
+                .onChange(of: backgroundResident) { _, enabled in
+                    statusPiP.setBackgroundResident(enabled)
+                    model.liveActivities.setBackgroundResident(enabled)
+                }
                 .onChange(of: model.approval?.id) { _, id in
                     #if DEBUG
                     if id != nil { Task { await PhoneAgentRuntime.shared.invokeSiriFixtureIfNeeded(busy: true) } }
@@ -77,11 +84,14 @@ import Darwin
                     if phase == .active { statusPiP.setForeground(true) }
                     else if phase == .background { statusPiP.setForeground(false) }
                     #if DEBUG
+                    if phase == .background { PhoneAgentRuntime.shared.completeBackgroundUIFixtureIfNeeded() }
+                    if phase == .active { PhoneAgentRuntime.shared.finishForegroundUIFixtureIfNeeded() }
                     if phase == .active { Task { await PhoneAgentRuntime.shared.invokeSiriFixtureIfNeeded(busy: false) } }
                     #endif
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
                     PairingFlow.shared.applicationWillTerminate()
+                    statusPiP.setBackgroundResident(false)
                     statusPiP.setTaskRunning(false)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in

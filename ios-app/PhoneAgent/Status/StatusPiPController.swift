@@ -7,11 +7,22 @@ import UIKit
 import Combine
 
 enum BackgroundPlaybackMode: String, CaseIterable, Identifiable {
-    case audio, pictureInPicture
+    case audio, pictureInPicture, systemTask
     static let defaultsKey = "backgroundPlaybackMode"
+    static let residentDefaultsKey = "backgroundResidentEnabled"
     static let defaultMode: Self = .audio
     var id: String { rawValue }
-    var title: String { self == .pictureInPicture ? "画中画" : "音频" }
+    var title: String {
+        switch self {
+        case .audio: return "音频"
+        case .pictureInPicture: return "画中画"
+        case .systemTask: return "系统后台任务"
+        }
+    }
+    var usesSystemProcessing: Bool { self == .systemTask }
+    static var selected: Self {
+        Self(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "") ?? defaultMode
+    }
 }
 
 @MainActor protocol TaskAudioPlayback: AnyObject {
@@ -188,6 +199,8 @@ private final class PiPPlaybackState: @unchecked Sendable {
     private var preferredMode: BackgroundPlaybackMode = .defaultMode
     private(set) var playingMode: BackgroundPlaybackMode = .defaultMode
     private let audioPlayback: any TaskAudioPlayback
+    private var taskRunning = false
+    private(set) var backgroundResident = false
     private var audioAttempted = false
     private var audioStartTask: Task<Void, Never>?
     private var audioStartGeneration = UUID()
@@ -271,6 +284,14 @@ private final class PiPPlaybackState: @unchecked Sendable {
     func setBackgroundMode(_ mode: BackgroundPlaybackMode) {
         preferredMode = mode
         if !policy.running { playingMode = mode }
+        updatePlaybackDemand()
+    }
+
+    func setBackgroundResident(_ enabled: Bool) {
+        guard backgroundResident != enabled else { return }
+        backgroundResident = enabled
+        recordLifecycle("pip.resident value=\(enabled)")
+        updatePlaybackDemand()
     }
 
     func setForeground(_ value: Bool) {
@@ -289,10 +310,23 @@ private final class PiPPlaybackState: @unchecked Sendable {
         if ProcessInfo.processInfo.arguments.contains("--task-pip-probe"),
            ProcessInfo.processInfo.arguments.contains("--activity-probe-no-pip") { return }
         #endif
-        guard actual != policy.running else { return }
+        guard actual != taskRunning else { return }
+        taskRunning = actual
         recordLifecycle("pip.task value=\(actual)")
-        if actual { playingMode = preferredMode; audioAttempted = false }
-        policy.setRunning(actual)
+        updatePlaybackDemand()
+    }
+
+    private func updatePlaybackDemand() {
+        let needed = taskRunning || backgroundResident
+        if needed != policy.running {
+            if needed { playingMode = preferredMode; audioAttempted = false }
+            policy.setRunning(needed)
+        } else if needed, !taskRunning, playingMode != preferredMode {
+            // Idle residency follows Settings immediately; an active task retains its mode.
+            stop()
+            playingMode = preferredMode
+            audioAttempted = false
+        }
         reconcileTask()
     }
 
@@ -308,7 +342,18 @@ private final class PiPPlaybackState: @unchecked Sendable {
             if controller?.isPictureInPictureActive != true { displayLayer.flushAndRemoveImage() }
             return
         }
-        if playingMode == .audio {
+        if playingMode == .systemTask, !backgroundResident {
+            cancelAudioStart()
+            audioAttempted = false
+            audioPlayback.stop(); audioActive = false
+            executionActivity.update(owner: executionOwner, active: false)
+            controller?.canStartPictureInPictureAutomaticallyFromInline = false
+            frameTask?.cancel(); frameTask = nil
+            stop(); previewEnabled = false
+            message = "本轮申请系统后台任务"
+            return
+        }
+        if playingMode != .pictureInPicture {
             controller?.canStartPictureInPictureAutomaticallyFromInline = false
             previewEnabled = false
             frameTask?.cancel(); frameTask = nil
@@ -324,7 +369,8 @@ private final class PiPPlaybackState: @unchecked Sendable {
                 do {
                     let playing = try await self.audioPlayback.start()
                     guard !Task.isCancelled, self.audioStartGeneration == generation,
-                          self.policy.running, self.playingMode == .audio else { return }
+                          self.policy.running, self.playingMode != .pictureInPicture,
+                          self.playingMode != .systemTask || self.backgroundResident else { return }
                     self.audioActive = playing
                     self.executionActivity.update(owner: self.executionOwner, active: playing)
                     self.message = playing ? "后台音频已准备" : "音频播放未能启动"
@@ -426,7 +472,7 @@ private final class PiPPlaybackState: @unchecked Sendable {
 
     func stop() {
         recordLifecycle("pip.stopRequested")
-        if playingMode == .audio { cancelAudioStart(); audioPlayback.stop(); audioActive = false }
+        if playingMode != .pictureInPicture { cancelAudioStart(); audioPlayback.stop(); audioActive = false }
         requested = false
         executionActivity.update(owner: executionOwner, active: false)
         if active || starting || controller?.isPictureInPictureActive == true {

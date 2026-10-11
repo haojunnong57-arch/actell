@@ -107,6 +107,28 @@ import ProviderCore
         XCTAssertEqual(session.messages.last?.tool?.state, .interrupted)
         XCTAssertFalse(session.messages.last?.tool?.displayResult.isEmpty ?? true)
     }
+    func testBackgroundCompletionPublishesAccumulatedMessagesAtActiveScene() throws {
+        let store = ConversationStore(inMemory: true)
+        let model = AgentViewModel(sessions: store, loadPersistentState: false)
+        let id = model.createConversation(mode: .live)
+        let ui = AgentPresentationAdapter(model: model, sessionID: id)
+        let run = try XCTUnwrap(store.begin(in: id, query: "后台完成"))
+        store.beginAssistantTurn(run)
+        model.setScene(.background)
+        store.completeAssistantTurn("最终回复", identity: run)
+        store.finish(run, phase: .completed, summary: "")
+        var storeChanges = 0, uiChanges = 0
+        let observation = store.objectWillChange.sink { storeChanges += 1 }
+        let uiObservation = ui.objectWillChange.sink { uiChanges += 1 }
+        model.setScene(.inactive)
+        XCTAssertEqual(storeChanges, 0, "An inactive handoff must not consume the accumulated foreground refresh")
+        model.setScene(.active)
+        XCTAssertEqual(storeChanges, 1)
+        XCTAssertGreaterThan(uiChanges, 0)
+        XCTAssertEqual(ui.session?.messages.last?.text, "最终回复")
+        XCTAssertNil(ui.activeTurnID)
+        withExtendedLifetime((observation, uiObservation)) {}
+    }
     func testBackgroundStreamingPersistsWithoutPublishingHiddenConversationChanges() throws {
         let directory = try temporaryDirectory(), store = ConversationStore(directory: directory)
         let id = store.create(mode: .live), run = try XCTUnwrap(store.begin(in: id, query: "后台执行"))

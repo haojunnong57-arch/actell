@@ -151,7 +151,7 @@ extension AgentViewModel: SessionCommandRunning {
     }
     func startCommandTask(_ task: String, in sessionID: UUID) -> Bool {
         selectConversation(sessionID) // Bind the default provider just as the conversation UI does.
-        return send(task, in: sessionID, cloudConsent: true)
+        return send(task, in: sessionID, cloudConsent: true, allowBackgroundStart: true)
     }
     func cancelCommandRun(_ identity: RunIdentity) -> Bool {
         return stop(run: identity) // Existing runner/coordinator drain, never just UI state.

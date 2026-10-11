@@ -65,6 +65,106 @@ import ProviderCore
     private func settlePlayback() async {
         for _ in 0..<20 { await Task.yield() }
     }
+    func testExplicitBackgroundStartRequiresLeaseBeforeDispatch() throws {
+        let scheduler = FakeScheduler()
+        let lifecycle = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
+        lifecycle.setForeground(false)
+        XCTAssertThrowsError(try lifecycle.begin(identity: identity, generation: token))
+        try lifecycle.begin(identity: identity, generation: token, allowBackgroundStart: true)
+        XCTAssertEqual(scheduler.identifiers.count, 1)
+        XCTAssertFalse(lifecycle.hasLease)
+        let lease = scheduler.grant()
+        try lifecycle.requireExecution(generation: token, backgroundCapable: true)
+        XCTAssertThrowsError(try lifecycle.requireExecution(generation: token, backgroundCapable: false))
+        lease.expirationHandler?()
+        XCTAssertThrowsError(try lifecycle.requireExecution(generation: token, backgroundCapable: true))
+    }
+    func testResidentPlaybackKeepsIdleAppAndNewBackgroundRunUntilDisabled() async throws {
+        let activity = PiPExecutionActivity(), audio = FakeTaskAudioPlayback()
+        let media = StatusPiPController(executionActivity: activity, audioPlayback: audio)
+        XCTAssertFalse(media.backgroundResident)
+        XCTAssertFalse(media.policy.running)
+        media.setBackgroundResident(true)
+        await settlePlayback()
+        XCTAssertTrue(media.audioActive)
+        XCTAssertTrue(activity.active)
+        media.setForeground(false)
+        let lifecycle = RunLifecycleCoordinator(scheduler: MediaOnlyRunScheduler(activity: activity), storage: MemoryRunCheckpointStore())
+        lifecycle.setForeground(false)
+        try lifecycle.begin(identity: identity, generation: token, allowBackgroundStart: true)
+        try lifecycle.requireExecution(generation: token, backgroundCapable: true)
+        media.setTaskRunning(true)
+        media.setTaskRunning(false)
+        XCTAssertEqual(audio.starts, 1)
+        XCTAssertTrue(activity.active, "finishing a task must retain idle residency")
+        media.setBackgroundResident(false)
+        XCTAssertFalse(media.audioActive)
+        XCTAssertFalse(activity.active)
+        XCTAssertEqual(lifecycle.checkpoint?.phase, .paused)
+    }
+    func testSystemTaskModeOnlyUsesAudioForExplicitResidency() async {
+        let activity = PiPExecutionActivity(), audio = FakeTaskAudioPlayback()
+        let media = StatusPiPController(executionActivity: activity, audioPlayback: audio)
+        media.setBackgroundMode(.systemTask)
+        media.setTaskRunning(true)
+        await settlePlayback()
+        XCTAssertEqual(audio.starts, 0)
+        XCTAssertFalse(activity.active)
+        XCTAssertFalse(media.previewEnabled)
+        media.setBackgroundResident(true)
+        await settlePlayback()
+        XCTAssertEqual(audio.starts, 1)
+        XCTAssertTrue(activity.active)
+        media.setTaskRunning(false)
+        XCTAssertTrue(activity.active, "idle residency still receives background commands")
+        media.setBackgroundResident(false)
+        XCTAssertFalse(activity.active)
+        XCTAssertFalse(media.audioActive)
+    }
+    func testSystemTaskGrantAndExpirationWorkWithoutMediaPlayback() throws {
+        let activity = PiPExecutionActivity(), system = FakeScheduler()
+        let scheduler = RunExecutionScheduler(continued: system, activity: activity)
+        scheduler.configure(context: nil, allowSystemProcessing: true,
+                            useSystemProcessing: BackgroundPlaybackMode.systemTask.usesSystemProcessing)
+        let lifecycle = RunLifecycleCoordinator(scheduler: scheduler, storage: MemoryRunCheckpointStore())
+        try lifecycle.begin(identity: identity, generation: token)
+        XCTAssertFalse(lifecycle.hasLease, "request submission alone cannot grant execution")
+        let grant = system.grant()
+        lifecycle.setForeground(false)
+        try lifecycle.requireExecution(generation: token, backgroundCapable: true)
+        XCTAssertThrowsError(try lifecycle.requireExecution(generation: token, backgroundCapable: false))
+        grant.expirationHandler?()
+        XCTAssertEqual(lifecycle.checkpoint?.phase, .paused)
+        XCTAssertThrowsError(try lifecycle.requireExecution(generation: token, backgroundCapable: true))
+    }
+    func testDisablingResidencyPreservesRunningTaskAndReleasesAfterTaskEnds() async {
+        let activity = PiPExecutionActivity(), audio = FakeTaskAudioPlayback()
+        let media = StatusPiPController(executionActivity: activity, audioPlayback: audio)
+        media.setBackgroundResident(true)
+        await settlePlayback()
+        media.setTaskRunning(true)
+        media.setBackgroundResident(false)
+        XCTAssertTrue(activity.active)
+        XCTAssertTrue(media.policy.running)
+        XCTAssertEqual(audio.starts, 1)
+        media.setTaskRunning(false)
+        XCTAssertFalse(activity.active)
+        XCTAssertFalse(media.policy.running)
+    }
+    func testPendingResidentActivationCannotReviveDisabledResidency() async {
+        let activity = PiPExecutionActivity(), audio = FakeTaskAudioPlayback()
+        audio.holdStart = true
+        let media = StatusPiPController(executionActivity: activity, audioPlayback: audio)
+        media.setBackgroundResident(true)
+        await settlePlayback()
+        XCTAssertEqual(audio.pendingStarts.count, 1)
+        XCTAssertFalse(activity.active)
+        media.setBackgroundResident(false)
+        audio.pendingStarts.removeFirst().resume(returning: true)
+        await settlePlayback()
+        XCTAssertFalse(media.audioActive)
+        XCTAssertFalse(activity.active)
+    }
     func testStopBeforeAudioStartIsScheduledNeverActivatesPlayback() async {
         let activity = PiPExecutionActivity(), audio = FakeTaskAudioPlayback()
         let media = StatusPiPController(executionActivity: activity, audioPlayback: audio)
@@ -309,7 +409,7 @@ import ProviderCore
         lifecycle.stop(message: "cleanup")
     }
     func testDefaultMediaModesDoNotSubmitSystemRequests() throws {
-        for mode in BackgroundPlaybackMode.allCases {
+        for mode in BackgroundPlaybackMode.allCases where !mode.usesSystemProcessing {
             let activity = PiPExecutionActivity(), owner = UUID(), system = FakeScheduler()
             let scheduler = RunExecutionScheduler(continued: system, activity: activity)
             scheduler.configure(context: nil, allowSystemProcessing: true)
@@ -357,7 +457,8 @@ import ProviderCore
     func testExecutionSourceIsExclusiveAndCancellationUsesOriginalOwner() throws {
         let continued = FakeScheduler(), scheduler = RunExecutionScheduler(continued: FakeScheduler())
         let routed = RunExecutionScheduler(continued: continued)
-        routed.configure(context: nil, allowSystemProcessing: true, useSystemProcessing: true)
+        routed.configure(context: nil, allowSystemProcessing: true,
+                         useSystemProcessing: BackgroundPlaybackMode.systemTask.usesSystemProcessing)
         try routed.submit(identifier: "system", launched: { _ in })
         XCTAssertEqual(continued.identifiers, ["system"])
         routed.configure(context: nil, allowSystemProcessing: false)

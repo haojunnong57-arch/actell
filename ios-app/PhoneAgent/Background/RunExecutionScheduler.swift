@@ -13,7 +13,7 @@ import Foundation
     init(continued: any RunBackgroundScheduler = ContinuedProcessingScheduler(), activity: PiPExecutionActivity = .shared) {
         mediaOnly = MediaOnlyRunScheduler(activity: activity)
         self.continued = continued
-        continuedWithPiP = PiPBackedRunScheduler(primary: continued)
+        continuedWithPiP = PiPBackedRunScheduler(primary: continued, activity: activity)
         selected = ForegroundOnlyScheduler()
     }
     func configure(context: ScreenUSBExecutionContext?, allowSystemProcessing: Bool, useSystemProcessing: Bool = false) {

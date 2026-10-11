@@ -4,17 +4,16 @@ struct ContentView: View {
     @ObservedObject var model: AgentViewModel
     @ObservedObject var statusPiP: StatusPiPController
     @ObservedObject private var sessions: ConversationStore
-    @ObservedObject private var liveActivities: AgentLiveActivityController
     let commands: SessionCommandService
     @Environment(\.scenePhase) private var scenePhase
     @State private var path: [UUID] = []
+    @State private var consumedActivityNavigationID: UUID?
     @State private var search = ""
     private enum Panel: String, Identifiable { case settings; var id: String { rawValue } }
     @State private var panel: Panel?
     init(model: AgentViewModel, statusPiP: StatusPiPController, commands: SessionCommandService) {
         self.commands = commands
         self.model = model; self.statusPiP = statusPiP; self.sessions = model.sessions
-        self.liveActivities = model.liveActivities
     }
     private var visible: [AgentConversation] {
         sessions.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.preview.localizedCaseInsensitiveContains(search) }
@@ -67,7 +66,12 @@ struct ContentView: View {
             }
 
         }
-        .onOpenURL { url in model.openActivityURL(url) }
+        .onOpenURL { url in
+            if url == URL(string: "phoneagent://home") {
+                consumedActivityNavigationID = model.activityNavigation?.id
+                path = []; panel = nil
+            } else { model.openActivityURL(url) }
+        }
         .onChange(of: path) { old, new in
             for id in old where !new.contains(id) { model.discardConversationDraft(id) }
         }
@@ -79,22 +83,28 @@ struct ContentView: View {
             }
         }
         #endif
-        .onChange(of: model.activityNavigation, initial: true) { _, destination in
-            guard let destination else { return }
-            panel = nil
-            path = [destination.route.sessionID]
+        .onChange(of: model.activityNavigation, initial: true) { _, _ in
+            routeActivityNavigation()
         }
         .alert("实时活动链接", isPresented: Binding(get: { model.activityLinkError != nil }, set: { if !$0 { model.activityLinkError = nil } })) {
             Button("知道了") { model.activityLinkError = nil }
         } message: { Text(model.activityLinkError ?? "") }
-        .safeAreaInset(edge: .bottom) {
-            if let notice = liveActivities.notice { Text(notice).font(.caption).foregroundStyle(.secondary).padding(8) }
-        }
         .onChange(of: commands.pendingRoute, initial: true) { _, _ in routePreparedTask() }
         .onChange(of: model.running) { _, _ in routePreparedTask() }
         .onChange(of: model.stopping) { _, _ in routePreparedTask() }
-        .onChange(of: scenePhase) { _, phase in if phase == .active { routePreparedTask() } }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { routeActivityNavigation(); routePreparedTask() }
+        }
         .onChange(of: panel) { _, value in if value == nil { routePreparedTask() } }
+    }
+    private func routeActivityNavigation() {
+        // A completion can arrive while UIKit is still displaying another app.
+        // Keep its destination pending until this scene can mount the message UI.
+        guard scenePhase == .active, let destination = model.activityNavigation,
+              consumedActivityNavigationID != destination.id else { return }
+        consumedActivityNavigationID = destination.id
+        panel = nil
+        path = [destination.route.sessionID]
     }
     private func routePreparedTask() {
         guard scenePhase == .active, panel == nil, let id = commands.pendingRoute,

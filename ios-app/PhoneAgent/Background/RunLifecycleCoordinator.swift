@@ -153,11 +153,11 @@ extension RunCheckpointStorage {
         } catch { storageHealthy = false; backgroundStatus = "检查点无法读写；原文件保留，执行已禁用" }
     }
 
-    func begin(identity: RunIdentity, generation: UUID) throws {
-        guard foreground, storageHealthy, !ownsRun else { throw AppError.stopped }
+    func begin(identity: RunIdentity, generation: UUID, allowBackgroundStart: Bool = false) throws {
+        guard foreground || allowBackgroundStart, storageHealthy, !ownsRun else { throw AppError.stopped }
         activeToolBackgroundCapable = true
         checkpoint = RunCheckpoint(runID: identity.runID, conversationID: identity.conversationID, generation: generation)
-        try persist(); ownsRun = true; requestSegment()
+        try persist(); ownsRun = true; requestSegment(allowBackgroundStart: allowBackgroundStart)
         guard storageHealthy else { throw AppError.unavailable("检查点保存失败") }
         lastActivity = now()
         watchdog?.cancel()
@@ -169,8 +169,8 @@ extension RunCheckpointStorage {
             }
         } }
     }
-    private func requestSegment() {
-        guard foreground, checkpoint?.phase == .running else { return }
+    private func requestSegment(allowBackgroundStart: Bool = false) {
+        guard foreground || allowBackgroundStart, checkpoint?.phase == .running else { return }
         checkpoint?.segment += 1
         let id = identifierPrefix + "." + UUID().uuidString
         checkpoint?.segmentID = id

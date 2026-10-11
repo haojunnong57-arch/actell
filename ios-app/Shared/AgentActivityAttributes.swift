@@ -15,12 +15,22 @@ struct AgentActivityAttributes: ActivityAttributes {
         var updatedAt: Date
         // Optional preserves decoding of activities created before operation icons.
         var operation: Operation? = nil
+        // Mutable identity lets a foreground-created standby activity follow new runs.
+        var sessionID: UUID? = nil
+        var runID: UUID? = nil
+        var isDemo: Bool? = nil
+        func route(attributes: AgentActivityAttributes) -> AgentActivityRoute? {
+            guard phase != .standby else { return nil }
+            return AgentActivityRoute(sessionID: sessionID ?? attributes.sessionID,
+                                      runID: runID ?? attributes.runID, approvalID: approvalID)
+        }
         var symbol: String { phase.isTerminal ? phase.symbol : (operation?.symbol ?? phase.symbol) }
         var title: String {
             [.working, .executing].contains(phase) ? (operation?.title ?? phase.title) : phase.title
         }
         var compactTitle: String {
             switch phase {
+            case .standby: return "待命"
             case .thinking: return "思考"
             case .working, .executing: return operation?.compactTitle ?? "处理"
             case .awaitingApproval: return "确认"
@@ -85,12 +95,13 @@ struct AgentActivityAttributes: ActivityAttributes {
     }
 
     enum Phase: String, Codable, Hashable {
-        case thinking, working, awaitingApproval, approved, executing
+        case standby, thinking, working, awaitingApproval, approved, executing
         case completed, stopped, interrupted, blocked
 
         var isTerminal: Bool { [.completed, .stopped, .interrupted, .blocked].contains(self) }
         var title: String {
             switch self {
+            case .standby: return "后台待命"
             case .thinking: return "正在思考"
             case .working: return "正在处理"
             case .awaitingApproval: return "等待确认"
@@ -109,20 +120,21 @@ struct AgentActivityAttributes: ActivityAttributes {
             case .completed: return "checkmark.circle"
             case .stopped: return "stop.circle"
             case .interrupted, .blocked: return "exclamationmark.circle"
+            case .standby: return "sparkles"
             case .thinking: return "brain"
             case .working, .executing: return "gearshape"
             }
         }
         var detail: String {
             switch self {
+            case .standby: return "等待新任务"
             case .awaitingApproval: return "回到 App 查看详情并确认本次动作"
             case .approved: return "批准不等于已执行；请核对后续状态"
             case .executing: return "发送不代表成功，请核对设备结果"
-            case .interrupted: return "返回 App 查看记录；不会自动重试"
+            case .interrupted: return "返回 App 查看记录"
             case .stopped: return "如动作已发出，请核对设备"
-            case .completed: return ""
+            case .thinking, .working, .completed: return ""
             case .blocked: return "回到 App 查看原因"
-            default: return "任务执行中；采集或连接失效时停止"
             }
         }
     }
