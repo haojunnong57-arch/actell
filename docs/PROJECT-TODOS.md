@@ -245,3 +245,21 @@ API 格式选项移除 OpenAI 前缀，显示 `Chat Completions`、`Responses AP
 字段文案缩短为“API 密钥”。编辑已有供应商时，只检查同一配置 ID／规范化地址／供应商类型对应的钥匙串项目是否存在；`SecretStore.contains` 明确设置 kSecReturnData=false，只查询存在性，不将真实密钥回填到 UI。已保存且未输入替换值时显示固定 8 个圆点、正常 primary 文字色；聚焦后进入空白替换输入，未输入则失焦恢复掩码。显示圆点仅是覆盖层，不绑定到待保存值；空值保存继续保留原密钥，输入新值才替换，切换地址／类型不借用旧地址密钥状态。辅助功能分别报告未设置／已保存／已输入，不读取或朗读密钥内容。
 
 为独立验证 UI 状态和保存规则，新增可注入的供应商密钥写入／存在性检查；生产默认仍调用系统 SecretStore。单元测试及 DEBUG 专用 `--ui-testing --ui-test-provider-key` 使用临时内存合成值，不访问真实凭据。首轮直接依赖钥匙串的新增用例在保存步骤失败，证据 `core.bLjVkE`；随后 DEBUG fixture 插入位置导致编译失败，已修正，证据 `core.IWvPCC`。最终核心 **360 tests，0 失败**：`.build/validation/core.ShPZBz/Tests.xcresult`；定向 UI **2 tests，0 失败**：`provider-key-mask-ui.xcresult`／`provider-key-mask-ui.log`，覆盖保存后样式、替换、空值保留、地址变更及新建供应商。最终无签名 iPhoneOS **BUILD SUCCEEDED**：`provider-key-mask-final-iphoneos.log`。合成密钥掩码截图导出并检查：`provider-key-mask-screenshots/manifest.json`。`git diff --check` 通过。真实钥匙串存在性显示未做签名真机验证；未调用线上 API、未重跑完整 UI／USB、未提交／推送，保留其他已有修改。
+
+
+### 2026-10-11 聊天模型菜单与最后选择
+
+输入框模型文字后紧邻下拉箭头（4 点间距）。菜单的供应商与模型选中对号放到文字右侧；原生菜单会将独立 Image 移到前方，因此使用文案末尾的对号，已通过截图验证。移除“其他模型…”和聊天内“管理供应商”入口，保留“浏览全部模型”。前 12 个模型以外的当前选择追加到菜单，避免最后选择未在目录预览中出现。
+
+ProviderStore 的兼容 v1 归档新增可选 lastSelection，仅保存供应商 UUID 与模型 ID；显式切换后持久化，重启／新建会话继承，打开已绑定旧会话不覆盖偏好或旧会话选择。无记录或供应商已移除时回退到首个可用供应商；没有供应商时保持未选择。供应商默认模型配置不被会话改选覆盖，运行中及不存在的会话不能改写选择。旧版无该字段的归档保持可读，ChatGPT 订阅和其他现有配置逻辑保留。
+
+核心 **397 tests，0 失败**：`.build/validation/core.lZgO7e/Tests.xcresult`，新增偏好持久化、重启恢复、删除／恢复回退、旧会话隔离及忙碌会话拒绝改选验证。最终定向 UI **2 tests，0 失败**：`chat-model-choice-ui-verified.xcresult`／`chat-model-choice-ui-verified.log`，覆盖右侧对号、移除入口、切换模型、新会话继承及浏览全部模型；截图导出并检查：`chat-model-choice-verified-shots/manifest.json`。最终无签名 iPhoneOS **BUILD SUCCEEDED**：`chat-model-choice-verified-iphoneos.log`。首轮／第二轮 UI 分别因空列表与有会话列表的新建按钮标识不同、输入框焦点过渡需要完成第二次点击而失败，已修正测试，保留 `chat-model-choice-ui.xcresult` 与 `chat-model-choice-ui-final.xcresult` 证据；第二轮截图也证实原生菜单会重排独立图标，最终方案已修正。现行控制页导航断言同步为默认 VPN 回环控制，不改设备控制行为。
+
+`git diff --check` 通过。验证使用隔离模拟器与本地 fixture，未调用线上模型 API、未作签名真机或完整 UI／USB 验收，未提交／推送。
+
+
+### 2026-10-11 ChatGPT 订阅登录按钮显示
+
+订阅供应商编辑页仅在连接状态为 disconnected 时显示“使用 ChatGPT 登录”，已登录后隐藏。退出仍保留账号引用，但状态变为 disconnected，因此按钮重新出现；取消登录后同样可重新开始。未改账号、授权或请求逻辑。现有签名 mock 登录／退出 UI 用例更新为断言登录后按钮不存在、退出后恢复。
+
+核心 **397 tests，0 失败**：`.build/validation/core.rdArEH/Tests.xcresult`。最终定向 UI **2 tests，0 失败**：`chatgpt-hide-login-ui-final.xcresult`／`chatgpt-hide-login-ui-final.log`，覆盖登录成功后隐藏、模型展示、退出后恢复及取消登录。无签名 iPhoneOS **BUILD SUCCEEDED**：`chatgpt-hide-login-final-iphoneos.log`。首轮使用 selected 账号引用判断，在退出后恢复按钮断言失败（`chatgpt-hide-login-ui.xcresult`）；检查确认退出保留该引用，已改为依据实际连接状态。`git diff --check` 通过。全部登录验证使用本地 mock，未进行真实账号授权、线上 API 或签名真机验证，未提交／推送，保留此前未提交改动。

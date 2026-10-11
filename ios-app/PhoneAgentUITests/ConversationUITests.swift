@@ -271,18 +271,21 @@ import XCTest
         if !picker.exists { app.textViews["messageInput"].tap() }
         let selectedProvider = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "model-b"), object: picker)
         XCTAssertEqual(XCTWaiter.wait(for: [selectedProvider], timeout: 5), .completed)
-        picker.tap(); app.buttons["其他模型…"].tap()
-        let input = app.alerts.textFields.firstMatch
-        XCTAssertTrue(input.waitForExistence(timeout: 3))
-        input.tap(); input.tap(); input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 7) + "model-custom")
-        XCTAssertEqual(input.value as? String, "model-custom")
-        // Finish keyboard editing before tapping the alert action; iOS 27
-        // relocates this alert while the software keyboard is visible.
-        input.typeText("\n")
-        if app.alerts.buttons["使用"].exists { app.alerts.buttons["使用"].tap() }
+        picker.tap()
+        XCTAssertFalse(app.buttons["其他模型…"].exists)
+        XCTAssertFalse(app.buttons["管理供应商"].exists)
+        XCTAssertTrue(app.buttons["Fixture Two  ✓"].exists)
+        XCTAssertTrue(app.buttons["model-b  ✓"].exists)
+        capture("conversation-model-menu")
+        app.buttons["model-b-alt"].tap()
         app.textViews["messageInput"].tap()
-        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "model-custom"), object: picker)
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "model-b-alt"), object: picker)
         XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["newConversationToolbar"].tap()
+        app.textViews["messageInput"].tap(); app.textViews["messageInput"].tap()
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        XCTAssertTrue(picker.label.contains("model-b-alt"))
         capture("conversation-model")
         XCTAssertFalse(app.buttons["deviceControls"].exists)
         XCTAssertFalse(app.buttons["设置"].exists)
@@ -294,7 +297,7 @@ import XCTest
         XCTAssertFalse(app.buttons["deviceControls"].exists)
         app.buttons["设置"].tap()
         app.buttons["esp32ControlSettings"].tap()
-        XCTAssertTrue(app.navigationBars["ESP32 控制"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["VPN 回环控制"].waitForExistence(timeout: 5))
     }
     func testComposerActivationPreservesVisibleBottomAndMovesActionsBelowText() {
         continueAfterFailure = false
@@ -538,7 +541,7 @@ import XCTest
         let displayedAccount = account.label + " " + (account.value as? String ?? "")
         XCTAssertTrue(displayedAccount.contains("local-fixture@example.invalid"), app.debugDescription)
         XCTAssertFalse(displayedAccount.contains(" · "), displayedAccount)
-        XCTAssertEqual(login.label, "使用 ChatGPT 登录")
+        XCTAssertFalse(login.exists)
         XCTAssertFalse(app.buttons["启用 ChatGPT 套餐额度"].exists)
         XCTAssertFalse(app.buttons["连接其他账户／工作区"].exists)
         XCTAssertFalse(app.staticTexts["ChatGPT 身份已连接；请核对订阅权限和模型"].exists)
@@ -554,6 +557,7 @@ import XCTest
         let logout = app.buttons["chatGPTDisconnect"]; XCTAssertTrue(logout.waitForExistence(timeout: 5)); logout.tap()
         XCTAssertTrue(app.staticTexts["已退出，服务器已确认结束此刷新会话。"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["chatGPTConnectionStatus"].label, "未连接 ChatGPT")
+        XCTAssertTrue(login.waitForExistence(timeout: 5))
         capture("chatgpt-local-logout")
     }
     func testSubscriptionBadSignatureMockIsNeverConnected() {

@@ -69,13 +69,19 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
 }
 
 @MainActor final class ProviderStore: ObservableObject {
+    struct Selection: Codable, Equatable {
+        var providerID: UUID
+        var model: String
+    }
     private struct Archive: Codable {
         var version = 1
         var profiles: [ProviderProfile]
         var removed: [ProviderProfile]
+        var lastSelection: Selection?
     }
     @Published private(set) var profiles: [ProviderProfile] = []
     @Published private(set) var removed: [ProviderProfile] = []
+    @Published private(set) var lastSelection: Selection?
     @Published private(set) var warning: String?
     private let defaults: UserDefaults?
     private var writable = true
@@ -87,6 +93,7 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
                 let saved = try JSONDecoder().decode(Archive.self, from: data)
                 guard saved.version == 1 else { throw AppError.invalid("未知供应商配置版本") }
                 profiles = saved.profiles; removed = saved.removed
+                lastSelection = saved.lastSelection
                 for index in profiles.indices { profiles[index].selectDefaultModelIfNeeded() }
             } else if let data = defaults?.data(forKey: "providerSettings") {
                 let legacy = try JSONDecoder().decode(ProviderSettings.self, from: data)
@@ -99,6 +106,16 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
     func profile(_ id: UUID?) -> ProviderProfile? {
         guard let id else { return profiles.first }
         return profiles.first { $0.id == id }
+    }
+    var defaultSelection: (profile: ProviderProfile, model: String)? {
+        if let lastSelection, let profile = profile(lastSelection.providerID) {
+            return (profile, lastSelection.model.isEmpty ? profile.settings.model : lastSelection.model)
+        }
+        return profiles.first.map { ($0, $0.settings.model) }
+    }
+    func rememberSelection(providerID: UUID, model: String) throws {
+        guard profile(providerID) != nil else { return }
+        try persist(profiles: profiles, removed: removed, selection: Selection(providerID: providerID, model: model))
     }
     func prepared(_ draft: ProviderProfile) throws -> ProviderProfile {
         guard writable else { throw AppError.unavailable(warning ?? "配置不可写") }
@@ -136,22 +153,23 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
         var next = profiles
         if let index = next.firstIndex(where: { $0.id == value.id }) { next[index] = value }
         else { next.append(value) }
-        try persist(profiles: next, removed: removed)
+        try persist(profiles: next, removed: removed, selection: lastSelection)
     }
     func remove(_ id: UUID) throws {
         guard let profile = profiles.first(where: { $0.id == id }) else { return }
-        try persist(profiles: profiles.filter { $0.id != id }, removed: removed.filter { $0.id != id } + [profile])
+        try persist(profiles: profiles.filter { $0.id != id }, removed: removed.filter { $0.id != id } + [profile], selection: lastSelection)
     }
     func restore(_ id: UUID) throws {
         guard var profile = removed.first(where: { $0.id == id }) else { return }
         profile.selectDefaultModelIfNeeded()
-        try persist(profiles: profiles + [profile], removed: removed.filter { $0.id != id })
+        try persist(profiles: profiles + [profile], removed: removed.filter { $0.id != id }, selection: lastSelection)
     }
-    private func persist(profiles: [ProviderProfile], removed: [ProviderProfile]) throws {
+    private func persist(profiles: [ProviderProfile], removed: [ProviderProfile], selection: Selection? = nil) throws {
         guard writable else { throw AppError.unavailable(warning ?? "配置不可写") }
-        let data = try JSONEncoder().encode(Archive(profiles: profiles, removed: removed))
+        let data = try JSONEncoder().encode(Archive(profiles: profiles, removed: removed, lastSelection: selection))
         defaults?.set(data, forKey: Self.storageKey)
         self.profiles = profiles; self.removed = removed
+        self.lastSelection = selection
     }
 }
 

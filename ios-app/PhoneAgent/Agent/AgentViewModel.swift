@@ -187,8 +187,8 @@ struct AgentRunServices {
         guard sessions.conversation(id) != nil else { return }
         selectedConversationID = id
         let worker = executionModel(for: id)
-        if sessions.conversation(id)?.providerID == nil, let profile = providers.profiles.first {
-            sessions.selectProvider(profile.id, model: profile.settings.model, in: id)
+        if sessions.conversation(id)?.providerID == nil, let selection = providers.defaultSelection {
+            sessions.selectProvider(selection.profile.id, model: selection.model, in: id)
         }
         if !worker.running && !worker.stopping {
             worker.mode = sessions.conversation(id)?.mode ?? .demo
@@ -221,12 +221,18 @@ struct AgentRunServices {
         sessions.conversation(conversationID)?.modelID ?? selectedProvider(in: conversationID)?.settings.model ?? ""
     }
     func selectProvider(_ id: UUID, in conversationID: UUID) {
-        guard !isRunning(in: conversationID), existingExecutionModel(for: conversationID)?.stopping != true, let profile = providers.profile(id) else { return }
+        guard sessions.conversation(conversationID) != nil, sessions.activeRuns[conversationID] == nil,
+              !isRunning(in: conversationID), existingExecutionModel(for: conversationID)?.stopping != true, let profile = providers.profile(id) else { return }
         sessions.selectProvider(id, model: profile.settings.model, in: conversationID)
+        do { try providers.rememberSelection(providerID: id, model: profile.settings.model) }
+        catch { errorMessage = Self.safeError(error) }
     }
     func selectModel(_ model: String, in conversationID: UUID) {
-        guard !isRunning(in: conversationID), existingExecutionModel(for: conversationID)?.stopping != true, let profile = selectedProvider(in: conversationID) else { return }
+        guard sessions.conversation(conversationID) != nil, sessions.activeRuns[conversationID] == nil,
+              !isRunning(in: conversationID), existingExecutionModel(for: conversationID)?.stopping != true, let profile = selectedProvider(in: conversationID) else { return }
         sessions.selectProvider(profile.id, model: model, in: conversationID)
+        do { try providers.rememberSelection(providerID: profile.id, model: model) }
+        catch { errorMessage = Self.safeError(error) }
     }
     @discardableResult func saveProvider(_ draft: ProviderProfile, key: String) -> Bool {
         guard !appOwner.hasBusySessions else { return false }

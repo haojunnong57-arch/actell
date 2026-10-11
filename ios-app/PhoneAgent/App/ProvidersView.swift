@@ -134,8 +134,10 @@ private struct ProviderEditor: View {
                         if let account = signIn.accounts.first(where: { $0.id == signIn.selected }) {
                             LabeledContent("登录账号", value: account.label).accessibilityIdentifier("chatGPTAccount")
                         }
-                        Button("使用 ChatGPT 登录") { connect() }
-                            .disabled(signIn.busy || model.hasBusySessions).accessibilityIdentifier("chatGPTSignIn")
+                        if connectionStatus == .disconnected {
+                            Button("使用 ChatGPT 登录") { connect() }
+                                .disabled(signIn.busy || model.hasBusySessions).accessibilityIdentifier("chatGPTSignIn")
+                        }
                         if signIn.selected != nil {
                             Button("退出此账户", role: .destructive) { Task { await signIn.disconnect(profileID: profile.id); profile.catalog = nil; profile.settings.model = ""; profile.models = []; connectedAccountChanged(); _ = model.saveProvider(profile, key: "") } }
                                 .disabled(model.hasBusySessions).accessibilityIdentifier("chatGPTDisconnect")

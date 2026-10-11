@@ -3,6 +3,53 @@ import SwiftAgentKit
 @testable import PhoneAgent
 
 @MainActor final class AgentPresentationTests: XCTestCase {
+    func testLastModelChoiceDefaultsNewSessionsWithoutChangingExistingSessions() throws {
+        let providers = ProviderStore(defaults: nil)
+        let first = ProviderProfile(name: "First", settings: .init(model: "first"))
+        let second = ProviderProfile(name: "Second", settings: .init(model: "second"))
+        try providers.save(first); try providers.save(second)
+        let sessions = ConversationStore(inMemory: true)
+        let model = AgentViewModel(sessions: sessions, loadPersistentState: false, providers: providers)
+        let old = model.createConversation(mode: .live)
+        XCTAssertEqual(model.selectedProvider(in: old)?.id, first.id)
+        let chosen = model.createConversation(mode: .live)
+        model.selectProvider(second.id, in: chosen)
+        model.selectModel("custom-model", in: chosen)
+        model.selectConversation(old)
+        XCTAssertEqual(model.selectedModel(in: old), "first")
+        let fresh = model.createConversation(mode: .live)
+        XCTAssertEqual(model.selectedProvider(in: fresh)?.id, second.id)
+        XCTAssertEqual(model.selectedModel(in: fresh), "custom-model")
+        XCTAssertEqual(providers.profile(second.id)?.settings.model, "second")
+        model.selectModel("ignored", in: UUID())
+        let run = try XCTUnwrap(sessions.begin(in: fresh, query: "busy"))
+        model.selectProvider(first.id, in: fresh)
+        model.selectModel("ignored", in: fresh)
+        XCTAssertEqual(providers.lastSelection, .init(providerID: second.id, model: "custom-model"))
+        sessions.finish(run, phase: .completed, summary: "")
+    }
+    func testLastSelectionSurvivesReloadAndRemovedProviderFallsBack() throws {
+        let defaults = UserDefaults(suiteName: "last-selection-\(UUID())")!
+        defer { defaults.removeObject(forKey: ProviderStore.storageKey) }
+        let store = ProviderStore(defaults: defaults)
+        let first = ProviderProfile(settings: .init(model: "first"))
+        let second = ProviderProfile(settings: .init(model: "second"))
+        try store.save(first); try store.save(second)
+        try store.rememberSelection(providerID: second.id, model: "outside-catalog")
+        let restored = ProviderStore(defaults: defaults)
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false, providers: restored)
+        let session = model.createConversation(mode: .live)
+        XCTAssertEqual(model.selectedProvider(in: session)?.id, second.id)
+        XCTAssertEqual(model.selectedModel(in: session), "outside-catalog")
+        try restored.remove(second.id)
+        XCTAssertEqual(restored.defaultSelection?.profile.id, first.id)
+        try restored.restore(second.id)
+        XCTAssertEqual(restored.defaultSelection?.model, "outside-catalog")
+        try restored.rememberSelection(providerID: second.id, model: "")
+        XCTAssertEqual(restored.defaultSelection?.model, "second")
+        try restored.remove(first.id); try restored.remove(second.id)
+        XCTAssertNil(restored.defaultSelection)
+    }
     func testSavedProviderKeyPresenceIsScopedAndEmptySavePreservesSyntheticKey() throws {
         var keys: [String: String] = [:]
         let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,

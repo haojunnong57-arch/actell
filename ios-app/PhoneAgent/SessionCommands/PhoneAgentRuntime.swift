@@ -113,7 +113,7 @@ import Foundation
             if arguments.contains("--ui-test-composer-models") {
                 let model = AgentViewModel(sessions: sessions, loadPersistentState: false)
                 try? model.providers.save(ProviderProfile(name: "Fixture One", settings: .init(baseURL: "https://fixture.invalid/v1", model: "model-a")))
-                try? model.providers.save(ProviderProfile(name: "Fixture Two", settings: .init(baseURL: "https://fixture.invalid/v1", model: "model-b")))
+                try? model.providers.save(ProviderProfile(name: "Fixture Two", settings: .init(baseURL: "https://fixture.invalid/v1", model: "model-b"), models: ["model-b-alt"]))
                 return model
             }
             if arguments.contains("--ui-test-composer-history") {
