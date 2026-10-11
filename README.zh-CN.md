@@ -4,6 +4,8 @@
 
 **Vibe Coding 项目，技术原型初期，用于思路分享。** PhoneAgent（执言）探索让 iPhone 上的 Agent 调用 CoreDevice 服务，获取屏幕画面并执行点击、拖动。当前默认使用外部 VPN 回环的免 ESP32 路线，也可选择 ESP32-S3 USB NCM 转发；尚不具备生产可用性或长期后台稳定性保证。
 
+https://github.com/user-attachments/assets/2aefc1a7-bdf1-42e7-83b9-51bd879256c8
+
 App 使用 [SwiftAgentKit](https://github.com/ayman3000/SwiftAgentKit)、[MacPaw/OpenAI](https://github.com/MacPaw/OpenAI) 和 [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui)。开发者服务后端复用 [Device Hub](https://github.com/JaviSoto/device-hub-ios) 的补丁版 [idevice](https://github.com/jkcoxson/idevice)，协议实现参考 [pymobiledevice3](https://github.com/doronz88/pymobiledevice3)；具体复用边界见下文。
 
 ## 从 ESP32 外设到 CoreDevice
