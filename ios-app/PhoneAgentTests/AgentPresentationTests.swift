@@ -3,6 +3,24 @@ import SwiftAgentKit
 @testable import PhoneAgent
 
 @MainActor final class AgentPresentationTests: XCTestCase {
+    func testConversationDraftInheritsChoiceAndCanBeDiscardedWithoutHistory() throws {
+        let providers = ProviderStore(defaults: nil)
+        let profile = ProviderProfile(settings: .init(model: "default"))
+        try providers.save(profile)
+        try providers.rememberSelection(providerID: profile.id, model: "last-selected")
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false, providers: providers)
+        for _ in 0..<3 {
+            let draft = model.createConversationDraft(mode: .live)
+            XCTAssertEqual(model.selectedModel(in: draft), "last-selected")
+            XCTAssertTrue(model.sessions.conversations.isEmpty)
+            model.discardConversationDraft(draft)
+            XCTAssertNil(model.sessions.conversation(draft))
+            XCTAssertNil(model.existingExecutionModel(for: draft))
+        }
+        let saved = model.createConversation(mode: .live)
+        model.discardConversationDraft(saved)
+        XCTAssertEqual(model.sessions.conversations.map(\.id), [saved])
+    }
     func testLastModelChoiceDefaultsNewSessionsWithoutChangingExistingSessions() throws {
         let providers = ProviderStore(defaults: nil)
         let first = ProviderProfile(name: "First", settings: .init(model: "first"))

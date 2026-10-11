@@ -5,6 +5,49 @@ import ProviderCore
 @testable import PhoneAgent
 
 @MainActor final class ConversationTests: XCTestCase {
+    func testUnsentDraftStaysOutOfHistoryAndEveryArchiveWrite() throws {
+        let directory = try temporaryDirectory()
+        let store = ConversationStore(directory: directory)
+        let existing = store.create(mode: .live)
+        let draft = store.createDraft(mode: .live)
+        store.setDraft("尚未发送", in: draft)
+        store.selectProvider(UUID(), model: "chosen", in: draft)
+        store.saveNow()
+        XCTAssertEqual(store.conversations.map(\.id), [existing])
+        XCTAssertEqual(store.conversation(draft)?.draft, "尚未发送")
+        XCTAssertNil(ConversationStore(directory: directory).conversation(draft))
+        let prepared = try store.prepare(SessionCommand(.prepare("Siri 草稿")), task: "Siri 草稿")
+        XCTAssertNotNil(ConversationStore(directory: directory).conversation(prepared))
+        XCTAssertNil(ConversationStore(directory: directory).conversation(draft))
+        store.discardDraft(draft)
+        XCTAssertNil(store.conversation(draft))
+        store.discardDraft(existing)
+        XCTAssertNotNil(store.conversation(existing))
+    }
+    func testFirstMessagePromotesDraftWithSameIdentityAndAttachments() throws {
+        let directory = try temporaryDirectory()
+        let store = ConversationStore(directory: directory)
+        let draft = store.createDraft(mode: .live), provider = UUID()
+        let attachment = StoredAttachment(id: UUID(), conversationID: draft, name: "fixture.txt", kind: .text,
+            mimeType: "text/plain", byteCount: 3, digest: "mock")
+        store.selectProvider(provider, model: "selected-model", in: draft)
+        store.addDraftAttachment(attachment, in: draft)
+        XCTAssertEqual(store.referencedAttachments, [attachment])
+        XCTAssertTrue(store.conversations.isEmpty)
+        XCTAssertNil(ConversationStore(directory: directory).conversation(draft))
+        let run = try XCTUnwrap(store.begin(in: draft, query: "第一条消息", attachments: [attachment]))
+        XCTAssertFalse(store.isDraft(draft))
+        XCTAssertEqual(store.conversations.map(\.id), [draft])
+        store.discardDraft(draft)
+        XCTAssertNotNil(store.conversation(draft))
+        XCTAssertNil(store.begin(in: draft, query: "重复"))
+        store.finish(run, phase: .completed, summary: "")
+        let restored = try XCTUnwrap(ConversationStore(directory: directory).conversation(draft))
+        XCTAssertEqual(restored.title, "第一条消息")
+        XCTAssertEqual(restored.providerID, provider)
+        XCTAssertEqual(restored.modelID, "selected-model")
+        XCTAssertEqual(restored.messages.first?.attachments, [attachment])
+    }
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

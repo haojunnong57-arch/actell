@@ -110,6 +110,10 @@ import Foundation
                 }
                 return model
             }
+            if arguments.contains("--ui-test-new-conversation") {
+                return AgentViewModel(sessions: sessions, loadPersistentState: false,
+                    runServices: AgentRunServices(provider: ReasoningFixtureProvider(), bridge: UnavailableBridge()))
+            }
             if arguments.contains("--ui-test-composer-models") {
                 let model = AgentViewModel(sessions: sessions, loadPersistentState: false)
                 try? model.providers.save(ProviderProfile(name: "Fixture One", settings: .init(baseURL: "https://fixture.invalid/v1", model: "model-a")))

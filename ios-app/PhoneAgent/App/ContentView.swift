@@ -68,6 +68,9 @@ struct ContentView: View {
 
         }
         .onOpenURL { url in model.openActivityURL(url) }
+        .onChange(of: path) { old, new in
+            for id in old where !new.contains(id) { model.discardConversationDraft(id) }
+        }
         #if DEBUG
         .task {
             if ProcessInfo.processInfo.arguments.contains("--task-pip-probe"),
@@ -101,6 +104,6 @@ struct ContentView: View {
         }
     }
     private func createConversation() {
-        path.append(model.createConversation(mode: .live))
+        path.append(model.createConversationDraft(mode: .live))
     }
 }

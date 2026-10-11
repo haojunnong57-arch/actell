@@ -182,6 +182,18 @@ struct AgentRunServices {
     @discardableResult func createConversation(mode: RunMode) -> UUID {
         let id = sessions.create(mode: mode); selectConversation(id); return id
     }
+    @discardableResult func createConversationDraft(mode: RunMode) -> UUID {
+        let id = sessions.createDraft(mode: mode); selectConversation(id); return id
+    }
+    func discardConversationDraft(_ id: UUID) {
+        if let runtimeOwner { runtimeOwner.discardConversationDraft(id); return }
+        guard sessions.isDraft(id), !isRunning(in: id), existingExecutionModel(for: id)?.stopping != true else { return }
+        sessions.discardDraft(id)
+        if selectedConversationID == id { selectedConversationID = nil }
+        if primarySessionID == id { primarySessionID = nil }
+        sessionSubscriptions.removeValue(forKey: id)
+        sessionRuntimes.removeValue(forKey: id)
+    }
     func selectConversation(_ id: UUID) {
         if let runtimeOwner { runtimeOwner.selectConversation(id); return }
         guard sessions.conversation(id) != nil else { return }

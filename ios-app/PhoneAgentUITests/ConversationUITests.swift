@@ -1,6 +1,32 @@
 import XCTest
 
 @MainActor final class ConversationUITests: XCTestCase {
+    func testUnsentNewConversationStaysOutOfHistoryUntilFirstSend() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-new-conversation"]
+        app.launch()
+        let newConversation = app.buttons["newConversation"]
+        XCTAssertTrue(newConversation.waitForExistence(timeout: 5))
+        newConversation.tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(newConversation.waitForExistence(timeout: 5))
+        newConversation.tap()
+        let input = app.textViews["messageInput"]
+        input.tap(); input.tap(); input.typeText("未发送草稿")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(newConversation.waitForExistence(timeout: 5))
+        newConversation.tap()
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertFalse((input.value as? String ?? "").contains("未发送草稿"))
+        input.tap(); input.tap(); input.typeText("保存第一条消息")
+        app.buttons["sendMessage"].tap()
+        XCTAssertTrue(app.staticTexts["合成答复。"].waitForExistence(timeout: 10))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertFalse(newConversation.exists)
+        XCTAssertTrue(app.staticTexts["保存第一条消息"].waitForExistence(timeout: 5))
+        capture("first-message-creates-history")
+    }
     private func launch(demo: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()

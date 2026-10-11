@@ -263,3 +263,10 @@ ProviderStore 的兼容 v1 归档新增可选 lastSelection，仅保存供应商
 订阅供应商编辑页仅在连接状态为 disconnected 时显示“使用 ChatGPT 登录”，已登录后隐藏。退出仍保留账号引用，但状态变为 disconnected，因此按钮重新出现；取消登录后同样可重新开始。未改账号、授权或请求逻辑。现有签名 mock 登录／退出 UI 用例更新为断言登录后按钮不存在、退出后恢复。
 
 核心 **397 tests，0 失败**：`.build/validation/core.rdArEH/Tests.xcresult`。最终定向 UI **2 tests，0 失败**：`chatgpt-hide-login-ui-final.xcresult`／`chatgpt-hide-login-ui-final.log`，覆盖登录成功后隐藏、模型展示、退出后恢复及取消登录。无签名 iPhoneOS **BUILD SUCCEEDED**：`chatgpt-hide-login-final-iphoneos.log`。首轮使用 selected 账号引用判断，在退出后恢复按钮断言失败（`chatgpt-hide-login-ui.xcresult`）；检查确认退出保留该引用，已改为依据实际连接状态。`git diff --check` 通过。全部登录验证使用本地 mock，未进行真实账号授权、线上 API 或签名真机验证，未提交／推送，保留此前未提交改动。
+
+
+### 2026-10-11 新建聊天在首次发送前保持临时草稿
+
+聊天首页的新建入口改用 createConversationDraft。ConversationStore 内存 records 保存草稿与历史，公开 conversations 与所有归档写入仅包含正式历史，临时 draftIDs 不编码到磁盘；输入、供应商／模型切换、附件添加以及其他会话保存不会将未发送草稿落盘。首次 begin 原地转为正式会话，保持会话 UUID、模型选择、附件归属并保存首条用户消息。返回或导航替换时只丢弃未发送草稿并移除对应空闲运行容器；已经发送或运行中的会话保留。首次发送前的配置拒绝／取消不会留下正式会话。Siri prepare 的显式持久化路径和原有历史／授权／并发／checkpoint 行为保留。草稿附件在编辑期间纳入资源引用保护；返回丢弃后按现有孤立附件清理机制处理。
+
+新增 3 项核心测试覆盖未发送草稿从历史／重启／Siri 原子写入中排除，首次消息保存时保持 UUID／供应商／模型／附件，避免重复 begin，以及重复打开／丢弃草稿、默认模型继承与运行容器释放。默认核心 **400 tests，0 失败**：`.build/validation/core.xpTZgz/Tests.xcresult`。定向 UI **2 tests，0 失败**：`transient-conversation-ui.xcresult`／`transient-conversation-ui.log`，覆盖空白返回、输入但未发送返回、新草稿清空、首条离线回复后只出现一条历史，以及模型选择与默认继承回归。截图导出并检查：`transient-conversation-ui-shots/manifest.json`。无签名 iPhoneOS **BUILD SUCCEEDED**：`transient-conversation-iphoneos.log`。`git diff --check` 通过。未调用线上模型 API、未做签名真机或完整 UI／USB 验收，未提交／推送。
