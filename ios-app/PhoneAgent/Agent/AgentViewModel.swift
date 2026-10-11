@@ -112,7 +112,7 @@ struct AgentRunServices {
     private var foreground = true
     private var healthObserver: UUID?
     private var agent: Agent?
-    private var provider: PrivateVisionProvider?
+    private var provider: (any CancellableModelProvider)?
     private var coordinator: ActionCoordinator?
     private var bridge: (any DeviceBridge)?
     private var liveBridge: TLSBridge?
@@ -231,6 +231,9 @@ struct AgentRunServices {
     @discardableResult func saveProvider(_ draft: ProviderProfile, key: String) -> Bool {
         guard !appOwner.hasBusySessions else { return false }
         do {
+            if draft.providerKind == .chatGPTSubscription, !key.isEmpty {
+                throw AppError.invalid("ChatGPT 订阅不接收 API 密钥")
+            }
             let value = try providers.prepared(draft)
             if !key.isEmpty {
                 try writeProviderKey(key, value.keyAccount)
@@ -256,6 +259,7 @@ struct AgentRunServices {
     }
     func discoveryKey(for draft: ProviderProfile, typedKey: String) throws -> String {
         guard !appOwner.hasBusySessions else { throw AppError.stopped }
+        if draft.providerKind == .chatGPTSubscription { throw AppError.unavailable(ChatGPTSubscriptionPolicy.mobileLoginNotice) }
         if !typedKey.isEmpty { return typedKey }
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--ui-testing") { return "" }
@@ -529,11 +533,17 @@ struct AgentRunServices {
                 runSettings = profile.settings
                 runSettings.model = selectedModel(in: conversationID)
                 try profile.requireInference(model: runSettings.model)
+                let cloud: any CancellableModelProvider
+                if profile.providerKind == .chatGPTSubscription {
+                    guard let account = profile.chatGPTAccountReference else { throw ChatGPTAuthError.disconnected }
+                    cloud = try ChatGPTSubscriptionProvider(profile: profile, model: runSettings.model, account: account, runID: token, checkpointFile: try Self.providerCheckpointFile(runID: token))
+                } else {
                 let key = try SecretStore.load(profile.keyAccount) ?? ""
-                let cloud = try PrivateVisionProvider(settings: runSettings, apiKey: key, limits: limits,
+                cloud = try PrivateVisionProvider(settings: runSettings, apiKey: key, limits: limits,
                     providerKind: profile.providerKind, parameters: profile.parameters(for: runSettings.model), metadata: profile.metadata(for: runSettings.model),
                     inferenceAPI: profile.inferenceAPI, contextPolicy: profile.contextPolicy, accountReference: profile.keyAccount, runID: token,
                     checkpointFile: try Self.providerCheckpointFile(runID: token))
+                }
                 let usbInput = appOwner.usbClient.map { client in
                     LiveDeviceBridgeRouter.USBInput(transport: client, health: client.health,
                                                    supportsHID: appOwner.usbConnectionStatus == .ready(hid: true))
@@ -634,6 +644,7 @@ struct AgentRunServices {
                 callbacks.afterTool = { [weak self, weak runner] call, result, _ in
                     // Do not leave receipts behind the streamed-text observer
                     // queue. Commit the result before the next model request.
+                    if result.isError { LLMDiagnostics.toolFailure(result.result, attempt: token) }
                     await self?.recordToolResult(call, result: result, generation: token)
                     if let runner, !result.images.isEmpty {
                         runner.conversation.rewriteMessages { original in
@@ -647,7 +658,7 @@ struct AgentRunServices {
                     }
                     return nil
                 }
-                try await runner.setLogger(AgentLogger(handler: { _, _ in }))
+                try await runner.setLogger(AgentLogger(minLevel: .warning, handler: { _, message in LLMDiagnostics.runnerWarning(message) }))
                 try await runner.setCallbacks(callbacks)
                 var finalText = ""
                 for try await event in runner.runStreamingTagged(query + prepared.text, images: prepared.images) {
@@ -677,7 +688,7 @@ struct AgentRunServices {
             } catch {
                 events.continuation.finish(); await eventTask.value
                 guard let self, self.generation == token else { await action.stop(); return }
-                await self.closeRun(.blocked, result: Self.safeError(error), bridge: selectedBridge, generation: token)
+                await self.closeRun(.blocked, result: Self.runFailure(error, provider: selectedProvider), bridge: selectedBridge, generation: token)
             }
         }
         persist(); return true
@@ -1035,7 +1046,17 @@ struct AgentRunServices {
         do { guard let store else { return }; try store.save(records) }
         catch { storageWarning = "本地任务保存失败；当前状态未确认持久化" }
     }
-    private static func safeError(_ error: Error) -> String {
+    // The runner may wrap provider errors. Use only the dedicated adapter's
+    // locally generated summary, never arbitrary provider/server text.
+    static func runFailure(_ error: Error, provider: any ModelProvider) -> String {
+        if let message = (provider as? ChatGPTSubscriptionProvider)?.safeFailureMessage {
+            LLMDiagnostics.log(error, stage: "agent.run")
+            return message
+        }
+        return safeError(error, stage: "agent.run")
+    }
+    private static func safeError(_ error: Error, stage: String = "app.failure") -> String {
+        LLMDiagnostics.log(error, stage: stage)
         if let e = error as? AppError { return e.localizedDescription }
         if let e = error as? ModelError, case .invalidRequest(let message) = e { return message }
         if error is CancellationError { return "运行已取消" }

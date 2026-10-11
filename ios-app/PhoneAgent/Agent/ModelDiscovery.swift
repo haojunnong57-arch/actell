@@ -54,6 +54,7 @@ final class ModelDiscoveryClient: @unchecked Sendable {
         case .anthropic: components.queryItems = [.init(name: "limit", value: "100")] + (cursor.map { [.init(name: "after_id", value: $0)] } ?? [])
         case .gemini: components.queryItems = [.init(name: "pageSize", value: "100")] + (cursor.map { [.init(name: "pageToken", value: $0)] } ?? [])
         case .openRouter: components.queryItems = [.init(name: "limit", value: "100"), .init(name: "offset", value: String(offset))]
+        case .chatGPTSubscription: throw AppError.unavailable(ChatGPTSubscriptionPolicy.mobileLoginNotice)
         case .openAI: if let cursor { components.queryItems = [.init(name: "after", value: cursor)] }
         case .ollama: break
         }
@@ -100,7 +101,7 @@ final class ModelDiscoveryClient: @unchecked Sendable {
                     hasMore = (links["next"] as? String)?.isEmpty == false
                 } else { hasMore = page.count == 100 }
                 cursor = String(offset) // Never follow server-provided URLs with credentials.
-            case .ollama: break
+            case .ollama, .chatGPTSubscription: break
             }
             guard hasMore else { break }
             guard !page.isEmpty, let next = cursor, !next.isEmpty,
@@ -125,18 +126,27 @@ final class ModelDiscoveryClient: @unchecked Sendable {
         return ModelCatalog(endpoint: try profile.catalogEndpoint(), fetchedAt: Date(), models: models)
     }
     static func parseList(_ value: [String: Any], providerKind: ProviderKind) throws -> [DiscoveredModel] {
-        let arrayKey = [.gemini, .ollama].contains(providerKind) ? "models" : "data"
+        let arrayKey = [.gemini, .ollama, .chatGPTSubscription].contains(providerKind) ? "models" : "data"
         // Google omits an empty repeated field. Other missing arrays are format errors.
         let rows: [[String: Any]]
         if let list = value[arrayKey] as? [[String: Any]] { rows = list }
         else if providerKind == .gemini && value.isEmpty { rows = [] }
         else { throw AppError.invalid("模型列表格式与所选协议不匹配") }
-        return try rows.map { row in
-            let raw = row[providerKind == .gemini ? "name" : providerKind == .ollama ? "name" : "id"] as? String
+        return try rows.filter { providerKind != .chatGPTSubscription || $0["visibility"] as? String == "list" }.map { row in
+            let raw = row[providerKind == .chatGPTSubscription ? "slug" : providerKind == .gemini ? "name" : providerKind == .ollama ? "name" : "id"] as? String
             guard let id = raw, !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.invalid("模型列表中有无效 ID") }
             var model = DiscoveredModel(id: id, name: row["display_name"] as? String ?? row["displayName"] as? String ?? row["name"] as? String ?? id)
             switch providerKind {
-            case .openAI, .ollama: break
+            case .openAI, .ollama, .chatGPTSubscription:
+                // Only server-declared choices are offered; no model-name heuristics.
+                let efforts = row["supported_reasoning_efforts"] as? [String]
+                    ?? (row["supported_reasoning_levels"] as? [[String: Any]])?.compactMap { $0["effort"] as? String }
+                if let efforts, !efforts.isEmpty, efforts.allSatisfy({ !$0.isEmpty }), Set(efforts).count == efforts.count {
+                    model.reasoningEfforts = efforts
+                    let suggested = row["default_reasoning_level"] as? String ?? row["default_reasoning_effort"] as? String
+                    model.defaultReasoningEffort = suggested.flatMap { efforts.contains($0) ? $0 : nil }
+                }
+
             case .anthropic:
                 let caps = row["capabilities"] as? [String: [String: Any]]
                 model.vision = CapabilitySupport(caps?["image_input"]?["supported"] as? Bool)
@@ -189,7 +199,7 @@ private final class ModelCatalogUIFixture: URLProtocol, @unchecked Sendable {
         }
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type":"application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(#"{"data":[{"id":"fixture-vision"},{"id":"fixture-other"},{"id":"fixture-third"},{"id":"fixture-fourth"},{"id":"fixture-fifth"},{"id":"fixture-sixth"},{"id":"fixture-seventh"}]}"#.utf8))
+        client?.urlProtocol(self, didLoad: Data(#"{"data":[{"id":"fixture-vision","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}],"default_reasoning_level":"low"},{"id":"fixture-other"},{"id":"fixture-third"},{"id":"fixture-fourth"},{"id":"fixture-fifth"},{"id":"fixture-sixth"},{"id":"fixture-seventh"}]}"#.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}

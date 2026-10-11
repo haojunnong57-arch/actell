@@ -11,6 +11,8 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
     var contextKind: ProviderContextPolicy?
     var catalog: ModelCatalog?
     var modelParameters: [String: ModelParameters]?
+    // Non-secret hash of issued-client-ID + verified issuer/subject. Tokens live only in Keychain.
+    var chatGPTAccountReference: String?
     // Reference only. Credentials are never encoded into UserDefaults/history.
     var keyAccount: String
 
@@ -19,9 +21,9 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
         self.keyAccount = keyAccount ?? "provider-profile:\(id):\(settings.baseURL)"
     }
     var providerKind: ProviderKind { protocolKind ?? .openAI }
-    var inferenceAPI: InferenceAPI { inferenceKind ?? .chatCompletions }
+    var inferenceAPI: InferenceAPI { providerKind == .chatGPTSubscription ? .responses : inferenceKind ?? .chatCompletions }
     var contextPolicy: ProviderContextPolicy { contextKind ?? .stateless }
-    func catalogEndpoint() throws -> String { providerKind.rawValue + ":" + (try providerKind.baseURL(settings.baseURL)).absoluteString }
+    func catalogEndpoint() throws -> String { providerKind.rawValue + ":" + (try providerKind.baseURL(settings.baseURL)).absoluteString + (providerKind == .chatGPTSubscription ? ":" + (chatGPTAccountReference ?? "disconnected") : "") }
     var currentCatalog: ModelCatalog? { catalog?.endpoint == (try? catalogEndpoint()) ? catalog : nil }
     var availableModels: [String] {
         Array(NSOrderedSet(array: ([settings.model] + models + (currentCatalog?.models.map(\.id) ?? [])).filter { !$0.isEmpty })) as? [String] ?? []
@@ -37,9 +39,24 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
         settings.model = availableModels.lazy.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty } ?? ""
     }
-    func metadata(for model: String) -> DiscoveredModel? { currentCatalog?.models.first { $0.id == model } }
+    func metadata(for model: String) -> DiscoveredModel? {
+        let discovered = currentCatalog?.models.first { $0.id == model }
+        guard [.openAI, .chatGPTSubscription].contains(providerKind),
+              (try? providerKind.baseURL(settings.baseURL).absoluteString) == ChatGPTSubscriptionPolicy.resource.absoluteString,
+              inferenceAPI == .responses else { return discovered }
+        // Exact documented model only, official endpoint only. Never infer from a prefix.
+        // https://developers.openai.com/api/docs/guides/latest-model (verified 2026-10-10)
+        guard model == "gpt-6.1-sol", discovered?.reasoningEfforts == nil else { return discovered }
+        var result = discovered ?? DiscoveredModel(id: model, name: model)
+        result.reasoningEfforts = ["low", "medium", "high", "xhigh", "max"]
+        result.defaultReasoningEffort = "medium"
+        result.detailNotice = "思考档位来自 OpenAI GPT-6.1 Sol 官方文档（2026-10-10），并不证明此账户有模型权限。"
+        return result
+    }
     func parameters(for model: String) -> ModelParameters { modelParameters?[model] ?? ModelParameters() }
     func requireInference(model: String) throws {
+        if providerKind == .chatGPTSubscription, chatGPTAccountReference == nil { throw ChatGPTAuthError.disconnected }
+        if providerKind == .chatGPTSubscription, currentCatalog?.models.contains(where: { $0.id == model }) != true { throw AppError.unavailable("请刷新此 ChatGPT 账户的模型列表，并选择可用模型") }
         guard inferenceAPI == .chatCompletions || providerKind.supportsResponses else { throw AppError.invalid("此协议仅支持 Chat Completions 推理") }
         guard inferenceAPI == .responses || contextPolicy == .stateless else { throw AppError.invalid("服务端响应链需要 Responses") }
         guard contextPolicy == .stateless || providerKind.supportsResponseChain else { throw AppError.invalid("此供应商不支持服务端响应链；请选择本地回放") }
@@ -86,6 +103,10 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
     func prepared(_ draft: ProviderProfile) throws -> ProviderProfile {
         guard writable else { throw AppError.unavailable(warning ?? "配置不可写") }
         var value = draft
+        if value.providerKind == .chatGPTSubscription {
+            guard value.contextPolicy == .stateless else { throw AppError.invalid("订阅供应商不支持服务端响应链") }
+            value.inferenceKind = .responses
+        }
         value.name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         value.settings.baseURL = draft.settings.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         value.settings.model = draft.settings.model.trimmingCharacters(in: .whitespacesAndNewlines)

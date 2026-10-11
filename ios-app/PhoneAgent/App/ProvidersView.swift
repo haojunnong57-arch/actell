@@ -61,6 +61,7 @@ struct ProvidersView: View {
             }
         }
     }
+
 }
 
 private struct ProviderCreationView: View {
@@ -75,6 +76,7 @@ private struct ProviderCreationView: View {
                 List {
                     Button("OpenAI") { select(.openAI) }.accessibilityIdentifier("providerPresetOpenAI")
                     Button("OpenRouter") { select(.openRouter) }.accessibilityIdentifier("providerPresetOpenRouter")
+                    Button("ChatGPT 订阅") { select(.chatGPTSubscription) }.accessibilityIdentifier("providerPresetChatGPTSubscription")
                     Button("自定义供应商") { select(nil) }.accessibilityIdentifier("providerPresetCustom")
                 }
                 .navigationTitle("添加供应商").navigationBarTitleDisplayMode(.inline)
@@ -88,6 +90,7 @@ private struct ProviderCreationView: View {
         profile.name = preset.map { $0 == .openAI ? "OpenAI" : $0.title } ?? ""
         profile.settings.baseURL = preset?.defaultBase ?? ""
         profile.settings.model = ""
+        if preset == .chatGPTSubscription { profile.inferenceKind = .responses }
         draft = profile
     }
 }
@@ -103,6 +106,9 @@ private struct ProviderEditor: View {
     @State private var showingModels = false
     @State private var addingModel = false
     @State private var manualModel = ""
+    @StateObject private var signIn = ChatGPTSignInController()
+    @State private var subscriptionLoading = false
+    @State private var subscriptionTask: Task<Void, Never>?
     init(model: AgentViewModel, profile: ProviderProfile) {
         self.model = model
         var draft = profile
@@ -115,10 +121,29 @@ private struct ProviderEditor: View {
             Form {
                 Section("供应商") {
                     TextField("名称", text: $profile.name).accessibilityIdentifier("providerName")
+                    LabeledContent("供应商", value: profile.providerKind.title).accessibilityIdentifier("providerKind")
                     if !profile.providerKind.isSelectable {
                         Text("此供应商类型已从列表移除。原配置与密钥保留；请返回列表添加新的供应商。")
                             .font(.caption).foregroundStyle(.orange)
                     }
+                    if profile.providerKind == .chatGPTSubscription {
+                        let connectionStatus = signIn.accounts.first(where: { $0.id == signIn.selected })?.status ?? .disconnected
+                        if connectionStatus != .planAuthorized {
+                            Text(connectionStatus.message).accessibilityIdentifier("chatGPTConnectionStatus")
+                        }
+                        if let account = signIn.accounts.first(where: { $0.id == signIn.selected }) {
+                            LabeledContent("登录账号", value: account.label).accessibilityIdentifier("chatGPTAccount")
+                        }
+                        Button("使用 ChatGPT 登录") { connect() }
+                            .disabled(signIn.busy || model.hasBusySessions).accessibilityIdentifier("chatGPTSignIn")
+                        if signIn.selected != nil {
+                            Button("退出此账户", role: .destructive) { Task { await signIn.disconnect(profileID: profile.id); profile.catalog = nil; profile.settings.model = ""; profile.models = []; connectedAccountChanged(); _ = model.saveProvider(profile, key: "") } }
+                                .disabled(model.hasBusySessions).accessibilityIdentifier("chatGPTDisconnect")
+                        }
+                        if signIn.busy { Button("取消 ChatGPT 登录") { signIn.cancel() }.accessibilityIdentifier("chatGPTCancelSignIn") }
+                        if let message = signIn.message { Text(message).accessibilityIdentifier("chatGPTSignInMessage") }
+                        LabeledContent("API 格式", value: "OpenAI Responses")
+                    } else {
                     TextField("HTTPS API 基础地址", text: $profile.settings.baseURL)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                         .accessibilityIdentifier("providerURL")
@@ -145,6 +170,7 @@ private struct ProviderEditor: View {
                             }.accessibilityIdentifier("providerContextPolicy") }
                         }
                     }
+                    }
                 }
                 Section {
                     ForEach(profile.previewModels, id: \.self) { id in
@@ -161,16 +187,16 @@ private struct ProviderEditor: View {
                         Text("模型")
                         Spacer(minLength: 12)
                         HStack(spacing: 0) {
-                            Button { manualModel = ""; addingModel = true } label: { Image(systemName: "plus").frame(width: 44, height: 44) }
-                                .accessibilityLabel("添加模型").accessibilityIdentifier("addProviderModel")
-                            if discovery.loading {
-                                Button { discovery.cancel() } label: {
+                            if profile.providerKind != .chatGPTSubscription { Button { manualModel = ""; addingModel = true } label: { Image(systemName: "plus").frame(width: 44, height: 44) }
+                                .accessibilityLabel("添加模型").accessibilityIdentifier("addProviderModel") }
+                            if discovery.loading || subscriptionLoading {
+                                Button { discovery.cancel(); subscriptionTask?.cancel(); subscriptionLoading = false } label: {
                                     ProgressView().frame(width: 44, height: 44)
                                 }.accessibilityLabel("取消刷新模型").accessibilityIdentifier("cancelModels")
                             } else {
                                 Button { refresh() } label: { Image(systemName: "arrow.clockwise").frame(width: 44, height: 44) }
                                     .accessibilityLabel("刷新模型").accessibilityIdentifier("fetchModels")
-                                    .disabled(!profile.providerKind.isSelectable)
+                                    .disabled(!profile.providerKind.isSelectable || (profile.providerKind == .chatGPTSubscription && profile.chatGPTAccountReference == nil))
                             }
                         }
                         .font(.body)
@@ -178,15 +204,23 @@ private struct ProviderEditor: View {
                         // while retaining each button's 44-point touch target.
                         .padding(.trailing, -12)
                     }.buttonStyle(.borderless)
-                } footer: {
-                    if let message = discovery.message { Text(message).font(.caption).accessibilityIdentifier("modelDiscoveryStatus") }
                 }
-                // Keep stored per-model parameters, but hide their editor until
-                // the parameter UI is simplified. Saving must not clear them.
+                if !profile.settings.model.isEmpty {
+                    ModelReasoningSection(metadata: profile.metadata(for: profile.settings.model),
+                        parameters: Binding(get: { profile.parameters(for: profile.settings.model) }, set: { value in
+                            if profile.modelParameters == nil { profile.modelParameters = [:] }
+                            profile.modelParameters?[profile.settings.model] = value
+                        }))
+                }
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("--ui-test-chatgpt-loopback") { ChatGPTLoopbackProbeView() }
+                #endif
+                if let message = discovery.message { Text(message).font(.caption).accessibilityIdentifier("modelDiscoveryStatus") }
                 if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
             }
             .disabled(model.hasBusySessions)
             .navigationTitle("编辑供应商").navigationBarTitleDisplayMode(.inline)
+            .task { if profile.providerKind == .chatGPTSubscription { await signIn.reload(profileID: profile.id) } }
             .sheet(isPresented: $showingModels) {
                 ProviderModelPicker(profile: profile) { profile.settings.model = $0 }
             }
@@ -202,13 +236,13 @@ private struct ProviderEditor: View {
             .onChange(of: profile.settings.baseURL) { _, _ in invalidateDiscovery(); hasSavedKey = model.hasSavedProviderKey(for: profile) }
             .onChange(of: profile.protocolKind) { _, _ in invalidateDiscovery(); hasSavedKey = model.hasSavedProviderKey(for: profile) }
             .onChange(of: key) { _, _ in discovery.cancel(); profile.catalog = nil }
-            .onDisappear { discovery.cancel() }
+            .onDisappear { discovery.cancel(); subscriptionTask?.cancel(); signIn.cancel() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { key = ""; dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
                         if model.saveProvider(profile, key: key) { key = ""; dismiss() }
-                    }.disabled(model.hasBusySessions || !profile.providerKind.isSelectable).accessibilityIdentifier("saveProvider")
+                    }.disabled(model.hasBusySessions || signIn.busy || !profile.providerKind.isSelectable).accessibilityIdentifier("saveProvider")
                 }
             }
         }
@@ -217,6 +251,21 @@ private struct ProviderEditor: View {
         discovery.cancel(); profile.catalog = nil; profile.modelParameters = nil
     }
     private func refresh() {
+        if profile.providerKind == .chatGPTSubscription {
+            subscriptionTask?.cancel(); subscriptionLoading = true
+            let draft = profile
+            subscriptionTask = Task {
+                defer { subscriptionLoading = false }
+                do {
+                    let catalog = try await ChatGPTAccountManager.shared.models(profile: draft)
+                    guard !Task.isCancelled, profile.chatGPTAccountReference == draft.chatGPTAccountReference else { return }
+                    profile.catalog = catalog
+                    if profile.settings.model.isEmpty { profile.settings.model = catalog.models.first?.id ?? "" }
+                    _ = model.saveProvider(profile, key: "")
+                } catch { if !Task.isCancelled { discovery.fail(error) } }
+            }
+            return
+        }
         do {
             let credential = try model.discoveryKey(for: profile, typedKey: key)
             discovery.refresh(profile: profile, key: credential) {
@@ -224,6 +273,17 @@ private struct ProviderEditor: View {
                 profile.selectDefaultModelIfNeeded()
             }
         } catch { discovery.fail(error) }
+    }
+    private func connect() {
+        guard model.saveProvider(profile, key: "") else { return }
+        signIn.start(profileID: profile.id) { connectedAccountChanged(); refresh() }
+    }
+    private func connectedAccountChanged() {
+        subscriptionTask?.cancel()
+        if profile.chatGPTAccountReference != signIn.selected {
+            profile.chatGPTAccountReference = signIn.selected; profile.settings.model = ""; profile.models = []
+            invalidateDiscovery(); _ = model.saveProvider(profile, key: "")
+        }
     }
 }
 
@@ -273,24 +333,23 @@ private struct ProviderModelRow: View {
     }
 }
 
-private struct ModelParameterSection: View {
-    let providerKind: ProviderKind
+private struct ModelReasoningSection: View {
     let metadata: DiscoveredModel?
     @Binding var parameters: ModelParameters
     var body: some View {
         Section {
-            ForEach(ModelParameter.fields(for: providerKind)) { field in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(field.rawValue + " · " + field.support(providerKind: providerKind, model: metadata).label).font(.subheadline)
-                    TextField("未设置，使用供应商默认值", text: Binding(get: { parameters.values[field.rawValue] ?? "" }, set: { parameters.values[field.rawValue] = $0 }))
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .disabled(field.support(providerKind: providerKind, model: metadata) == .unsupported)
-                        .accessibilityIdentifier("parameter-" + field.rawValue)
-                    Text(field.hint(providerKind: providerKind, model: metadata)).font(.caption).foregroundStyle(.secondary)
+            if let efforts = metadata?.reasoningEfforts, !efforts.isEmpty {
+                Picker("思考强度", selection: Binding(get: { parameters.reasoningEffort ?? "" }, set: { parameters.reasoningEffort = $0.isEmpty ? nil : $0 })) {
+                    Text(metadata?.defaultReasoningEffort.map { "服务商默认（\($0)）" } ?? "服务商默认").tag("")
+                    ForEach(efforts, id: \.self) { Text($0).tag($0) }
+                }.accessibilityIdentifier("reasoningEffort")
+                if let selected = parameters.reasoningEffort, !efforts.contains(selected) {
+                    Text("原思考强度已不可用，请选择当前档位或默认值。").foregroundStyle(.orange)
                 }
+            } else {
+                Text("此模型未报告可用思考档位；使用服务商默认值。")
+                if parameters.reasoningEffort != nil { Button("清除原思考强度") { parameters.reasoningEffort = nil } }
             }
-            if !providerKind.supportsInference { Text("原生推理尚未接入，暂不提供推理参数设置。") }
-        } header: { Text("此供应商／模型的参数") }
-        footer: { Text("留空不发送参数。未知表示模型接口未声明：可手动填写协议已知字段，但供应商仍可能拒绝。明确不支持的字段不会发送。设置仅用于此供应商的当前模型。") }
+        } header: { Text("思考强度") }
     }
 }

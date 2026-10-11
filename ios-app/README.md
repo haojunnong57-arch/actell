@@ -50,3 +50,9 @@ RUN_UI_TESTS=1 bash ios-app/scripts/test_core.sh <隔离模拟器-UDID>
 ## Provider 边界
 
 已用自有 ProviderCore 与远程 SPM MacPaw/OpenAI 0.5.2 替换旧 Kit。SDK 源码未复制入工程。设置可选择 Chat Completions 或 Responses；原配置保持 Chat 默认。Responses 默认本地回放/store=false，明确选择服务端响应链后才使用 store=true/previous_response_id；续接仅限当前任务，每轮重发 instructions。旧截图不再上传不等于远端历史已删除。OpenRouter 保留 Chat 默认，也可显式使用无状态 Responses；其 store=true/previous_response_id 在本地拒绝。服务商类型与 wire 协议独立。其他原生协议推理、Conversations、background、compaction 和 hosted tools 尚未启用。细节与验证边界见 [Provider 模块](ProviderKit/README.md)。
+
+## ChatGPT 订阅配置与思考强度
+
+新增供应商预设顺序为 OpenAI、OpenRouter、ChatGPT 订阅、自定义。订阅配置固定官方地址与无状态 Responses，不接收 API Key。Continue with ChatGPT 使用系统认证浏览器与 HTTP 回环授权，校验官方 JWKS 身份后保存账号隔离的本机 Keychain 凭据。仅获套餐授权的账号模型使用独立订阅流式 Responses；退出尝试官方 discovery 撤销端点并清理本地 token。全部开发验证只用本地 mock，真实账号授权、实体设备与订阅计费尚未验证。完整官方能力与验证边界见 [订阅整合说明](../docs/CHATGPT-SUBSCRIPTION.md)。
+
+每服务商／模型可保存思考强度；仅显示明确报告或官方文档确认的档位，未知模型使用默认、不猜档位。Responses 映射 reasoning.effort，Chat Completions 映射 reasoning_effort。GPT-6.1 Sol 的文档档位只用于官方地址的 Responses 配置，不推广到代理或未知模型。
