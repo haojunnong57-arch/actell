@@ -3,6 +3,31 @@ import SwiftAgentKit
 @testable import PhoneAgent
 
 @MainActor final class AgentPresentationTests: XCTestCase {
+    func testSavedProviderKeyPresenceIsScopedAndEmptySavePreservesSyntheticKey() throws {
+        var keys: [String: String] = [:]
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+            writeProviderKey: { keys[$1] = $0 }, containsProviderKey: { keys[$0] != nil })
+        let draft = ProviderProfile(settings: .init(baseURL: "https://key-fixture.invalid/v1", model: "fixture"))
+        XCTAssertFalse(model.hasSavedProviderKey(for: draft))
+        XCTAssertTrue(model.saveProvider(draft, key: "UI_TEST_KEY_A"))
+        let saved = try XCTUnwrap(model.providers.profile(draft.id))
+        XCTAssertTrue(model.hasSavedProviderKey(for: saved))
+        var changed = saved
+        changed.settings.baseURL = " https://key-fixture.invalid/v1/ "
+        XCTAssertTrue(model.hasSavedProviderKey(for: changed))
+        changed.settings.baseURL = "https://different.invalid/v1"
+        XCTAssertFalse(model.hasSavedProviderKey(for: changed))
+        changed = saved; changed.protocolKind = .openRouter
+        XCTAssertFalse(model.hasSavedProviderKey(for: changed))
+        changed = saved; changed.id = UUID()
+        XCTAssertFalse(model.hasSavedProviderKey(for: changed))
+        XCTAssertTrue(model.saveProvider(saved, key: ""))
+        XCTAssertEqual(keys[saved.keyAccount], "UI_TEST_KEY_A")
+        XCTAssertTrue(model.saveProvider(saved, key: "UI_TEST_KEY_B"))
+        XCTAssertEqual(keys[saved.keyAccount], "UI_TEST_KEY_B")
+        keys.removeValue(forKey: saved.keyAccount)
+        XCTAssertFalse(model.hasSavedProviderKey(for: saved))
+    }
     func testLongToolResultsSurviveProjectionUpdateAndHistoryRestore() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

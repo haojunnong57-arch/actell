@@ -5,7 +5,7 @@ import Foundation
 enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case openAI, anthropic, gemini, ollama, openRouter
     // Retain legacy raw values so existing archives remain readable; only these
-    // services are offered when creating or editing a configuration.
+    // services can be used for new configurations. Editing keeps the type fixed.
     static let selectableKinds: [ProviderKind] = [.openAI, .openRouter]
     var isSelectable: Bool { Self.selectableKinds.contains(self) }
     var id: String { rawValue }
@@ -22,7 +22,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable {
     var supportsResponseChain: Bool { self == .openAI }
     var supportsInference: Bool { self != .anthropic && self != .gemini }
     var inferenceNotice: String {
-        supportsInference ? "推理接口需显式选择；模型仍须支持图片和工具，模型列表不证明 Responses 兼容性。" : "目前仅支持模型发现；尚未接入此协议的原生推理，不能开始任务。"
+        supportsInference ? "API格式需显式选择；模型仍须支持图片和工具，模型列表不证明 Responses 兼容性。" : "目前仅支持模型发现；尚未接入此协议的原生推理，不能开始任务。"
     }
     var defaultBase: String {
         switch self {
@@ -164,7 +164,7 @@ struct ModelParameters: Codable, Equatable, Sendable {
 enum InferenceAPI: String, Codable, CaseIterable, Identifiable, Sendable {
     case chatCompletions, responses
     var id: String { rawValue }
-    var title: String { self == .responses ? "Responses" : "Chat Completions" }
+    var title: String { self == .responses ? "Responses API" : "Chat Completions" }
 }
 enum ProviderContextPolicy: String, Codable, CaseIterable, Identifiable, Sendable {
     case stateless, responseChain

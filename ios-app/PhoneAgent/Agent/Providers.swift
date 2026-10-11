@@ -18,9 +18,9 @@ final class PrivateVisionProvider: ModelProvider, @unchecked Sendable {
         let endpoint = try providerKind.inferenceBase(settings.baseURL)
         guard !settings.model.isEmpty else { throw AppError.invalid("请先选择模型") }
         guard !apiKey.isEmpty || providerKind == .ollama else { throw AppError.invalid("请先设置模型 API 密钥") }
-        guard inferenceAPI == .chatCompletions || providerKind.supportsResponses else { throw AppError.invalid("此服务商协议尚未验证 Responses 推理") }
+        guard inferenceAPI == .chatCompletions || providerKind.supportsResponses else { throw AppError.invalid("此供应商协议尚未验证 Responses 推理") }
         guard inferenceAPI == .responses || contextPolicy == .stateless else { throw AppError.invalid("历史续接仅支持 Responses") }
-        guard contextPolicy == .stateless || providerKind.supportsResponseChain else { throw AppError.invalid("此服务商 Responses 仅支持无状态请求") }
+        guard contextPolicy == .stateless || providerKind.supportsResponseChain else { throw AppError.invalid("此供应商 Responses 仅支持无状态请求") }
         self.providerKind = providerKind
         var fields = try parameters.requestFields(providerKind: providerKind, model: metadata)
         if inferenceAPI == .responses {

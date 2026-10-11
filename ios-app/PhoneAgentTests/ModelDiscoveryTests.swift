@@ -22,6 +22,60 @@ private final class ModelHTTPStub: URLProtocol, @unchecked Sendable {
 }
 
 final class ModelDiscoveryTests: XCTestCase {
+    func testMissingDefaultSelectsFirstAvailableModelAndPreservesSelection() throws {
+        var p = profile()
+        p.settings.model = " \n"
+        p.models = [" ", "first", "second"]
+        p.selectDefaultModelIfNeeded()
+        XCTAssertEqual(p.settings.model, "first")
+        p.settings.model = "manual"
+        p.selectDefaultModelIfNeeded()
+        XCTAssertEqual(p.settings.model, "manual")
+        p.settings.model = ""; p.models = []
+        p.catalog = ModelCatalog(endpoint: try p.catalogEndpoint(), fetchedAt: Date(), models: [.init(id: "catalog-first", name: "First"), .init(id: "catalog-second", name: "Second")])
+        p.selectDefaultModelIfNeeded()
+        XCTAssertEqual(p.settings.model, "catalog-first")
+        p.settings.model = ""; p.settings.baseURL = "https://other.invalid/v1"
+        p.selectDefaultModelIfNeeded()
+        XCTAssertEqual(p.settings.model, "")
+        p.catalog = nil
+        p.selectDefaultModelIfNeeded()
+        XCTAssertEqual(p.settings.model, "")
+    }
+    @MainActor func testDefaultModelIsSelectedOnSaveAndLegacyLoad() throws {
+        let defaults = UserDefaults(suiteName: "automatic-default-model-\(UUID())")!
+        defer { defaults.removeObject(forKey: ProviderStore.storageKey) }
+        var p = profile()
+        p.settings.model = ""; p.models = ["first", "second"]
+        let store = ProviderStore(defaults: defaults)
+        try store.save(p)
+        XCTAssertEqual(store.profile(p.id)?.settings.model, "first")
+        XCTAssertEqual(ProviderStore(defaults: defaults).profile(p.id)?.settings.model, "first")
+        struct SavedArchive: Encodable {
+            let version = 1
+            let profiles: [ProviderProfile]
+            let removed: [ProviderProfile]
+        }
+        defaults.set(try JSONEncoder().encode(SavedArchive(profiles: [p], removed: [])), forKey: ProviderStore.storageKey)
+        XCTAssertEqual(ProviderStore(defaults: defaults).profile(p.id)?.settings.model, "first")
+    }
+    func testModelPreviewKeepsOrderAndAppendsSelectedOutsideLimit() throws {
+        var p = profile()
+        p.models = ["one", "two", "three", "four", "five", "six", "seven", "one"]
+        p.settings.model = "seven"
+        XCTAssertEqual(p.previewModels, ["one", "two", "three", "four", "five", "seven"])
+        p.settings.model = "two"
+        XCTAssertEqual(p.previewModels, ["one", "two", "three", "four", "five"])
+        p.settings.model = "manual"
+        XCTAssertEqual(p.previewModels, ["one", "two", "three", "four", "five", "manual"])
+        p.models = []; p.settings.model = ""
+        XCTAssertEqual(p.previewModels, [])
+        p.catalog = ModelCatalog(endpoint: try p.catalogEndpoint(), fetchedAt: Date(), models: (1...7).map { .init(id: "model-\($0)", name: "fixture") })
+        p.settings.model = "model-7"
+        XCTAssertEqual(p.previewModels, ["model-1", "model-2", "model-3", "model-4", "model-5", "model-7"])
+        p.settings.baseURL = "https://other.invalid/v1"
+        XCTAssertEqual(p.previewModels, ["model-7"])
+    }
     @MainActor func testRemovedServiceChoicesKeepExistingArchiveReadable() throws {
         XCTAssertEqual(ProviderKind.selectableKinds, [.openAI, .openRouter])
         let defaults = UserDefaults(suiteName: "removed-provider-types-\(UUID())")!

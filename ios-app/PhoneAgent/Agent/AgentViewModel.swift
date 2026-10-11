@@ -32,6 +32,8 @@ struct AgentRunServices {
     @Published var storageWarning: String?
     @Published private(set) var selectedConversationID: UUID?
     let providers: ProviderStore
+    private let writeProviderKey: (String, String) throws -> Void
+    private let containsProviderKey: (String) throws -> Bool
     let attachments: AttachmentStore
     let skills: SkillStore
     private var runSkillNames: [String: String] = [:]
@@ -127,8 +129,11 @@ struct AgentRunServices {
          providers: ProviderStore? = nil, sharedCapture: ScreenCaptureController? = nil,
          sharedActivities: AgentLiveActivityController? = nil, checkpointDirectory: URL? = nil,
          restoreLegacyState: Bool = true, runServicesFactory: (@MainActor (UUID) -> AgentRunServices)? = nil,
+         writeProviderKey: @escaping (String, String) throws -> Void = { try SecretStore.save($0, account: $1) },
+         containsProviderKey: @escaping (String) throws -> Bool = SecretStore.contains,
          makeUSBClient: @escaping @MainActor (USBDiagnosticsLog, @escaping @Sendable (USBConnectionStatus) -> Void) -> any USBConnectionSession = { USBCommandClient(diagnostics: $0, onProgress: $1) }) {
         self.providers = providers ?? ProviderStore(defaults: loadPersistentState ? .standard : nil)
+        self.writeProviderKey = writeProviderKey; self.containsProviderKey = containsProviderKey
         self.capture = sharedCapture ?? ScreenCaptureController()
         self.persistentRuntime = loadPersistentState; self.runServicesFactory = runServicesFactory
         self.skills = skills ?? SkillStore(inMemory: !loadPersistentState)
@@ -228,7 +233,7 @@ struct AgentRunServices {
         do {
             let value = try providers.prepared(draft)
             if !key.isEmpty {
-                try SecretStore.save(key, account: value.keyAccount)
+                try writeProviderKey(key, value.keyAccount)
             }
             try providers.save(value)
             errorMessage = nil
@@ -242,6 +247,12 @@ struct AgentRunServices {
     func restoreProvider(_ id: UUID) {
         guard !appOwner.hasBusySessions else { return }
         do { try providers.restore(id) } catch { errorMessage = Self.safeError(error) }
+    }
+    func hasSavedProviderKey(for draft: ProviderProfile) -> Bool {
+        guard let saved = providers.profile(draft.id),
+              let endpoint = try? draft.catalogEndpoint(),
+              endpoint == (try? saved.catalogEndpoint()) else { return false }
+        return (try? containsProviderKey(saved.keyAccount)) == true
     }
     func discoveryKey(for draft: ProviderProfile, typedKey: String) throws -> String {
         guard !appOwner.hasBusySessions else { throw AppError.stopped }
@@ -499,7 +510,7 @@ struct AgentRunServices {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let query = trimmed.isEmpty && !prepared.references.isEmpty ? "请查看附件" : trimmed
         guard !query.isEmpty, query.count <= 2_000 else { return reject("invalidTask", "请输入 1 至 2000 字的任务") }
-        guard session.mode == .demo || cloudConsent else { return reject("cloudConsent", "请确认将任务发送给所选模型服务商") }
+        guard session.mode == .demo || cloudConsent else { return reject("cloudConsent", "请确认将任务发送给所选模型供应商") }
         cancelPreview()
         let selectedMode = session.mode, token = UUID()
         var runSettings = ProviderSettings()
@@ -510,7 +521,7 @@ struct AgentRunServices {
             if let services = runServicesFactory?(conversationID) ?? runServices { selectedBridge = services.bridge; selectedProvider = services.provider }
             else if selectedMode == .demo { selectedBridge = DemoBridge(); selectedProvider = DemoProvider() }
             else {
-                guard let profile = self.selectedProvider(in: conversationID) else { throw AppError.invalid("请在会话中选择服务商；原服务商可能已移除") }
+                guard let profile = self.selectedProvider(in: conversationID) else { throw AppError.invalid("请在会话中选择供应商；原供应商可能已移除") }
                 if session.providerID == nil {
                     sessions.selectProvider(profile.id, model: profile.settings.model, in: conversationID)
                 }
@@ -1031,8 +1042,8 @@ struct AgentRunServices {
         if let error = error as? AgentError {
             switch error {
             case .cancelled, .toolCancelled: return "运行已取消"
-            case .noProviderConfigured: return "请先选择服务商和模型"
-            case .providerError, .providerRefused: return "模型请求失败；请检查服务商地址、模型、网络及账户状态"
+            case .noProviderConfigured: return "请先选择供应商和模型"
+            case .providerError, .providerRefused: return "模型请求失败；请检查供应商地址、模型、网络及账户状态"
             case .toolExecutionFailed, .toolNotFound: return "工具未能执行，请查看本轮工具记录"
             default: break
             }

@@ -107,7 +107,7 @@ private struct RemoteMessageImage: View {
                         Button("取消") { task?.cancel(); loading = false }
                     }
                 }
-                Text("只请求此消息已有的图源，不发送服务商密钥；缓存成功后可离线查看。").font(.caption).foregroundStyle(.secondary)
+                Text("只请求此消息已有的图源，不发送供应商密钥；缓存成功后可离线查看。").font(.caption).foregroundStyle(.secondary)
             }
         }.accessibilityIdentifier("messageRemoteImage")
         .task(id: cached?.id) {

@@ -12,7 +12,7 @@ App 使用 [SwiftAgentKit](https://github.com/ayman3000/SwiftAgentKit)、[MacPaw
 
 ## 当前能力与边界
 
-- 支持 OpenAI Chat Completions 兼容服务商与模型，通过 `screenshot`、`tap`、`drag`、`wait` 工具执行任务；「设置 → 服务商」仅提供 OpenAI-compatible 和 OpenRouter。旧 Anthropic、Gemini、Ollama 配置仍可读取，编辑时需明确选择可用服务商。
+- 支持 OpenAI Chat Completions 兼容服务商与模型，通过 `screenshot`、`tap`、`drag`、`wait` 工具执行任务；「设置 → 供应商」添加时先选择 OpenAI、OpenRouter 或自定义供应商；自定义不预填，编辑页固定供应商类型并可选择 API格式。旧 Anthropic、Gemini、Ollama 配置仍可读取，使用当前类型需另行添加供应商。
 - 可导入 Markdown/TXT 技能包，按需读取文本；导入不执行脚本。支持会话历史、图片附件、工具审批与手动停止。同一手机的控制任务按整轮排队，结果不确定的动作不自动重放。
 - 控制会话持续接收显示流，用 VideoToolbox 解码并缓存最近完整帧。截图工具从该流取得画面、裁去填充区域并编码 JPEG，默认不逐次调用系统独立截图服务。调用时仍会等待新解码帧，或请求开始后的发送端进度报告确认缓存画面完整；最长等待八秒，不能理解为立即返回任意旧缓存。独立 PNG 截图实现保留，但不会自动回退。
 - ESP32 路线已有真实截图与测试按钮计数增加的记录；VPN 回环路线在 2026-10-09 的 iPhone 15 Pro 测试中复用配对身份，得到 1179 × 2556 截图、实际点击计数 0 → 1，并确认媒体释放。完整模型任务、拖动及 VPN 回环后台持续执行仍待单独验收。

@@ -122,7 +122,7 @@ struct ConversationView: View {
                     TextField("模型 ID", text: $customModel).textInputAutocapitalization(.never).autocorrectionDisabled()
                     Button("使用") { presentation.selectModel(customModel.trimmingCharacters(in: .whitespacesAndNewlines)) }
                     Button("取消", role: .cancel) {}
-                } message: { Text("使用当前服务商的模型 ID。") }
+                } message: { Text("使用当前供应商的模型 ID。") }
                 .sheet(isPresented: $browsingModels) {
                     if let profile = presentation.selectedProvider {
                         ProviderModelPicker(profile: profile) { presentation.selectModel($0) }
@@ -148,7 +148,7 @@ struct ConversationView: View {
     }
     private var modelPicker: some View {
         Menu {
-            Section("服务商") {
+            Section("供应商") {
                 ForEach(presentation.providers) { provider in
                     Button { presentation.selectProvider(provider.id) } label: {
                         if provider.id == presentation.providerID { Label(provider.name, systemImage: "checkmark") }
@@ -167,7 +167,7 @@ struct ConversationView: View {
                 Button("其他模型…") { customModel = presentation.selectedModel; choosingModel = true }
                     .disabled(presentation.providerID == nil)
             }
-            Button("管理服务商", action: openProviders)
+            Button("管理供应商", action: openProviders)
         } label: {
             Label(presentation.modelName, systemImage: "chevron.down").lineLimit(1)
         }.menuOrder(.fixed).disabled(running || presentation.stopping).accessibilityIdentifier("conversationModelPicker")

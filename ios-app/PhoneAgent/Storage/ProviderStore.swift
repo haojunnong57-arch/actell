@@ -26,16 +26,27 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
     var availableModels: [String] {
         Array(NSOrderedSet(array: ([settings.model] + models + (currentCatalog?.models.map(\.id) ?? [])).filter { !$0.isEmpty })) as? [String] ?? []
     }
+    var previewModels: [String] {
+        let listed = Array(NSOrderedSet(array: (models + (currentCatalog?.models.map(\.id) ?? [])).filter { !$0.isEmpty })) as? [String] ?? []
+        var preview = Array(listed.prefix(5))
+        if !settings.model.isEmpty, !preview.contains(settings.model) { preview.append(settings.model) }
+        return preview
+    }
+    mutating func selectDefaultModelIfNeeded() {
+        guard settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        settings.model = availableModels.lazy.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? ""
+    }
     func metadata(for model: String) -> DiscoveredModel? { currentCatalog?.models.first { $0.id == model } }
     func parameters(for model: String) -> ModelParameters { modelParameters?[model] ?? ModelParameters() }
     func requireInference(model: String) throws {
         guard inferenceAPI == .chatCompletions || providerKind.supportsResponses else { throw AppError.invalid("此协议仅支持 Chat Completions 推理") }
         guard inferenceAPI == .responses || contextPolicy == .stateless else { throw AppError.invalid("服务端响应链需要 Responses") }
-        guard contextPolicy == .stateless || providerKind.supportsResponseChain else { throw AppError.invalid("此服务商不支持服务端响应链；请选择本地回放") }
+        guard contextPolicy == .stateless || providerKind.supportsResponseChain else { throw AppError.invalid("此供应商不支持服务端响应链；请选择本地回放") }
         guard providerKind.supportsInference else { throw AppError.unavailable(providerKind.inferenceNotice) }
         guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AppError.invalid("请先选择或手动填写模型 ID") }
         if let metadata = metadata(for: model), metadata.vision == .unsupported || metadata.tools == .unsupported || metadata.generation == .unsupported {
-            throw AppError.unavailable("服务商明确报告此模型不支持图片、工具或文本生成，不能执行屏幕任务；请选择兼容模型")
+            throw AppError.unavailable("供应商明确报告此模型不支持图片、工具或文本生成，不能执行屏幕任务；请选择兼容模型")
         }
     }
 }
@@ -57,15 +68,16 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
         do {
             if let data = defaults?.data(forKey: Self.storageKey) {
                 let saved = try JSONDecoder().decode(Archive.self, from: data)
-                guard saved.version == 1 else { throw AppError.invalid("未知服务商配置版本") }
+                guard saved.version == 1 else { throw AppError.invalid("未知供应商配置版本") }
                 profiles = saved.profiles; removed = saved.removed
+                for index in profiles.indices { profiles[index].selectDefaultModelIfNeeded() }
             } else if let data = defaults?.data(forKey: "providerSettings") {
                 let legacy = try JSONDecoder().decode(ProviderSettings.self, from: data)
-                let host = URL(string: legacy.baseURL)?.host ?? "原服务商"
+                let host = URL(string: legacy.baseURL)?.host ?? "原供应商"
                 let profile = ProviderProfile(name: host, settings: legacy, keyAccount: legacy.keyAccount)
                 try persist(profiles: [profile], removed: [])
             }
-        } catch { writable = false; warning = "服务商配置无法读取；原数据已保留，暂不能修改" }
+        } catch { writable = false; warning = "供应商配置无法读取；原数据已保留，暂不能修改" }
     }
     func profile(_ id: UUID?) -> ProviderProfile? {
         guard let id else { return profiles.first }
@@ -80,9 +92,9 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
         guard value.inferenceAPI == .chatCompletions || value.providerKind.supportsResponses else { throw AppError.invalid("此协议尚不支持 Responses") }
         guard value.inferenceAPI == .responses || value.contextPolicy == .stateless else { throw AppError.invalid("响应链需要 Responses") }
         if value.inferenceAPI == .responses, value.modelParameters?.values.contains(where: { !($0.values["seed"] ?? "").isEmpty }) == true { throw AppError.invalid("Responses 不支持 seed，请清空该参数") }
-        guard value.contextPolicy == .stateless || value.providerKind.supportsResponseChain else { throw AppError.invalid("此服务商不支持服务端响应链") }
+        guard value.contextPolicy == .stateless || value.providerKind.supportsResponseChain else { throw AppError.invalid("此供应商不支持服务端响应链") }
         let url = try value.providerKind.baseURL(value.settings.baseURL)
-        if value.name.isEmpty { value.name = url.host ?? "服务商" }
+        if value.name.isEmpty { value.name = url.host ?? "供应商" }
         value.models = draft.models.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         if let previous = profiles.first(where: { $0.id == draft.id }) {
             // Editing a label/model keeps the old Keychain reference. Changing
@@ -92,6 +104,7 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
             if !sameEndpoint { value.modelParameters = nil }
         } else { value.keyAccount = value.newKeyAccount }
         if value.currentCatalog == nil { value.catalog = nil }
+        value.selectDefaultModelIfNeeded()
         for (model, parameters) in value.modelParameters ?? [:] {
             _ = try parameters.requestFields(providerKind: value.providerKind, model: value.metadata(for: model))
         }
@@ -109,7 +122,8 @@ struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
         try persist(profiles: profiles.filter { $0.id != id }, removed: removed.filter { $0.id != id } + [profile])
     }
     func restore(_ id: UUID) throws {
-        guard let profile = removed.first(where: { $0.id == id }) else { return }
+        guard var profile = removed.first(where: { $0.id == id }) else { return }
+        profile.selectDefaultModelIfNeeded()
         try persist(profiles: profiles + [profile], removed: removed.filter { $0.id != id })
     }
     private func persist(profiles: [ProviderProfile], removed: [ProviderProfile]) throws {

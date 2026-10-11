@@ -28,11 +28,11 @@ final class ModelDiscoveryClient: @unchecked Sendable {
         guard let http = response as? HTTPURLResponse else { throw AppError.invalid("模型列表响应无效") }
         switch http.statusCode {
         case 200..<300: break
-        case 401: throw AppError.unavailable("401：密钥无效或未提供；请检查此服务商的密钥")
+        case 401: throw AppError.unavailable("401：密钥无效或未提供；请检查此供应商的密钥")
         case 403: throw AppError.unavailable("403：此密钥无权查看模型；可手动填写已授权的模型 ID")
         case 404: throw AppError.unavailable("404：模型接口不存在；请核对协议与基础地址，或手动填写模型 ID")
-        case 429: throw AppError.unavailable("429：服务商限流；请稍后刷新，未自动重试")
-        case 300..<400: throw AppError.unavailable("服务商返回重定向；为保护密钥未跟随，请直接填写最终基础地址")
+        case 429: throw AppError.unavailable("429：供应商限流；请稍后刷新，未自动重试")
+        case 300..<400: throw AppError.unavailable("供应商返回重定向；为保护密钥未跟随，请直接填写最终基础地址")
         default: throw AppError.unavailable("模型列表请求失败（HTTP \(http.statusCode)）；可使用缓存或手动模型 ID")
         }
         var data = Data()
@@ -189,7 +189,7 @@ private final class ModelCatalogUIFixture: URLProtocol, @unchecked Sendable {
         }
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type":"application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(#"{"data":[{"id":"fixture-vision"},{"id":"fixture-other"}]}"#.utf8))
+        client?.urlProtocol(self, didLoad: Data(#"{"data":[{"id":"fixture-vision"},{"id":"fixture-other"},{"id":"fixture-third"},{"id":"fixture-fourth"},{"id":"fixture-fifth"},{"id":"fixture-sixth"},{"id":"fixture-seventh"}]}"#.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}

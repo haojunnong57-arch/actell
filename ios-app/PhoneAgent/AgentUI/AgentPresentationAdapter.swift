@@ -56,7 +56,7 @@ struct ToolPresentation {
     func cacheImage(_ url: URL, messageID: UUID) async throws -> StoredAttachment {
         try await model.cacheMessageImage(url, messageID: messageID, conversationID: sessionID)
     }
-    var modelName: String { selectedModel.isEmpty ? "选择服务商和模型" : selectedModel }
+    var modelName: String { selectedModel.isEmpty ? "选择供应商和模型" : selectedModel }
     func selectProvider(_ id: UUID) { model.selectProvider(id, in: sessionID) }
     func selectModel(_ name: String) { model.selectModel(name, in: sessionID) }
     var approvalID: UUID? { model.approval(in: sessionID)?.id }

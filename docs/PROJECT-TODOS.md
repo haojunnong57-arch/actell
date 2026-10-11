@@ -190,3 +190,58 @@ iPhone 15 Pro 真机已通过：复用已有身份、CoreDevice 认证、1179 ×
 `ResponsesReducer.swift` 接受这两个事件，保持地址、顺序、重复、终态及工具执行检查；`OpenAIWireCodec.swift` 检查 plain reasoning content，仅在 SDK 验证副本补缺省空 summary，原生 content 仍保留用于同域回放；`NativeItems.swift`／`ModelTypes.swift` 将明确返回的 plain reasoning 投影为可读思考，summary 与加密内容语义保持独立。未修改 HTTP 重试、终态成功规则、服务商地址、自动接口降级或设备授权逻辑。
 
 新增两项回归覆盖 plain reasoning 增量、完成与回放、非法字段／地址拒绝，以及 URLSession/URLProtocol → SSE → Provider 无 `[DONE]` 完整流（单次请求、正文与思考分开、completed 终态）。核心 **356 tests，0 失败**：`.build/validation/core.ui9aJ7/Tests.xcresult`／`test.log`；最终无签名 iPhoneOS build 通过：`.build/validation/deepseek-responses-iphoneos.log`。本轮没有 UI 改动，未重跑 UI／USB；没有读取密钥或调用线上 API，需要更新 App 后真实复验。本轮修复尚未提交，保留已有 Xcode／Info.plist 工作区修改。
+
+### 2026-10-11 供应商页面与添加流程
+
+设置入口、供应商列表／编辑标题、会话入口及相关提示统一使用“供应商”。添加按钮先打开列表，按 OpenAI、OpenRouter、自定义供应商顺序显示；预设仅填写名称和 HTTPS 基础地址，自定义名称、地址、模型与密钥留空，仍使用已有 OpenAI 兼容协议边界。选择后进入编辑页，不再显示或允许切换供应商类型。API 选择器标题为“API格式”，选项为“OpenAI Chat Completions”和“OpenAI Responses API”；现有配置类型／地址／密钥及上下文规则保持原语义。旧已移除类型可读取，提示返回列表另行添加，不自动转换。
+
+`ProvidersView.swift` 添加独立选择流程并移除编辑页类型 Picker；`SettingsView.swift`／`ConversationView.swift` 及提示文案同步更新，`ProviderModels.swift` 更新 API 标题；UI 新增三项预设／自定义选择与空白编辑检查，原恢复、上下文保存、模型发现用例适配新流程。核心 **356 tests，0 失败**：`.build/validation/core.jd5IcK/Tests.xcresult`；定向 UI **4 tests，0 失败**：`.build/validation/supplier-flow-ui.xcresult`／`supplier-flow-ui.log`；最终无签名 iPhoneOS build 通过：`supplier-flow-iphoneos.log`。已导出并检查新增列表与自定义编辑页截图，见 `.build/validation/supplier-flow-screenshots/manifest.json`。未重跑完整 UI／USB，未调用线上 API，未自动提交或推送；已有工程和 Info.plist 修改保留。
+
+### 2026-10-11 供应商编辑页精简与模型列表
+
+移除基础地址说明、上下文策略说明与 API格式说明行。删除独立“接口报告的能力”区域，改为模型行内图片／工具／思考／生成 chip；未知能力仍显示未知，不推断支持。每模型参数编辑暂时隐藏，存储与请求参数逻辑保留；同地址保存不清空原参数或其他模型 ID。移除多行其他模型编辑控件，保留手动默认模型 ID 输入。
+
+模型 Section 标题右侧放刷新图标，刷新中显示进度与取消按钮，失败保留旧缓存。Section 内最多展示 5 个模型，点击设为默认模型并标记当前项；超过 5 个时底部显示“浏览全部模型”，复用会话中的 `ProviderModelPicker`，支持搜索与选择。共享浏览列表也显示相同 chip，搜索栏在顶部常驻。成功／失败状态放在 Section footer，不再单独占模型行；原缓存继续持久化。
+
+核心 **356 tests，0 失败**：`.build/validation/core.P7nJjw/Tests.xcresult`。定向 UI 首轮三项通过（新增、移除恢复、上下文保存），模型浏览测试因 firstMatch 定位到背后会话搜索框失败；修正准确定位并常驻模型搜索栏后，模型浏览／保存／会话缓存选择单独复验通过：`supplier-compact-search-recheck.xcresult`，首轮证据 `supplier-compact-ui.xcresult`，对应日志同名。最终无签名 iPhoneOS **BUILD SUCCEEDED**：`supplier-compact-iphoneos.log`。已检查自定义空白页与模型 chip 截图，分别见 `supplier-compact-screenshots/manifest.json`、`supplier-compact-model-screenshots/manifest.json`。UI fixtures 增为 7 个合成模型以覆盖列表上限与搜索；未调用线上 API，未重跑完整 UI／USB，未提交或推送，保留已有用户修改。
+
+### 2026-10-11 默认模型在列表内标记
+
+移除独立默认模型输入行，选中模型仅以列表行右侧对号／“已选中”辅助功能状态表示。新增 `ProviderProfile.previewModels`：按原其他模型／有效目录顺序去重，展示前 5 个；选中项若不在前 5 个中，额外追加到末尾，放在“浏览全部模型”之前（最多 6 行），不将其移到顶部、不挤掉前 5 行。过期目录不参与列表，旧／手动选中项仍保留显示。标题栏“添加模型”弹窗保留手动 ID 输入，确认后添加到模型列表并选中；无独立默认行。
+
+单测覆盖列表外选中、列表内不重复、手动 ID、空列表、目录顺序与失效目录。核心 **357 tests，0 失败**：`.build/validation/core.1dqyQo/Tests.xcresult`；定向 UI **2 tests，0 失败**：`selected-model-ui.xcresult`／`selected-model-ui.log`，验证第七个模型追加在第五行后且浏览全部前、对号对应状态、保存与会话选用，并验证新手动添加入口与供应商恢复。最终无签名 iPhoneOS build 通过：`selected-model-iphoneos.log`；选中末尾截图已检查：`selected-model-screenshots/manifest.json`。未调用线上 API，未重跑完整 UI／USB，未提交／推送，保留其他已有修改。
+
+
+### 2026-10-11 未配置默认模型时自动选首项
+
+`ProviderProfile.selectDefaultModelIfNeeded` 在默认 ID 为空／仅空白时，选用列表首个非空模型；保留已有默认 ID，空列表保持空，失效目录不参与。编辑页初始化与刷新目录后调用同一规则；保存、载入旧配置、恢复移除配置也应用该规则，避免未打开编辑页的旧配置继续缺少默认模型。加载只归一化内存中的配置，下一次持久化时写入，不直接重写原归档。界面继续用对应行对号表示选择。
+
+新增单测覆盖列表顺序、保留手动选择、有效／失效目录、空列表、保存及旧配置加载。核心 **359 tests，0 失败**：`.build/validation/core.DUmX8g/Tests.xcresult`；定向 UI **1 test，0 失败**：`automatic-default-ui.xcresult`／`automatic-default-ui.log`，从无默认模型的合成供应商刷新，断言首项已选中，随后验证改选、保存与会话使用。无签名 iPhoneOS **BUILD SUCCEEDED**：`automatic-default-iphoneos.log`。`git diff --check` 通过；未调用线上 API、未重跑完整 UI／USB、未提交／推送；已有其他工作区修改保留。
+
+
+### 2026-10-11 API 格式短名称与模型能力图标
+
+API 格式选项移除 OpenAI 前缀，显示 `Chat Completions`、`Responses API`，存储值与协议路径不变。编辑页和全部模型选择页共用的 `ProviderModelRow` 改为在模型 ID 右侧显示小图标：图片输入 `photo`、工具调用 `wrench.and.screwdriver`、思考 `brain`、文本生成 `text.bubble`；仅明确 supported 时显示，unknown／unsupported／无元数据均隐藏，不再显示能力文字或胶囊背景。图标保留辅助功能与 help 说明。“生成”表示文本输出／回复能力；OpenRouter 取自 output_modalities 的 text，其他旧协议取自对应生成方法或 completion 能力，不表示图片生成。能力解析、推理校验与设备执行规则不变。
+
+核心 **359 tests，0 失败**：`.build/validation/core.5KzYFS/Tests.xcresult`。定向 UI 首轮新增供应商、API／上下文切换两项通过；模型浏览测试因原 StaticText 定位在简化的按钮辅助功能结构中失效，新增稳定模型选项按钮标识并更新定位后复验通过：`model-icons-ui-recheck.xcresult`／`model-icons-ui-recheck.log`；首轮证据保留为 `model-icons-ui.xcresult`／`model-icons-ui.log`。共三项 UI 流程分别通过，验证未知能力隐藏、默认模型对号、模型搜索／改选／保存／会话选用与短 API 标签。最终无签名 iPhoneOS **BUILD SUCCEEDED**：`model-icons-final-iphoneos.log`。模型行截图导出并检查：`model-icons-screenshots/manifest.json`。未调用线上 API、未重跑完整 UI／USB，未提交／推送；保留其他已有工作区修改。
+
+
+### 2026-10-11 能力图标紧邻模型 ID
+
+共享模型行将 Spacer 移到能力图标后：模型 ID、能力图标紧邻左侧排列，默认模型对号继续保留在行尾。供应商编辑页与全部模型选择页同步生效，能力显示条件不变。
+
+核心 **359 tests，0 失败**：`.build/validation/core.4r9HCV/Tests.xcresult`；无签名 iPhoneOS **BUILD SUCCEEDED**：`model-icons-inline-iphoneos.log`；`git diff --check` 通过。仅布局间距调整，未新增测试或重跑 UI／USB，未调用线上 API、未提交／推送，保留其他工作区修改。
+
+
+### 2026-10-11 模型标题栏按钮间距与对齐
+
+模型标题栏改为紧邻的双按钮组，去掉默认 HStack 额外间距；保留各自 44 点点击区域，补偿右侧图标在点击区域内的缩进，使刷新图标与下方模型行对号的可见边缘对齐。标题继续与模型 ID 左边缘对齐。加载中在原刷新按钮位置显示可取消的进度指示，不另插入第三个控件，避免按钮组宽度变化。
+
+核心 **359 tests，0 失败**：`.build/validation/core.S42OFX/Tests.xcresult`；定向 UI **2 tests，0 失败**：`model-header-ui.xcresult`／`model-header-ui.log`，覆盖刷新模型、浏览／改选／保存、手动添加及移除恢复。无签名 iPhoneOS **BUILD SUCCEEDED**：`model-header-iphoneos.log`。已导出并检查截图，标题与模型 ID 左边缘一致，刷新与行尾对号对齐：`model-header-screenshots/manifest.json`。`git diff --check` 通过；未调用线上 API，未重跑完整 UI／USB，未提交／推送，保留其他工作区修改。
+
+
+### 2026-10-11 API 密钥字段文案与已保存掩码
+
+字段文案缩短为“API 密钥”。编辑已有供应商时，只检查同一配置 ID／规范化地址／供应商类型对应的钥匙串项目是否存在；`SecretStore.contains` 明确设置 kSecReturnData=false，只查询存在性，不将真实密钥回填到 UI。已保存且未输入替换值时显示固定 8 个圆点、正常 primary 文字色；聚焦后进入空白替换输入，未输入则失焦恢复掩码。显示圆点仅是覆盖层，不绑定到待保存值；空值保存继续保留原密钥，输入新值才替换，切换地址／类型不借用旧地址密钥状态。辅助功能分别报告未设置／已保存／已输入，不读取或朗读密钥内容。
+
+为独立验证 UI 状态和保存规则，新增可注入的供应商密钥写入／存在性检查；生产默认仍调用系统 SecretStore。单元测试及 DEBUG 专用 `--ui-testing --ui-test-provider-key` 使用临时内存合成值，不访问真实凭据。首轮直接依赖钥匙串的新增用例在保存步骤失败，证据 `core.bLjVkE`；随后 DEBUG fixture 插入位置导致编译失败，已修正，证据 `core.IWvPCC`。最终核心 **360 tests，0 失败**：`.build/validation/core.ShPZBz/Tests.xcresult`；定向 UI **2 tests，0 失败**：`provider-key-mask-ui.xcresult`／`provider-key-mask-ui.log`，覆盖保存后样式、替换、空值保留、地址变更及新建供应商。最终无签名 iPhoneOS **BUILD SUCCEEDED**：`provider-key-mask-final-iphoneos.log`。合成密钥掩码截图导出并检查：`provider-key-mask-screenshots/manifest.json`。`git diff --check` 通过。真实钥匙串存在性显示未做签名真机验证；未调用线上 API、未重跑完整 UI／USB、未提交／推送，保留其他已有修改。
