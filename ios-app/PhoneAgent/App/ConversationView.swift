@@ -3,6 +3,7 @@ import MarkdownUI
 
 struct ConversationView: View {
     @State private var browsingModels = false
+    @State private var showingModelSettings = false
     @StateObject private var presentation: AgentPresentationAdapter
     init(model: AgentViewModel, conversationID: UUID) {
         _presentation = StateObject(wrappedValue: AgentPresentationAdapter(model: model, sessionID: conversationID))
@@ -144,29 +145,86 @@ struct ConversationView: View {
         return models
     }
     private var modelPicker: some View {
-        Menu {
-            Section("供应商") {
+        Button { showingModelSettings = true } label: {
+            HStack(spacing: 4) {
+                Text(presentation.modelName).lineLimit(1)
+                if let effort = presentation.reasoningEffort { Text(effort).foregroundStyle(.secondary) }
+                Image(systemName: "chevron.down").imageScale(.small).accessibilityHidden(true)
+            }
+        }
+        .disabled(running || presentation.stopping)
+        .accessibilityIdentifier("conversationModelPicker")
+        .popover(isPresented: $showingModelSettings, arrowEdge: .bottom) {
+            modelSettingsPanel
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+    private var modelSettingsPanel: some View {
+        VStack(spacing: 0) {
+            Menu {
                 ForEach(presentation.providers) { provider in
                     Button { presentation.selectProvider(provider.id) } label: {
-                        // Native menus move separate images to the leading edge.
                         Text(provider.name + (provider.id == presentation.providerID ? "  ✓" : ""))
                     }
                 }
-            }
-            Section("模型") {
+            } label: {
+                modelSettingRow("供应商", value: presentation.selectedProvider?.name ?? "未选择")
+            }.accessibilityIdentifier("conversationProviderRow")
+                .accessibilityLabel("供应商")
+                .accessibilityValue(presentation.selectedProvider?.name ?? "未选择")
+            Divider()
+            Menu {
                 ForEach(modelMenuOptions, id: \.self) { name in
                     Button { presentation.selectModel(name) } label: {
                         Text(name + (name == presentation.selectedModel ? "  ✓" : ""))
                     }
                 }
-                Button("浏览全部模型") { browsingModels = true }.disabled(presentation.providerID == nil)
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text(presentation.modelName).lineLimit(1)
-                Image(systemName: "chevron.down").imageScale(.small).accessibilityHidden(true)
-            }
-        }.menuOrder(.fixed).disabled(running || presentation.stopping).accessibilityIdentifier("conversationModelPicker")
+                Button("浏览全部模型") {
+                    showingModelSettings = false
+                    browsingModels = true
+                }
+            } label: {
+                modelSettingRow("模型", value: presentation.modelName)
+            }.disabled(presentation.providerID == nil)
+                .accessibilityIdentifier("conversationModelRow")
+                .accessibilityLabel("模型")
+                .accessibilityValue(presentation.modelName)
+            Divider()
+            Menu {
+                Button(reasoningDefaultLabel) { presentation.selectReasoningEffort(nil) }
+                ForEach(presentation.reasoningMetadata?.reasoningEfforts ?? [], id: \.self) { effort in
+                    Button { presentation.selectReasoningEffort(effort) } label: {
+                        Text(effort + (effort == presentation.reasoningEffort ? "  ✓" : ""))
+                    }
+                }
+            } label: {
+                modelSettingRow("推理强度", value: presentation.reasoningEffort ?? reasoningDefaultLabel)
+            }.disabled(!presentation.canChangeReasoningEffort || presentation.providerID == nil)
+                .accessibilityIdentifier("conversationReasoningEffort")
+                .accessibilityLabel("推理强度")
+                .accessibilityValue(presentation.reasoningEffort ?? reasoningDefaultLabel)
+        }
+        .menuOrder(.fixed)
+        .buttonStyle(.plain)
+        .font(.subheadline)
+        .padding(.horizontal, 16)
+        .frame(width: 340)
+        .disabled(running || presentation.stopping)
+    }
+    private var reasoningDefaultLabel: String {
+        presentation.reasoningMetadata?.defaultReasoningEffort.map { "服务商默认（\($0)）" } ?? "服务商默认"
+    }
+    private func modelSettingRow(_ title: String, value: String) -> some View {
+        HStack(spacing: 16) {
+            Text(title).foregroundStyle(.primary)
+            Spacer(minLength: 8)
+            Text(value).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+        }
+        .padding(.vertical, 16)
+        .contentShape(Rectangle())
     }
     private func welcome(_ mode: RunMode) -> some View {
         VStack(alignment: .leading, spacing: 18) {

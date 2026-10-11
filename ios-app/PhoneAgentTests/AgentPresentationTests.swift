@@ -3,6 +3,39 @@ import SwiftAgentKit
 @testable import PhoneAgent
 
 @MainActor final class AgentPresentationTests: XCTestCase {
+    func testConversationReasoningChoicePersistsAndValidatesModelScope() throws {
+        let defaults = UserDefaults(suiteName: "conversation-effort-\(UUID())")!
+        defer { defaults.removeObject(forKey: ProviderStore.storageKey) }
+        let providers = ProviderStore(defaults: defaults)
+        var profile = ProviderProfile(settings: .init(baseURL: "https://fixture.invalid/v1", model: "thinking"), models: ["plain"])
+        var metadata = DiscoveredModel(id: "thinking", name: "Thinking")
+        metadata.reasoningEfforts = ["low", "high"]
+        profile.catalog = ModelCatalog(endpoint: try profile.catalogEndpoint(), fetchedAt: Date(), models: [metadata])
+        var parameters = ModelParameters(); parameters.values["temperature"] = "0.2"
+        profile.modelParameters = ["thinking": parameters]
+        try providers.save(profile)
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false, providers: providers)
+        let id = model.createConversation(mode: .live)
+        let presentation = AgentPresentationAdapter(model: model, sessionID: id)
+        presentation.selectReasoningEffort("high")
+        let saved = try XCTUnwrap(ProviderStore(defaults: defaults).profile(profile.id))
+        XCTAssertEqual(saved.parameters(for: "thinking").values["temperature"], "0.2")
+        XCTAssertEqual(try saved.parameters(for: "thinking").requestFields(providerKind: saved.providerKind, model: saved.metadata(for: "thinking"))["reasoning_effort"] as? String, "high")
+        presentation.selectReasoningEffort("unsupported")
+        XCTAssertEqual(presentation.reasoningEffort, "high")
+        presentation.selectModel("plain")
+        XCTAssertNil(presentation.reasoningEffort)
+        presentation.selectReasoningEffort("high")
+        XCTAssertNil(presentation.reasoningEffort)
+        presentation.selectModel("thinking")
+        XCTAssertEqual(presentation.reasoningEffort, "high")
+        let run = try XCTUnwrap(model.sessions.begin(in: id, query: "busy"))
+        presentation.selectReasoningEffort("low")
+        XCTAssertEqual(presentation.reasoningEffort, "high")
+        model.sessions.finish(run, phase: .completed, summary: "")
+        presentation.selectReasoningEffort(nil)
+        XCTAssertNil(ProviderStore(defaults: defaults).profile(profile.id)?.parameters(for: "thinking").reasoningEffort)
+    }
     func testConversationDraftInheritsChoiceAndCanBeDiscardedWithoutHistory() throws {
         let providers = ProviderStore(defaults: nil)
         let profile = ProviderProfile(settings: .init(model: "default"))

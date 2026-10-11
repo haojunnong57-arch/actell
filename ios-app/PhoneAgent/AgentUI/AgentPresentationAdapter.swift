@@ -59,6 +59,10 @@ struct ToolPresentation {
     var modelName: String { selectedModel.isEmpty ? "选择供应商和模型" : selectedModel }
     func selectProvider(_ id: UUID) { model.selectProvider(id, in: sessionID) }
     func selectModel(_ name: String) { model.selectModel(name, in: sessionID) }
+    var reasoningMetadata: DiscoveredModel? { selectedProvider?.metadata(for: selectedModel) }
+    var reasoningEffort: String? { selectedProvider?.parameters(for: selectedModel).reasoningEffort }
+    var canChangeReasoningEffort: Bool { !navigationModel.hasBusySessions }
+    func selectReasoningEffort(_ effort: String?) { model.selectReasoningEffort(effort, in: sessionID) }
     var approvalID: UUID? { model.approval(in: sessionID)?.id }
     var pendingApproval: ToolPresentation? {
         guard let messages = session?.messages else { return nil }

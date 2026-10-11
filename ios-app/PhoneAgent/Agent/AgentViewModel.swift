@@ -246,6 +246,21 @@ struct AgentRunServices {
         do { try providers.rememberSelection(providerID: profile.id, model: model) }
         catch { errorMessage = Self.safeError(error) }
     }
+    func selectReasoningEffort(_ effort: String?, in conversationID: UUID) {
+        guard sessions.conversation(conversationID) != nil, sessions.activeRuns[conversationID] == nil,
+              !appOwner.hasBusySessions, var profile = selectedProvider(in: conversationID) else { return }
+        let model = selectedModel(in: conversationID)
+        var parameters = profile.parameters(for: model)
+        parameters.reasoningEffort = effort
+        do {
+            _ = try parameters.requestFields(providerKind: profile.providerKind, model: profile.metadata(for: model))
+            var allParameters = profile.modelParameters ?? [:]
+            allParameters[model] = parameters
+            profile.modelParameters = allParameters
+            try providers.save(profile)
+            errorMessage = nil
+        } catch { errorMessage = Self.safeError(error) }
+    }
     @discardableResult func saveProvider(_ draft: ProviderProfile, key: String) -> Bool {
         guard !appOwner.hasBusySessions else { return false }
         do {
