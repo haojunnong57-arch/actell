@@ -77,7 +77,7 @@ final class ModelDiscoveryTests: XCTestCase {
         XCTAssertEqual(p.previewModels, ["model-7"])
     }
     @MainActor func testRemovedServiceChoicesKeepExistingArchiveReadable() throws {
-        XCTAssertEqual(ProviderKind.selectableKinds, [.openAI, .openRouter])
+        XCTAssertEqual(ProviderKind.selectableKinds, [.openAI, .openRouter, .chatGPTSubscription])
         let defaults = UserDefaults(suiteName: "removed-provider-types-\(UUID())")!
         defer { defaults.removeObject(forKey: ProviderStore.storageKey) }
         let legacy = [ProviderKind.anthropic, .gemini, .ollama].map { kind in

@@ -212,6 +212,34 @@ final class ResponsesProviderTests: XCTestCase {
         let body = String(decoding: try XCTUnwrap(codec.prepareRequest(prepared.request, stream: false).httpBody), as: UTF8.self)
         XCTAssertTrue(body.contains("AQ==")); XCTAssertFalse(body.contains("Ag==")); XCTAssertTrue(body.contains("Aw==")); XCTAssertTrue(body.contains("old receipt")); XCTAssertTrue(body.contains("new receipt"))
     }
+    func testAgentToolArgumentReencodingDoesNotChangeCommittedContext() throws {
+        let raw = try ContextCoordinator(scope: scope), stable = try ContextCoordinator(scope: scope)
+        let codec = OpenAIWireCodec(configuration: configuration, wire: .responses, scope: scope)
+        var r = request
+        let first = try raw.prepare(r), stableFirst = try stable.prepare(PortableContextRequest.normalized(r))
+        let response = try codec.parseResponse(json(envelope([call("one", item: "item-one", name: "tap", args: "{\"x\":1,\"y\":2}")])), request: first.request)
+        try raw.commit(response, prepared: first); try stable.commit(response, prepared: stableFirst)
+        // The actual runtime projection loses native-only fields, but preserves metadata.
+        let runtime = ModelToolCall(id: "one", name: "tap", arguments: "{\"x\":1,\"y\":2}", providerMetadata: response.toolCalls[0].providerMetadata)
+        r.messages += [.assistant(content: response.text, toolCalls: [runtime]), .tool("receipt", toolCallId: "one")]
+        let second = try raw.prepare(r), stableSecond = try stable.prepare(PortableContextRequest.normalized(r))
+        let response2 = try codec.parseResponse(json(envelope([call("two", item: "item-two", name: "screenshot", args: "{}")], id: "resp2")), request: second.request)
+        try raw.commit(response2, prepared: second); try stable.commit(response2, prepared: stableSecond)
+        r.messages[2] = .assistant(content: response.text, toolCalls: [.init(id: "one", name: "tap", arguments: "{ \"y\":2, \"x\":1 }", providerMetadata: runtime.providerMetadata)])
+        r.messages += [.assistant(content: response2.text, toolCalls: response2.toolCalls), .tool("image receipt", toolCallId: "two")]
+        XCTAssertThrowsError(try raw.prepare(r)) { error in
+            XCTAssertEqual(error as? ModelError, .protocolViolation("上下文已改变；不能静默剪链或重放动作，请开始新的任务"))
+        }
+        XCTAssertNoThrow(try stable.prepare(PortableContextRequest.normalized(r)))
+        for changed in [ModelToolCall(id: "one", name: "tap", arguments: "{\"x\":9,\"y\":2}", providerMetadata: runtime.providerMetadata),
+                        ModelToolCall(id: "changed", name: "tap", arguments: runtime.arguments, providerMetadata: runtime.providerMetadata),
+                        ModelToolCall(id: "one", name: "drag", arguments: runtime.arguments, providerMetadata: runtime.providerMetadata)] {
+            var altered = r; altered.messages[2] = .assistant(content: response.text, toolCalls: [changed])
+            XCTAssertThrowsError(try stable.prepare(PortableContextRequest.normalized(altered)))
+        }
+        var changedReceipt = r; changedReceipt.messages[3] = .tool("changed receipt", toolCallId: "one")
+        XCTAssertThrowsError(try stable.prepare(PortableContextRequest.normalized(changedReceipt)))
+    }
     func testHundredScreenshotRoundsKeepOnlyLatestDeviceImageAndAllReceipts() throws {
         let c = try ContextCoordinator(scope: scope), codec = OpenAIWireCodec(configuration: configuration, wire: .responses, scope: scope)
         var r = request
