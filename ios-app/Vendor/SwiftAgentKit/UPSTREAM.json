@@ -55,6 +55,12 @@
   "patched_files": [
     "Sources/SwiftAgentKit/Skills/AgentSkillStore.swift",
     "Sources/SwiftAgentKit/Planning/AgentGoal.swift",
-    "Sources/SwiftAgentKit/Memory/AgentMemoryStore.swift"
+    "Sources/SwiftAgentKit/Memory/AgentMemoryStore.swift",
+    "Sources/SwiftAgentKit/Core/Agent.swift",
+    "Sources/SwiftAgentKit/Core/AgentMessage.swift",
+    "Sources/SwiftAgentKit/Core/AgentLLMResponse.swift",
+    "Sources/SwiftAgentKit/Core/StreamStallPolicy.swift",
+    "Sources/SwiftAgentKit/Context/ContextManager.swift",
+    "Sources/SwiftAgentKit/Planning/AgentPlan.swift"
   ]
 }

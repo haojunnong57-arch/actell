@@ -12,9 +12,14 @@ on iOS, even when the app does not call these convenience methods.
 
 The package manifest exposes only the core product consumed by PhoneAgent and its
 unchanged compile-time macro. Unused MCP, desktop/simulator control, examples,
-documentation plugins and upstream tests are not included. LLMProviderKit and
+documentation plugins and upstream tests are not included. ProviderCore (local) and
 SwiftSyntax retain their previously resolved versions. No package cache is edited.
 
 `UPSTREAM.json` records original source hashes and the patched file list. The
 checked-in Xcode project and both project generators use this directory directly.
 PhoneAgentTests includes an iOS regression test for the three default stores.
+
+Provider migration: the six model/context seams now depend on ProviderCore,
+with native terminal snapshots, no text-to-tool inference, and no automatic
+regeneration on stall/incomplete streams. Agent scheduling, permissions and
+serial device dispatch remain intact. See ../../ProviderKit/README.md.

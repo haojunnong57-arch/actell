@@ -2,7 +2,7 @@ import Foundation
 import CoreFoundation
 import CryptoKit
 import SwiftAgentKit
-import LLMProviderKit
+import ProviderCore
 
 struct DeviceTool: AgentTool {
     let name: String
@@ -116,7 +116,7 @@ actor ActionCoordinator {
                 metadata["video_orientation"] = capture.videoOrientation
             }
             let receipt = try JSONSerialization.data(withJSONObject: metadata)
-            return .success(toolCallId: callID, toolName: name, result: String(data: receipt, encoding: .utf8)!, images: [LLMImage(data: frame.png, mimeType: frame.mimeType)])
+            return .success(toolCallId: callID, toolName: name, result: String(data: receipt, encoding: .utf8)!, images: [ModelImage(data: frame.png, mimeType: frame.mimeType)])
         case "list_apps":
             try await lifecycle?.dispatch(callID: callID, generation: generation, backgroundCapable: backgroundCapable)
             let data = try await bridge.installedApplications(); try checkActive()

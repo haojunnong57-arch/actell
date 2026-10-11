@@ -1,7 +1,7 @@
 import XCTest
 import CoreVideo
 import Combine
-import LLMProviderKit
+import ProviderCore
 @testable import PhoneAgent
 
 private final class SyntheticCapture: @unchecked Sendable {
@@ -41,18 +41,18 @@ private final class TestClock: @unchecked Sendable {
     func cancel(identifier: String) {}
 }
 @MainActor private final class TargetState { var changed = false }
-private struct ScreenOnlyProvider: LLMProvider {
+private struct ScreenOnlyProvider: ModelProvider {
     static let name = "screen-only-fixture"
-    let configuration = LLMProviderConfiguration(name: Self.name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
-    func complete(_ request: LLMRequest) async throws -> LLMResponse {
+    let configuration = ProviderConfiguration(name: Self.name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
+    func complete(_ request: ModelRequest) async throws -> ModelResponse {
         let observed = request.messages.contains { $0.role == .tool && $0.toolCallId == "read-screen" && !$0.images.isEmpty }
         if observed {
-            return LLMResponse(text: "已查看本机画面", finishReason: .stop, request: request, providerName: Self.name)
+            return ModelResponse(text: "已查看本机画面", finishReason: .stop, request: request, providerName: Self.name)
         }
-        return LLMResponse(text: "", finishReason: .toolCalls,
-            toolCalls: [LLMToolCall(id: "read-screen", name: "screenshot", arguments: "{}")], request: request, providerName: Self.name)
+        return ModelResponse(text: "", finishReason: .toolCalls,
+            toolCalls: [ModelToolCall(id: "read-screen", name: "screenshot", arguments: "{}")], request: request, providerName: Self.name)
     }
-    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
+    func stream(_ request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {

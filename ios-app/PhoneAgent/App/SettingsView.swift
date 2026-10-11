@@ -13,7 +13,7 @@ struct SettingsView: View {
             Form {
                 Section("模型") {
                     NavigationLink { ProvidersView(model: model) } label: {
-                        Text("服务商")
+                        Text("供应商")
                     }.accessibilityIdentifier("openProviders")
                 }
                 Section("手机操控") {

@@ -58,8 +58,7 @@ struct ContentView: View {
                 ToolbarItem(placement: .topBarTrailing) { Button(action: createConversation) { Image(systemName: "square.and.pencil") }.accessibilityLabel("新建会话").accessibilityIdentifier("newConversationToolbar") }
             }
             .navigationDestination(for: UUID.self) { id in
-                ConversationView(model: model, conversationID: id,
-                    openProviders: { panel = .settings }).id(id)
+                ConversationView(model: model, conversationID: id).id(id)
             }
             .sheet(item: $panel) { item in
                 switch item {

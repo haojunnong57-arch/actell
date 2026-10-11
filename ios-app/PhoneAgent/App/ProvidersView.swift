@@ -6,13 +6,14 @@ struct ProvidersView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var editing: ProviderProfile?
     @State private var removing: ProviderProfile?
+    @State private var adding = false
     init(model: AgentViewModel) { self.model = model; providers = model.providers }
     var body: some View {
         Group {
             List {
                 if let warning = providers.warning { Text(warning).foregroundStyle(.orange) }
                 if providers.profiles.isEmpty {
-                    ContentUnavailableView("添加模型服务商", systemImage: "server.rack", description: Text("配置地址和模型后，在会话中选择。"))
+                    ContentUnavailableView("添加模型供应商", systemImage: "server.rack", description: Text("配置地址和模型后，在会话中选择。"))
                 }
                 ForEach(providers.profiles) { profile in
                     Button { editing = profile } label: {
@@ -39,18 +40,19 @@ struct ProvidersView: View {
                     }
                 }
             }
-            .navigationTitle("服务商")
+            .navigationTitle("供应商")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button { editing = ProviderProfile() } label: { Image(systemName: "plus") }
-                        .accessibilityLabel("添加服务商").accessibilityIdentifier("addProvider")
+                    Button { adding = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("添加供应商").accessibilityIdentifier("addProvider")
                         .disabled(model.hasBusySessions || providers.warning != nil)
                 }
             }
             .sheet(item: $editing) { profile in ProviderEditor(model: model, profile: profile) }
-            .alert("移除此服务商？", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
-                Button("移除服务商", role: .destructive) {
+            .sheet(isPresented: $adding) { ProviderCreationView(model: model) }
+            .alert("移除此供应商？", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
+                Button("移除供应商", role: .destructive) {
                     if let removing { model.removeProvider(removing.id) }; removing = nil
                 }
                 Button("取消", role: .cancel) { removing = nil }
@@ -59,91 +61,190 @@ struct ProvidersView: View {
             }
         }
     }
+
+}
+
+private struct ProviderCreationView: View {
+    @ObservedObject var model: AgentViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: ProviderProfile?
+    var body: some View {
+        if let draft {
+            ProviderEditor(model: model, profile: draft)
+        } else {
+            NavigationStack {
+                List {
+                    Button("OpenAI") { select(.openAI) }.accessibilityIdentifier("providerPresetOpenAI")
+                    Button("OpenRouter") { select(.openRouter) }.accessibilityIdentifier("providerPresetOpenRouter")
+                    Button("ChatGPT 订阅") { select(.chatGPTSubscription) }.accessibilityIdentifier("providerPresetChatGPTSubscription")
+                    Button("自定义供应商") { select(nil) }.accessibilityIdentifier("providerPresetCustom")
+                }
+                .navigationTitle("添加供应商").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
+            }
+        }
+    }
+    private func select(_ preset: ProviderKind?) {
+        var profile = ProviderProfile()
+        profile.protocolKind = preset ?? .openAI
+        profile.name = preset.map { $0 == .openAI ? "OpenAI" : $0.title } ?? ""
+        profile.settings.baseURL = preset?.defaultBase ?? ""
+        profile.settings.model = ""
+        if preset == .chatGPTSubscription { profile.inferenceKind = .responses }
+        draft = profile
+    }
 }
 
 private struct ProviderEditor: View {
     @ObservedObject var model: AgentViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var profile: ProviderProfile
-    @State private var modelList: String
     @State private var key = ""
+    @State private var hasSavedKey = false
+    @FocusState private var keyFocused: Bool
     @StateObject private var discovery = ModelDiscoveryState()
     @State private var showingModels = false
+    @State private var addingModel = false
+    @State private var manualModel = ""
+    @StateObject private var signIn = ChatGPTSignInController()
+    @State private var subscriptionLoading = false
+    @State private var subscriptionTask: Task<Void, Never>?
     init(model: AgentViewModel, profile: ProviderProfile) {
         self.model = model
-        _profile = State(initialValue: profile)
-        _modelList = State(initialValue: profile.models.joined(separator: "\n"))
+        var draft = profile
+        draft.selectDefaultModelIfNeeded()
+        _profile = State(initialValue: draft)
+        _hasSavedKey = State(initialValue: model.hasSavedProviderKey(for: draft))
     }
     var body: some View {
         NavigationStack {
             Form {
-                Section("服务商") {
+                Section("供应商") {
                     TextField("名称", text: $profile.name).accessibilityIdentifier("providerName")
-                    Picker("协议", selection: Binding(get: { profile.protocolType }, set: { kind in
-                        let wasDefault = profile.settings.baseURL == profile.protocolType.defaultBase
-                        profile.protocolKind = kind
-                        if wasDefault { profile.settings.baseURL = kind.defaultBase }
-                    })) {
-                        ForEach(ProviderProtocol.allCases) { Text($0.title).tag($0) }
-                    }.accessibilityIdentifier("providerProtocol")
+                    LabeledContent("供应商", value: profile.providerKind.title).accessibilityIdentifier("providerKind")
+                    if !profile.providerKind.isSelectable {
+                        Text("此供应商类型已从列表移除。原配置与密钥保留；请返回列表添加新的供应商。")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                    if profile.providerKind == .chatGPTSubscription {
+                        let connectionStatus = signIn.accounts.first(where: { $0.id == signIn.selected })?.status ?? .disconnected
+                        if connectionStatus != .planAuthorized {
+                            Text(connectionStatus.message).accessibilityIdentifier("chatGPTConnectionStatus")
+                        }
+                        if let account = signIn.accounts.first(where: { $0.id == signIn.selected }) {
+                            LabeledContent("登录账号", value: account.label).accessibilityIdentifier("chatGPTAccount")
+                        }
+                        if connectionStatus == .disconnected {
+                            Button("使用 ChatGPT 登录") { connect() }
+                                .disabled(signIn.busy || model.hasBusySessions).accessibilityIdentifier("chatGPTSignIn")
+                        }
+                        if signIn.selected != nil {
+                            Button("退出此账户", role: .destructive) { Task { await signIn.disconnect(profileID: profile.id); profile.catalog = nil; profile.settings.model = ""; profile.models = []; connectedAccountChanged(); _ = model.saveProvider(profile, key: "") } }
+                                .disabled(model.hasBusySessions).accessibilityIdentifier("chatGPTDisconnect")
+                        }
+                        if signIn.busy { Button("取消 ChatGPT 登录") { signIn.cancel() }.accessibilityIdentifier("chatGPTCancelSignIn") }
+                        if let message = signIn.message { Text(message).accessibilityIdentifier("chatGPTSignInMessage") }
+                        LabeledContent("API 格式", value: "OpenAI Responses")
+                    } else {
                     TextField("HTTPS API 基础地址", text: $profile.settings.baseURL)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                         .accessibilityIdentifier("providerURL")
-                    SecureField("API 密钥（留空保留原值）", text: $key)
+                    SecureField("API 密钥", text: $key, prompt: Text(hasSavedKey && key.isEmpty && !keyFocused ? "" : "API 密钥"))
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .focused($keyFocused)
+                        .overlay(alignment: .leading) {
+                            if hasSavedKey && key.isEmpty && !keyFocused {
+                                Text("••••••••").foregroundStyle(.primary)
+                                    .allowsHitTesting(false).accessibilityHidden(true)
+                            }
+                        }
+                        .accessibilityLabel("API 密钥")
+                        .accessibilityValue(key.isEmpty ? (hasSavedKey ? "已保存密钥" : "未设置密钥") : "已输入密钥")
                         .accessibilityIdentifier("providerKey")
-                    Text(profile.protocolType.baseHint).font(.caption).foregroundStyle(.secondary)
-                    Text(profile.protocolType.inferenceNotice).font(.caption)
-                        .foregroundStyle(profile.protocolType.supportsInference ? Color.secondary : Color.orange)
-                }
-                Section {
-                    TextField("默认模型 ID", text: $profile.settings.model)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("providerModel")
-                    HStack {
-                        Button(profile.currentCatalog == nil ? "获取模型" : "刷新模型") { refresh() }
-                            .disabled(discovery.loading).accessibilityIdentifier("fetchModels")
-                        Spacer()
-                        if discovery.loading {
-                            ProgressView()
-                            Button("取消获取") { discovery.cancel() }.accessibilityIdentifier("cancelModels")
+                    if profile.providerKind.supportsResponses {
+                        Picker("API格式", selection: Binding(get: { profile.inferenceAPI }, set: { api in
+                            profile.inferenceKind = api
+                            if api == .chatCompletions { profile.contextKind = .stateless }
+                        })) { ForEach(InferenceAPI.allCases) { Text($0.title).tag($0) } }.accessibilityIdentifier("providerInferenceAPI")
+                        if profile.inferenceAPI == .responses {
+                            if profile.providerKind.supportsResponseChain { Picker("上下文", selection: Binding(get: { profile.contextPolicy }, set: { profile.contextKind = $0 })) {
+                                ForEach(ProviderContextPolicy.allCases) { Text($0.title).tag($0) }
+                            }.accessibilityIdentifier("providerContextPolicy") }
                         }
                     }
-                    if let message = discovery.message { Text(message).font(.caption).accessibilityIdentifier("modelDiscoveryStatus") }
-                    if let catalog = profile.currentCatalog {
-                        Button("选择已获取的模型（\(catalog.models.count)）") { showingModels = true }.accessibilityIdentifier("chooseDiscoveredModel")
-                        Text("本地缓存：\(catalog.fetchedAt.formatted(date: .abbreviated, time: .shortened))；刷新失败保留缓存。保存后下次可离线使用。")
-                            .font(.caption).foregroundStyle(.secondary)
                     }
-                    TextField("其他模型 ID，每行一个", text: $modelList, axis: .vertical)
-                        .lineLimit(3...6).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .accessibilityIdentifier("providerModels")
-                } header: { Text("模型") } footer: { Text("无法获取列表时仍可手动填写 ID。列表不代表推理兼容性；未提供的能力显示未知。保存不会发起网络请求。") }
-                if let metadata = profile.metadata(for: profile.settings.model) { ModelMetadataSection(metadata: metadata) }
+                }
+                Section {
+                    ForEach(profile.previewModels, id: \.self) { id in
+                        Button { profile.settings.model = id } label: {
+                            ProviderModelRow(id: id, metadata: profile.metadata(for: id), selected: id == profile.settings.model)
+                        }.buttonStyle(.plain).accessibilityIdentifier("providerModel-" + id)
+                            .accessibilityValue(id == profile.settings.model ? "已选中" : "未选中")
+                    }
+                    if profile.availableModels.count > 5 {
+                        Button("浏览全部模型") { showingModels = true }.accessibilityIdentifier("browseAllProviderModels")
+                    }
+                } header: {
+                    HStack(spacing: 0) {
+                        Text("模型")
+                        Spacer(minLength: 12)
+                        HStack(spacing: 0) {
+                            if profile.providerKind != .chatGPTSubscription { Button { manualModel = ""; addingModel = true } label: { Image(systemName: "plus").frame(width: 44, height: 44) }
+                                .accessibilityLabel("添加模型").accessibilityIdentifier("addProviderModel") }
+                            if discovery.loading || subscriptionLoading {
+                                Button { discovery.cancel(); subscriptionTask?.cancel(); subscriptionLoading = false } label: {
+                                    ProgressView().frame(width: 44, height: 44)
+                                }.accessibilityLabel("取消刷新模型").accessibilityIdentifier("cancelModels")
+                            } else {
+                                Button { refresh() } label: { Image(systemName: "arrow.clockwise").frame(width: 44, height: 44) }
+                                    .accessibilityLabel("刷新模型").accessibilityIdentifier("fetchModels")
+                                    .disabled(!profile.providerKind.isSelectable || (profile.providerKind == .chatGPTSubscription && profile.chatGPTAccountReference == nil))
+                            }
+                        }
+                        .font(.body)
+                        // Align the visible trailing icon with the row content,
+                        // while retaining each button's 44-point touch target.
+                        .padding(.trailing, -12)
+                    }.buttonStyle(.borderless)
+                }
                 if !profile.settings.model.isEmpty {
-                    ModelParameterSection(protocolType: profile.protocolType, metadata: profile.metadata(for: profile.settings.model),
+                    ModelReasoningSection(metadata: profile.metadata(for: profile.settings.model),
                         parameters: Binding(get: { profile.parameters(for: profile.settings.model) }, set: { value in
                             if profile.modelParameters == nil { profile.modelParameters = [:] }
                             profile.modelParameters?[profile.settings.model] = value
                         }))
                 }
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("--ui-test-chatgpt-loopback") { ChatGPTLoopbackProbeView() }
+                #endif
+                if let message = discovery.message { Text(message).font(.caption).accessibilityIdentifier("modelDiscoveryStatus") }
                 if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
             }
             .disabled(model.hasBusySessions)
-            .navigationTitle("编辑服务商").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("编辑供应商").navigationBarTitleDisplayMode(.inline)
+            .task { if profile.providerKind == .chatGPTSubscription { await signIn.reload(profileID: profile.id) } }
             .sheet(isPresented: $showingModels) {
                 ProviderModelPicker(profile: profile) { profile.settings.model = $0 }
             }
-            .onChange(of: profile.settings.baseURL) { _, _ in invalidateDiscovery() }
-            .onChange(of: profile.protocolKind) { _, _ in invalidateDiscovery() }
+            .alert("添加模型", isPresented: $addingModel) {
+                TextField("模型 ID", text: $manualModel).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("添加") {
+                    let id = manualModel.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !profile.models.contains(id) { profile.models.append(id) }
+                    profile.settings.model = id
+                }.disabled(manualModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("取消", role: .cancel) { manualModel = "" }
+            }
+            .onChange(of: profile.settings.baseURL) { _, _ in invalidateDiscovery(); hasSavedKey = model.hasSavedProviderKey(for: profile) }
+            .onChange(of: profile.protocolKind) { _, _ in invalidateDiscovery(); hasSavedKey = model.hasSavedProviderKey(for: profile) }
             .onChange(of: key) { _, _ in discovery.cancel(); profile.catalog = nil }
-            .onDisappear { discovery.cancel() }
+            .onDisappear { discovery.cancel(); subscriptionTask?.cancel(); signIn.cancel() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { key = ""; dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
-                        profile.models = modelList.components(separatedBy: .newlines)
                         if model.saveProvider(profile, key: key) { key = ""; dismiss() }
-                    }.disabled(model.hasBusySessions).accessibilityIdentifier("saveProvider")
+                    }.disabled(model.hasBusySessions || signIn.busy || !profile.providerKind.isSelectable).accessibilityIdentifier("saveProvider")
                 }
             }
         }
@@ -152,10 +253,39 @@ private struct ProviderEditor: View {
         discovery.cancel(); profile.catalog = nil; profile.modelParameters = nil
     }
     private func refresh() {
+        if profile.providerKind == .chatGPTSubscription {
+            subscriptionTask?.cancel(); subscriptionLoading = true
+            let draft = profile
+            subscriptionTask = Task {
+                defer { subscriptionLoading = false }
+                do {
+                    let catalog = try await ChatGPTAccountManager.shared.models(profile: draft)
+                    guard !Task.isCancelled, profile.chatGPTAccountReference == draft.chatGPTAccountReference else { return }
+                    profile.catalog = catalog
+                    if profile.settings.model.isEmpty { profile.settings.model = catalog.models.first?.id ?? "" }
+                    _ = model.saveProvider(profile, key: "")
+                } catch { if !Task.isCancelled { discovery.fail(error) } }
+            }
+            return
+        }
         do {
             let credential = try model.discoveryKey(for: profile, typedKey: key)
-            discovery.refresh(profile: profile, key: credential) { profile.catalog = $0 }
+            discovery.refresh(profile: profile, key: credential) {
+                profile.catalog = $0
+                profile.selectDefaultModelIfNeeded()
+            }
         } catch { discovery.fail(error) }
+    }
+    private func connect() {
+        guard model.saveProvider(profile, key: "") else { return }
+        signIn.start(profileID: profile.id) { connectedAccountChanged(); refresh() }
+    }
+    private func connectedAccountChanged() {
+        subscriptionTask?.cancel()
+        if profile.chatGPTAccountReference != signIn.selected {
+            profile.chatGPTAccountReference = signIn.selected; profile.settings.model = ""; profile.models = []
+            invalidateDiscovery(); _ = model.saveProvider(profile, key: "")
+        }
     }
 }
 
@@ -168,13 +298,11 @@ struct ProviderModelPicker: View {
         NavigationStack {
             List(profile.availableModels.filter { search.isEmpty || $0.localizedCaseInsensitiveContains(search) }, id: \.self) { id in
                 Button { select(id); dismiss() } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(id).foregroundStyle(.primary)
-                        Text(profile.metadata(for: id)?.capabilitySummary ?? "图片：未知 · 工具：未知").font(.caption).foregroundStyle(.secondary)
-                    }
+                    ProviderModelRow(id: id, metadata: profile.metadata(for: id))
                 }.buttonStyle(.plain)
+                    .accessibilityIdentifier("providerModelOption-" + id)
             }
-            .searchable(text: $search, prompt: "搜索模型 ID")
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索模型 ID")
             .navigationTitle("选择模型")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
@@ -182,43 +310,48 @@ struct ProviderModelPicker: View {
     }
 }
 
-private struct ModelMetadataSection: View {
-    let metadata: DiscoveredModel
+private struct ProviderModelRow: View {
+    let id: String
+    let metadata: DiscoveredModel?
+    var selected = false
     var body: some View {
-        Section("接口报告的能力") {
-            Text(metadata.capabilitySummary)
-            Text("文本生成：\(metadata.generation.label) · 思考：\(metadata.thinking.label)")
-            if let input = metadata.inputTokenLimit { Text("输入／上下文上限：\(input) tokens") }
-            if let output = metadata.outputTokenLimit { Text("输出上限：\(output) tokens") }
-            if let maximum = metadata.maxTemperature { Text("模型报告 maxTemperature：\(maximum.formatted())") }
-            if let methods = metadata.generationMethods { Text("生成方法：" + methods.joined(separator: ", ")) }
-            if let prices = metadata.pricing {
-                ForEach(prices.keys.sorted(), id: \.self) { key in Text("报价 \(key)：\(prices[key] ?? "")").font(.caption) }
-                Text("报价单位和计费条件请以服务商为准。不会根据报价调用模型。").font(.caption).foregroundStyle(.secondary)
+        HStack(spacing: 8) {
+            Text(id).foregroundStyle(.primary)
+            HStack(spacing: 6) {
+                capabilityIcon("photo", label: "支持图片输入", support: metadata?.vision)
+                capabilityIcon("wrench.and.screwdriver", label: "支持工具调用", support: metadata?.tools)
+                capabilityIcon("brain", label: "支持思考", support: metadata?.thinking)
+                capabilityIcon("text.bubble", label: "支持文本生成", support: metadata?.generation)
             }
-            if let notice = metadata.detailNotice { Text(notice).font(.caption).foregroundStyle(.orange) }
-        }.font(.subheadline)
+            .font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            if selected { Image(systemName: "checkmark").foregroundStyle(.tint).accessibilityHidden(true) }
+        }.padding(.vertical, 4)
+    }
+    @ViewBuilder private func capabilityIcon(_ symbol: String, label: String, support: CapabilitySupport?) -> some View {
+        if support == .supported {
+            Image(systemName: symbol).accessibilityLabel(label).help(label)
+        }
     }
 }
 
-private struct ModelParameterSection: View {
-    let protocolType: ProviderProtocol
+private struct ModelReasoningSection: View {
     let metadata: DiscoveredModel?
     @Binding var parameters: ModelParameters
     var body: some View {
         Section {
-            ForEach(ModelParameter.fields(for: protocolType)) { field in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(field.rawValue + " · " + field.support(protocolType: protocolType, model: metadata).label).font(.subheadline)
-                    TextField("未设置，使用服务商默认值", text: Binding(get: { parameters.values[field.rawValue] ?? "" }, set: { parameters.values[field.rawValue] = $0 }))
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .disabled(field.support(protocolType: protocolType, model: metadata) == .unsupported)
-                        .accessibilityIdentifier("parameter-" + field.rawValue)
-                    Text(field.hint(protocolType: protocolType, model: metadata)).font(.caption).foregroundStyle(.secondary)
+            if let efforts = metadata?.reasoningEfforts, !efforts.isEmpty {
+                Picker("思考强度", selection: Binding(get: { parameters.reasoningEffort ?? "" }, set: { parameters.reasoningEffort = $0.isEmpty ? nil : $0 })) {
+                    Text(metadata?.defaultReasoningEffort.map { "服务商默认（\($0)）" } ?? "服务商默认").tag("")
+                    ForEach(efforts, id: \.self) { Text($0).tag($0) }
+                }.accessibilityIdentifier("reasoningEffort")
+                if let selected = parameters.reasoningEffort, !efforts.contains(selected) {
+                    Text("原思考强度已不可用，请选择当前档位或默认值。").foregroundStyle(.orange)
                 }
+            } else {
+                Text("此模型未报告可用思考档位；使用服务商默认值。")
+                if parameters.reasoningEffort != nil { Button("清除原思考强度") { parameters.reasoningEffort = nil } }
             }
-            if !protocolType.supportsInference { Text("原生推理尚未接入，暂不提供推理参数设置。") }
-        } header: { Text("此服务商／模型的参数") }
-        footer: { Text("留空不发送参数。未知表示模型接口未声明：可手动填写协议已知字段，但服务商仍可能拒绝。明确不支持的字段不会发送。设置仅用于此服务商的当前模型。") }
+        } header: { Text("思考强度") }
     }
 }

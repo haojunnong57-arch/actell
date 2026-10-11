@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>将你选择保存的手机截图添加到相册。</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER).backgroundRun.*</string>
@@ -20,16 +18,16 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_remotepairing-pairable-host._tcp</string>
+		<string>_remotepairing._tcp</string>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>screen-capture</string>
 		<string>processing</string>
 		<string>audio</string>
-	</array>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_remotepairing-pairable-host._tcp</string>
-		<string>_remotepairing._tcp</string>
 	</array>
 </dict>
 </plist>

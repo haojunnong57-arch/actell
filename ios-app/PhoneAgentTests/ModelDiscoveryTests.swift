@@ -1,5 +1,5 @@
 import XCTest
-import LLMProviderKit
+import ProviderCore
 @testable import PhoneAgent
 
 private final class ModelHTTPStub: URLProtocol, @unchecked Sendable {
@@ -22,6 +22,80 @@ private final class ModelHTTPStub: URLProtocol, @unchecked Sendable {
 }
 
 final class ModelDiscoveryTests: XCTestCase {
+    func testMissingDefaultSelectsFirstAvailableModelAndPreservesSelection() throws {
+        var p = profile()
+        p.settings.model = " \n"
+        p.models = [" ", "first", "second"]
+        p.selectDefaultModelIfNeeded()
+        XCTAssertEqual(p.settings.model, "first")
+        p.settings.model = "manual"
+        p.selectDefaultModelIfNeeded()
+        XCTAssertEqual(p.settings.model, "manual")
+        p.settings.model = ""; p.models = []
+        p.catalog = ModelCatalog(endpoint: try p.catalogEndpoint(), fetchedAt: Date(), models: [.init(id: "catalog-first", name: "First"), .init(id: "catalog-second", name: "Second")])
+        p.selectDefaultModelIfNeeded()
+        XCTAssertEqual(p.settings.model, "catalog-first")
+        p.settings.model = ""; p.settings.baseURL = "https://other.invalid/v1"
+        p.selectDefaultModelIfNeeded()
+        XCTAssertEqual(p.settings.model, "")
+        p.catalog = nil
+        p.selectDefaultModelIfNeeded()
+        XCTAssertEqual(p.settings.model, "")
+    }
+    @MainActor func testDefaultModelIsSelectedOnSaveAndLegacyLoad() throws {
+        let defaults = UserDefaults(suiteName: "automatic-default-model-\(UUID())")!
+        defer { defaults.removeObject(forKey: ProviderStore.storageKey) }
+        var p = profile()
+        p.settings.model = ""; p.models = ["first", "second"]
+        let store = ProviderStore(defaults: defaults)
+        try store.save(p)
+        XCTAssertEqual(store.profile(p.id)?.settings.model, "first")
+        XCTAssertEqual(ProviderStore(defaults: defaults).profile(p.id)?.settings.model, "first")
+        struct SavedArchive: Encodable {
+            let version = 1
+            let profiles: [ProviderProfile]
+            let removed: [ProviderProfile]
+        }
+        defaults.set(try JSONEncoder().encode(SavedArchive(profiles: [p], removed: [])), forKey: ProviderStore.storageKey)
+        XCTAssertEqual(ProviderStore(defaults: defaults).profile(p.id)?.settings.model, "first")
+    }
+    func testModelPreviewKeepsOrderAndAppendsSelectedOutsideLimit() throws {
+        var p = profile()
+        p.models = ["one", "two", "three", "four", "five", "six", "seven", "one"]
+        p.settings.model = "seven"
+        XCTAssertEqual(p.previewModels, ["one", "two", "three", "four", "five", "seven"])
+        p.settings.model = "two"
+        XCTAssertEqual(p.previewModels, ["one", "two", "three", "four", "five"])
+        p.settings.model = "manual"
+        XCTAssertEqual(p.previewModels, ["one", "two", "three", "four", "five", "manual"])
+        p.models = []; p.settings.model = ""
+        XCTAssertEqual(p.previewModels, [])
+        p.catalog = ModelCatalog(endpoint: try p.catalogEndpoint(), fetchedAt: Date(), models: (1...7).map { .init(id: "model-\($0)", name: "fixture") })
+        p.settings.model = "model-7"
+        XCTAssertEqual(p.previewModels, ["model-1", "model-2", "model-3", "model-4", "model-5", "model-7"])
+        p.settings.baseURL = "https://other.invalid/v1"
+        XCTAssertEqual(p.previewModels, ["model-7"])
+    }
+    @MainActor func testRemovedServiceChoicesKeepExistingArchiveReadable() throws {
+        XCTAssertEqual(ProviderKind.selectableKinds, [.openAI, .openRouter, .chatGPTSubscription])
+        let defaults = UserDefaults(suiteName: "removed-provider-types-\(UUID())")!
+        defer { defaults.removeObject(forKey: ProviderStore.storageKey) }
+        let legacy = [ProviderKind.anthropic, .gemini, .ollama].map { kind in
+            profile(kind, base: kind.defaultBase)
+        }
+        let profiles = legacy + [profile(.openRouter, base: ProviderKind.openRouter.defaultBase)]
+        struct SavedArchive: Encodable {
+            let version = 1
+            let profiles: [ProviderProfile]
+            let removed: [ProviderProfile]
+        }
+        defaults.set(try JSONEncoder().encode(SavedArchive(profiles: profiles, removed: [])), forKey: ProviderStore.storageKey)
+        let restored = ProviderStore(defaults: defaults)
+        XCTAssertNil(restored.warning)
+        XCTAssertEqual(restored.profiles, profiles)
+        XCTAssertTrue(legacy.allSatisfy { !$0.providerKind.isSelectable })
+        XCTAssertTrue(restored.profiles.last!.providerKind.isSelectable)
+    }
     override func tearDown() {
         ModelHTTPStub.lock.withLock { ModelHTTPStub.handler = nil; ModelHTTPStub.requests = [] }
         super.tearDown()
@@ -31,14 +105,14 @@ final class ModelDiscoveryTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [ModelHTTPStub.self]
         return ModelDiscoveryClient(configuration: config)
     }
-    private func profile(_ kind: ProviderProtocol = .openAI, base: String = "https://fixture.invalid/proxy/v1/") -> ProviderProfile {
+    private func profile(_ kind: ProviderKind = .openAI, base: String = "https://fixture.invalid/proxy/v1/") -> ProviderProfile {
         var profile = ProviderProfile(name: "synthetic", settings: .init(baseURL: base, model: "test"))
         profile.protocolKind = kind; return profile
     }
     func testURLRulesKeepPrefixesAndNeverGuessVersionOrAcceptCompletionEndpoint() throws {
         let client = ModelDiscoveryClient()
         for (kind, base, expected) in [
-            (ProviderProtocol.openAI, "https://fixture.invalid/team/v1/", "/team/v1/models"),
+            (ProviderKind.openAI, "https://fixture.invalid/team/v1/", "/team/v1/models"),
             (.openAI, "https://fixture.invalid/custom", "/custom/models"),
             (.anthropic, "https://fixture.invalid/team/", "/team/v1/models"),
             (.anthropic, "https://fixture.invalid/team/v1/", "/team/v1/models"),
@@ -49,7 +123,7 @@ final class ModelDiscoveryTests: XCTestCase {
             XCTAssertEqual(try client.request(profile: profile(kind, base: base), key: "fixture").url?.path, expected)
         }
         for base in ["https://fixture.invalid/v1/chat/completions/", "https://fixture.invalid/v1/models", "https://name:secret@fixture.invalid/v1", "https://fixture.invalid/v1?key=secret", "http://fixture.invalid/v1"] {
-            XCTAssertThrowsError(try ProviderProtocol.openAI.baseURL(base))
+            XCTAssertThrowsError(try ProviderKind.openAI.baseURL(base))
         }
     }
     func testProtocolHeadersAndPaginationTokensNeverGoInCredentialsQuery() throws {
@@ -155,27 +229,27 @@ final class ModelDiscoveryTests: XCTestCase {
     func testInferenceUsesOnlyExplicitCompatibleParametersAndCorrectEndpoint() throws {
         let parameters = ModelParameters(values: ["temperature":"0.4", "max_tokens":"150", "seed":"2", "unknown":"private"])
         let metadata = DiscoveredModel(id: "a", name: "a", supportedParameters: ["temperature", "max_tokens"])
-        let provider = try PrivateVisionProvider(settings: .init(baseURL: "https://fixture.invalid/proxy/api/v1/", model: "a"), apiKey: "synthetic", limits: .init(), protocolType: .openRouter, parameters: parameters, metadata: metadata)
+        let provider = try PrivateVisionProvider(settings: .init(baseURL: "https://fixture.invalid/proxy/api/v1/", model: "a"), apiKey: "synthetic", limits: .init(), providerKind: .openRouter, parameters: parameters, metadata: metadata)
         let request = try provider.prepareRequest(.init(model: "a", messages: [.user("test")], temperature: 1, maxTokens: 999, topP: 0.9), stream: false)
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
         XCTAssertEqual(request.url?.path, "/proxy/api/v1/chat/completions")
         XCTAssertEqual(body["temperature"] as? Double, 0.4); XCTAssertEqual(body["max_tokens"] as? Int, 150)
         XCTAssertNil(body["seed"]); XCTAssertNil(body["top_p"]); XCTAssertNil(body["unknown"])
         XCTAssertEqual(body["parallel_tool_calls"] as? Bool, true)
-        let ollama = try PrivateVisionProvider(settings: .init(baseURL: "https://fixture.invalid/proxy/api", model: "a"), apiKey: "", limits: .init(), protocolType: .ollama)
+        let ollama = try PrivateVisionProvider(settings: .init(baseURL: "https://fixture.invalid/proxy/api", model: "a"), apiKey: "", limits: .init(), providerKind: .ollama)
         let o = try ollama.prepareRequest(.init(model: "a", messages: [.user("test")]), stream: false)
         XCTAssertEqual(o.url?.path, "/proxy/v1/chat/completions"); XCTAssertNil(o.value(forHTTPHeaderField: "Authorization"))
     }
     func testNativeProtocolsNeverFallBackToOpenAIInferenceAndUnknownIsNotFalse() throws {
-        for kind in [ProviderProtocol.anthropic, .gemini] {
+        for kind in [ProviderKind.anthropic, .gemini] {
             XCTAssertThrowsError(try profile(kind).requireInference(model: "a"))
-            XCTAssertThrowsError(try PrivateVisionProvider(settings: profile(kind).settings, apiKey: "fixture", limits: .init(), protocolType: kind))
+            XCTAssertThrowsError(try PrivateVisionProvider(settings: profile(kind).settings, apiKey: "fixture", limits: .init(), providerKind: kind))
         }
         XCTAssertNoThrow(try profile().requireInference(model: "unknown-manual"))
-        XCTAssertEqual(ModelParameter.temperature.support(protocolType: .openAI, model: nil), .unknown)
-        XCTAssertThrowsError(try ModelParameters(values: ["temperature":"nan"]).requestFields(protocolType: .openAI, model: nil))
-        XCTAssertThrowsError(try ModelParameters(values: ["top_p":"1.5"]).requestFields(protocolType: .openAI, model: nil))
-        XCTAssertThrowsError(try ModelParameters(values: ["max_tokens":"2", "max_completion_tokens":"3"]).requestFields(protocolType: .openAI, model: nil))
+        XCTAssertEqual(ModelParameter.temperature.support(providerKind: .openAI, model: nil), .unknown)
+        XCTAssertThrowsError(try ModelParameters(values: ["temperature":"nan"]).requestFields(providerKind: .openAI, model: nil))
+        XCTAssertThrowsError(try ModelParameters(values: ["top_p":"1.5"]).requestFields(providerKind: .openAI, model: nil))
+        XCTAssertThrowsError(try ModelParameters(values: ["max_tokens":"2", "max_completion_tokens":"3"]).requestFields(providerKind: .openAI, model: nil))
     }
 }
 
@@ -185,7 +259,7 @@ final class ModelDiscoveryTests: XCTestCase {
         let store = ProviderStore(defaults: defaults)
         var a = ProviderProfile(name: "a", settings: .init(baseURL: "https://a.invalid/v1", model: "same"))
         let old = try JSONEncoder().encode(a)
-        XCTAssertEqual(try JSONDecoder().decode(ProviderProfile.self, from: old).protocolType, .openAI)
+        XCTAssertEqual(try JSONDecoder().decode(ProviderProfile.self, from: old).providerKind, .openAI)
         a.catalog = .init(endpoint: try a.catalogEndpoint(), fetchedAt: Date(), models: [.init(id: "found", name: "Found")])
         a.modelParameters = ["same": .init(values: ["temperature":"0.2"])]
         try store.save(a)

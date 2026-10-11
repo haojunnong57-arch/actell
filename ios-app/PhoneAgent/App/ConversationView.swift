@@ -4,14 +4,10 @@ import MarkdownUI
 struct ConversationView: View {
     @State private var browsingModels = false
     @StateObject private var presentation: AgentPresentationAdapter
-    let openProviders: () -> Void
-    init(model: AgentViewModel, conversationID: UUID, openProviders: @escaping () -> Void) {
+    init(model: AgentViewModel, conversationID: UUID) {
         _presentation = StateObject(wrappedValue: AgentPresentationAdapter(model: model, sessionID: conversationID))
-        self.openProviders = openProviders
     }
     @State private var draft = ""
-    @State private var choosingModel = false
-    @State private var customModel = ""
     @State private var followLatest = true
     @State private var userScrolling = false
     @State private var lastMessageVisible = false
@@ -118,11 +114,6 @@ struct ConversationView: View {
                 }
                 .safeAreaBar(edge: .bottom, spacing: 0) { composer }
                 .navigationTitle(session.title).navigationBarTitleDisplayMode(.inline)
-                .alert("选择模型", isPresented: $choosingModel) {
-                    TextField("模型 ID", text: $customModel).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Button("使用") { presentation.selectModel(customModel.trimmingCharacters(in: .whitespacesAndNewlines)) }
-                    Button("取消", role: .cancel) {}
-                } message: { Text("使用当前服务商的模型 ID。") }
                 .sheet(isPresented: $browsingModels) {
                     if let profile = presentation.selectedProvider {
                         ProviderModelPicker(profile: profile) { presentation.selectModel($0) }
@@ -146,30 +137,35 @@ struct ConversationView: View {
         #endif
         return viewportDiagnostic
     }
+    private var modelMenuOptions: [String] {
+        var models = Array(presentation.availableModels.prefix(12))
+        let selected = presentation.selectedModel
+        if !selected.isEmpty, !models.contains(selected) { models.append(selected) }
+        return models
+    }
     private var modelPicker: some View {
         Menu {
-            Section("服务商") {
+            Section("供应商") {
                 ForEach(presentation.providers) { provider in
                     Button { presentation.selectProvider(provider.id) } label: {
-                        if provider.id == presentation.providerID { Label(provider.name, systemImage: "checkmark") }
-                        else { Text(provider.name) }
+                        // Native menus move separate images to the leading edge.
+                        Text(provider.name + (provider.id == presentation.providerID ? "  ✓" : ""))
                     }
                 }
             }
             Section("模型") {
-                ForEach(Array(presentation.availableModels.prefix(12)), id: \.self) { name in
+                ForEach(modelMenuOptions, id: \.self) { name in
                     Button { presentation.selectModel(name) } label: {
-                        if name == presentation.selectedModel { Label(name, systemImage: "checkmark") }
-                        else { Text(name) }
+                        Text(name + (name == presentation.selectedModel ? "  ✓" : ""))
                     }
                 }
                 Button("浏览全部模型") { browsingModels = true }.disabled(presentation.providerID == nil)
-                Button("其他模型…") { customModel = presentation.selectedModel; choosingModel = true }
-                    .disabled(presentation.providerID == nil)
             }
-            Button("管理服务商", action: openProviders)
         } label: {
-            Label(presentation.modelName, systemImage: "chevron.down").lineLimit(1)
+            HStack(spacing: 4) {
+                Text(presentation.modelName).lineLimit(1)
+                Image(systemName: "chevron.down").imageScale(.small).accessibilityHidden(true)
+            }
         }.menuOrder(.fixed).disabled(running || presentation.stopping).accessibilityIdentifier("conversationModelPicker")
     }
     private func welcome(_ mode: RunMode) -> some View {

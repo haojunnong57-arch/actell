@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 **A vibe-coded project in its early technical prototype stage, shared to explore ideas.** PhoneAgent (执言) explores how an agent running on an iPhone can call CoreDevice services to capture the screen and perform taps and drags. The current default uses an external VPN loopback route without an ESP32; ESP32-S3 USB NCM forwarding is also available. Production readiness and reliable long-running background execution are not guaranteed.
 
-The app uses [SwiftAgentKit](https://github.com/ayman3000/SwiftAgentKit), [LLMProviderKit](https://github.com/ayman3000/LLMProviderKit), and [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui). Its developer-services backend reuses the patched version of [idevice](https://github.com/jkcoxson/idevice) used by [Device Hub](https://github.com/JaviSoto/device-hub-ios), with protocol references from [pymobiledevice3](https://github.com/doronz88/pymobiledevice3). The reuse boundaries are described below.
+The app uses [SwiftAgentKit](https://github.com/ayman3000/SwiftAgentKit), [MacPaw/OpenAI](https://github.com/MacPaw/OpenAI), and [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui). Its developer-services backend reuses the patched version of [idevice](https://github.com/jkcoxson/idevice) used by [Device Hub](https://github.com/JaviSoto/device-hub-ios), with protocol references from [pymobiledevice3](https://github.com/doronz88/pymobiledevice3). The reuse boundaries are described below.
 
 ## From ESP32 peripherals to CoreDevice
 
@@ -14,7 +14,7 @@ The ESP32-S3 currently provides USB NCM networking, discovery, and restricted bi
 
 ## Current capabilities and limits
 
-- Supports OpenAI Chat Completions-compatible providers and models, using the `screenshot`, `tap`, `drag`, and `wait` tools to execute tasks. Manage providers under Settings → Providers. Native Anthropic/Gemini support currently covers model discovery only.
+- Supports OpenAI Chat Completions-compatible providers and an explicitly selectable native Responses path, using the `screenshot`, `tap`, `drag`, and `wait` tools to execute tasks. Settings → Suppliers starts with OpenAI and OpenRouter presets, followed by a custom supplier with blank fields. The supplier type is fixed in the editor; API format is selectable. Legacy Anthropic, Gemini and Ollama configurations remain readable, but a replacement must be added to use a current supplier.
 - Imports Markdown/TXT skill packages and reads their text on demand; importing does not execute scripts. Supports conversation history, image attachments, tool approval, and manual stopping. Control tasks for the same phone are queued by whole agent turn, and actions with uncertain outcomes are not automatically replayed.
 - Control sessions continuously receive a display stream, decode it with VideoToolbox, and cache the latest complete frame. The screenshot tool takes an image from that stream, removes padding, and encodes it as JPEG; it does not call the system's separate screenshot service for each request by default. Each call still waits for a newly decoded frame or a sender progress report received after the request begins to confirm that the cached image is complete. The wait can take up to eight seconds; this does not mean immediately returning any old cached frame. The standalone PNG screenshot implementation remains available in the source, but is not an automatic fallback.
 - The ESP32 route has recorded real screenshots and increases in a test button's tap counter. In an iPhone 15 Pro test on 2026-10-09, the VPN loopback route reused the pairing identity, produced a 1179 × 2556 screenshot, increased the actual tap counter from 0 to 1, and confirmed media release. Complete model-driven tasks, dragging, and sustained background execution over VPN loopback still require separate acceptance testing.
@@ -72,7 +72,7 @@ Protocol tests use loopback networking. App tests use synthetic models and tempo
 | Project | Current usage |
 | --- | --- |
 | [SwiftAgentKit](https://github.com/ayman3000/SwiftAgentKit) | Local source snapshot of the agent core and macros, with iOS storage compatibility patches; does not include the upstream MCP module |
-| [LLMProviderKit](https://github.com/ayman3000/LLMProviderKit) / [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui) | Swift Package dependencies for model calls and Markdown message rendering, respectively |
+| [MacPaw/OpenAI](https://github.com/MacPaw/OpenAI) / [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui) | Swift Package dependencies for model calls and Markdown message rendering, respectively |
 | [idevice](https://github.com/jkcoxson/idevice) / [Device Hub](https://github.com/JaviSoto/device-hub-ios) | Reuses the patched idevice source and PNG validator pinned by Device Hub, with local adaptations; does not integrate the entire Device Hub app |
 | [ManifoldKit](https://github.com/ManifoldKit/ManifoldKit) | Selected and adapted tool-call presentation components, not a package dependency on the entire framework |
 | [ESP-IDF](https://github.com/espressif/esp-idf/tree/v5.5.5), [esp_tinyusb](https://github.com/espressif/esp-usb), [TinyUSB](https://github.com/hathach/tinyusb) | ESP32 firmware toolchain and USB components; pinned to ESP-IDF 5.5.5, esp_tinyusb 2.2.0, and TinyUSB 0.21.0~2 |

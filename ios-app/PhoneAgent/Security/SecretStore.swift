@@ -22,6 +22,16 @@ enum SecretStore {
         }
         return value
     }
+    static func contains(_ account: String) throws -> Bool {
+        var attributes = query(account)
+        attributes[kSecReturnData as String] = false
+        attributes[kSecReturnAttributes as String] = true
+        attributes[kSecMatchLimit as String] = kSecMatchLimitOne
+        let status = SecItemCopyMatching(attributes as CFDictionary, nil)
+        if status == errSecItemNotFound { return false }
+        guard status == errSecSuccess else { throw AppError.unavailable("无法检查钥匙串") }
+        return true
+    }
     static func save(_ value: String, account: String) throws {
         let update: [String: Any] = [kSecValueData as String: Data(value.utf8),
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]

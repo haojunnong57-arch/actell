@@ -2,10 +2,10 @@ import Foundation
 import SwiftUI
 import Combine
 import SwiftAgentKit
-import LLMProviderKit
+import ProviderCore
 
 struct AgentRunServices {
-    let provider: any LLMProvider
+    let provider: any ModelProvider
     let bridge: any DeviceBridge
 }
 
@@ -32,6 +32,8 @@ struct AgentRunServices {
     @Published var storageWarning: String?
     @Published private(set) var selectedConversationID: UUID?
     let providers: ProviderStore
+    private let writeProviderKey: (String, String) throws -> Void
+    private let containsProviderKey: (String) throws -> Bool
     let attachments: AttachmentStore
     let skills: SkillStore
     private var runSkillNames: [String: String] = [:]
@@ -110,7 +112,7 @@ struct AgentRunServices {
     private var foreground = true
     private var healthObserver: UUID?
     private var agent: Agent?
-    private var provider: PrivateVisionProvider?
+    private var provider: (any CancellableModelProvider)?
     private var coordinator: ActionCoordinator?
     private var bridge: (any DeviceBridge)?
     private var liveBridge: TLSBridge?
@@ -127,8 +129,11 @@ struct AgentRunServices {
          providers: ProviderStore? = nil, sharedCapture: ScreenCaptureController? = nil,
          sharedActivities: AgentLiveActivityController? = nil, checkpointDirectory: URL? = nil,
          restoreLegacyState: Bool = true, runServicesFactory: (@MainActor (UUID) -> AgentRunServices)? = nil,
+         writeProviderKey: @escaping (String, String) throws -> Void = { try SecretStore.save($0, account: $1) },
+         containsProviderKey: @escaping (String) throws -> Bool = SecretStore.contains,
          makeUSBClient: @escaping @MainActor (USBDiagnosticsLog, @escaping @Sendable (USBConnectionStatus) -> Void) -> any USBConnectionSession = { USBCommandClient(diagnostics: $0, onProgress: $1) }) {
         self.providers = providers ?? ProviderStore(defaults: loadPersistentState ? .standard : nil)
+        self.writeProviderKey = writeProviderKey; self.containsProviderKey = containsProviderKey
         self.capture = sharedCapture ?? ScreenCaptureController()
         self.persistentRuntime = loadPersistentState; self.runServicesFactory = runServicesFactory
         self.skills = skills ?? SkillStore(inMemory: !loadPersistentState)
@@ -182,8 +187,8 @@ struct AgentRunServices {
         guard sessions.conversation(id) != nil else { return }
         selectedConversationID = id
         let worker = executionModel(for: id)
-        if sessions.conversation(id)?.providerID == nil, let profile = providers.profiles.first {
-            sessions.selectProvider(profile.id, model: profile.settings.model, in: id)
+        if sessions.conversation(id)?.providerID == nil, let selection = providers.defaultSelection {
+            sessions.selectProvider(selection.profile.id, model: selection.model, in: id)
         }
         if !worker.running && !worker.stopping {
             worker.mode = sessions.conversation(id)?.mode ?? .demo
@@ -216,19 +221,28 @@ struct AgentRunServices {
         sessions.conversation(conversationID)?.modelID ?? selectedProvider(in: conversationID)?.settings.model ?? ""
     }
     func selectProvider(_ id: UUID, in conversationID: UUID) {
-        guard !isRunning(in: conversationID), existingExecutionModel(for: conversationID)?.stopping != true, let profile = providers.profile(id) else { return }
+        guard sessions.conversation(conversationID) != nil, sessions.activeRuns[conversationID] == nil,
+              !isRunning(in: conversationID), existingExecutionModel(for: conversationID)?.stopping != true, let profile = providers.profile(id) else { return }
         sessions.selectProvider(id, model: profile.settings.model, in: conversationID)
+        do { try providers.rememberSelection(providerID: id, model: profile.settings.model) }
+        catch { errorMessage = Self.safeError(error) }
     }
     func selectModel(_ model: String, in conversationID: UUID) {
-        guard !isRunning(in: conversationID), existingExecutionModel(for: conversationID)?.stopping != true, let profile = selectedProvider(in: conversationID) else { return }
+        guard sessions.conversation(conversationID) != nil, sessions.activeRuns[conversationID] == nil,
+              !isRunning(in: conversationID), existingExecutionModel(for: conversationID)?.stopping != true, let profile = selectedProvider(in: conversationID) else { return }
         sessions.selectProvider(profile.id, model: model, in: conversationID)
+        do { try providers.rememberSelection(providerID: profile.id, model: model) }
+        catch { errorMessage = Self.safeError(error) }
     }
     @discardableResult func saveProvider(_ draft: ProviderProfile, key: String) -> Bool {
         guard !appOwner.hasBusySessions else { return false }
         do {
+            if draft.providerKind == .chatGPTSubscription, !key.isEmpty {
+                throw AppError.invalid("ChatGPT 订阅不接收 API 密钥")
+            }
             let value = try providers.prepared(draft)
             if !key.isEmpty {
-                try SecretStore.save(key, account: value.keyAccount)
+                try writeProviderKey(key, value.keyAccount)
             }
             try providers.save(value)
             errorMessage = nil
@@ -243,8 +257,15 @@ struct AgentRunServices {
         guard !appOwner.hasBusySessions else { return }
         do { try providers.restore(id) } catch { errorMessage = Self.safeError(error) }
     }
+    func hasSavedProviderKey(for draft: ProviderProfile) -> Bool {
+        guard let saved = providers.profile(draft.id),
+              let endpoint = try? draft.catalogEndpoint(),
+              endpoint == (try? saved.catalogEndpoint()) else { return false }
+        return (try? containsProviderKey(saved.keyAccount)) == true
+    }
     func discoveryKey(for draft: ProviderProfile, typedKey: String) throws -> String {
         guard !appOwner.hasBusySessions else { throw AppError.stopped }
+        if draft.providerKind == .chatGPTSubscription { throw AppError.unavailable(ChatGPTSubscriptionPolicy.mobileLoginNotice) }
         if !typedKey.isEmpty { return typedKey }
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--ui-testing") { return "" }
@@ -429,7 +450,7 @@ struct AgentRunServices {
     }
     struct PreparedAttachments {
         var references: [StoredAttachment] = []
-        var images: [LLMImage] = []
+        var images: [ModelImage] = []
         var text = ""
     }
     func importDraftAttachment(data: Data, name: String, in id: UUID) async throws {
@@ -463,7 +484,7 @@ struct AgentRunServices {
         var prepared = PreparedAttachments(references: before.draftAttachments ?? [])
         for asset in prepared.references {
             try Task.checkCancellation()
-            if asset.kind == .image { prepared.images.append(LLMImage(data: try await attachments.inferenceImage(asset, conversationID: id))) }
+            if asset.kind == .image { prepared.images.append(ModelImage(data: try await attachments.inferenceImage(asset, conversationID: id))) }
             else {
                 let bytes = try await attachments.read(asset, conversationID: id)
                 guard let content = String(data: bytes, encoding: .utf8) else { throw AppError.invalid("附件不是 UTF-8 文本") }
@@ -499,26 +520,36 @@ struct AgentRunServices {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let query = trimmed.isEmpty && !prepared.references.isEmpty ? "请查看附件" : trimmed
         guard !query.isEmpty, query.count <= 2_000 else { return reject("invalidTask", "请输入 1 至 2000 字的任务") }
-        guard session.mode == .demo || cloudConsent else { return reject("cloudConsent", "请确认将任务发送给所选模型服务商") }
+        guard session.mode == .demo || cloudConsent else { return reject("cloudConsent", "请确认将任务发送给所选模型供应商") }
         cancelPreview()
         let selectedMode = session.mode, token = UUID()
         var runSettings = ProviderSettings()
+        var nativeResponses = false
         let selectedBridge: any DeviceBridge
-        let selectedProvider: any LLMProvider
+        let selectedProvider: any ModelProvider
         do {
             if let services = runServicesFactory?(conversationID) ?? runServices { selectedBridge = services.bridge; selectedProvider = services.provider }
             else if selectedMode == .demo { selectedBridge = DemoBridge(); selectedProvider = DemoProvider() }
             else {
-                guard let profile = self.selectedProvider(in: conversationID) else { throw AppError.invalid("请在会话中选择服务商；原服务商可能已移除") }
+                guard let profile = self.selectedProvider(in: conversationID) else { throw AppError.invalid("请在会话中选择供应商；原供应商可能已移除") }
                 if session.providerID == nil {
                     sessions.selectProvider(profile.id, model: profile.settings.model, in: conversationID)
                 }
+                nativeResponses = profile.inferenceAPI == .responses
                 runSettings = profile.settings
                 runSettings.model = selectedModel(in: conversationID)
                 try profile.requireInference(model: runSettings.model)
+                let cloud: any CancellableModelProvider
+                if profile.providerKind == .chatGPTSubscription {
+                    guard let account = profile.chatGPTAccountReference else { throw ChatGPTAuthError.disconnected }
+                    cloud = try ChatGPTSubscriptionProvider(profile: profile, model: runSettings.model, account: account, runID: token, checkpointFile: try Self.providerCheckpointFile(runID: token))
+                } else {
                 let key = try SecretStore.load(profile.keyAccount) ?? ""
-                let cloud = try PrivateVisionProvider(settings: runSettings, apiKey: key, limits: limits,
-                    protocolType: profile.protocolType, parameters: profile.parameters(for: runSettings.model), metadata: profile.metadata(for: runSettings.model))
+                cloud = try PrivateVisionProvider(settings: runSettings, apiKey: key, limits: limits,
+                    providerKind: profile.providerKind, parameters: profile.parameters(for: runSettings.model), metadata: profile.metadata(for: runSettings.model),
+                    inferenceAPI: profile.inferenceAPI, contextPolicy: profile.contextPolicy, accountReference: profile.keyAccount, runID: token,
+                    checkpointFile: try Self.providerCheckpointFile(runID: token))
+                }
                 let usbInput = appOwner.usbClient.map { client in
                     LiveDeviceBridgeRouter.USBInput(transport: client, health: client.health,
                                                    supportsHID: appOwner.usbConnectionStatus == .ready(hid: true))
@@ -589,7 +620,7 @@ struct AgentRunServices {
         }
         let config = AgentConfig(provider: selectedProvider, model: selectedMode == .demo ? "demo" : runSettings.model,
             maxTokens: limits.maxOutputTokens, systemPrompt: Self.systemPrompt(skills: skillSnapshot),
-            maxTurns: limits.maxTurns, contextWindow: 16_384, maxMessages: 30,
+            maxTurns: limits.maxTurns, contextWindow: nativeResponses ? Int.max / 4 : 16_384, maxMessages: nativeResponses ? 0 : 30,
             enablePlanning: false, enableRepairRetry: false, enablePlanContinuation: false,
             tools: tools,
             autonomousMode: false, enableSubAgents: false, maxVerificationRetries: 0,
@@ -619,6 +650,7 @@ struct AgentRunServices {
                 callbacks.afterTool = { [weak self, weak runner] call, result, _ in
                     // Do not leave receipts behind the streamed-text observer
                     // queue. Commit the result before the next model request.
+                    if result.isError { LLMDiagnostics.toolFailure(result.result, attempt: token) }
                     await self?.recordToolResult(call, result: result, generation: token)
                     if let runner, !result.images.isEmpty {
                         runner.conversation.rewriteMessages { original in
@@ -632,7 +664,7 @@ struct AgentRunServices {
                     }
                     return nil
                 }
-                try await runner.setLogger(AgentLogger(handler: { _, _ in }))
+                try await runner.setLogger(AgentLogger(minLevel: .warning, handler: { _, message in LLMDiagnostics.runnerWarning(message) }))
                 try await runner.setCallbacks(callbacks)
                 var finalText = ""
                 for try await event in runner.runStreamingTagged(query + prepared.text, images: prepared.images) {
@@ -662,7 +694,7 @@ struct AgentRunServices {
             } catch {
                 events.continuation.finish(); await eventTask.value
                 guard let self, self.generation == token else { await action.stop(); return }
-                await self.closeRun(.blocked, result: Self.safeError(error), bridge: selectedBridge, generation: token)
+                await self.closeRun(.blocked, result: Self.runFailure(error, provider: selectedProvider), bridge: selectedBridge, generation: token)
             }
         }
         persist(); return true
@@ -709,6 +741,10 @@ struct AgentRunServices {
     func stop(message: String = "已停止；已发出的动作可能已执行，请核对设备", interrupted: Bool = false) {
         cancelRun(message: message, phase: interrupted ? .interrupted : .stopped)
     }
+    private static func providerCheckpointFile(runID: UUID) throws -> URL {
+        let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        return root.appendingPathComponent("PhoneAgent/provider-runs/\(runID).json")
+    }
     private func cancelRun(message: String, phase: RunPhase, publishNotice: Bool = true, disconnectUSB: Bool = false) {
         // Inactive -> background can call stop twice. Only the first cleanup
         // owns draining; a second cleanup must not unlock Start prematurely.
@@ -729,10 +765,10 @@ struct AgentRunServices {
             // The caller's message may refer to a task; do not export it.
             usbDiagnostics.record("viewmodel.stop phase=\(phase) scene=\(currentScene) running=\(running) stopping=\(stopping)", attempt: usbGeneration)
         }
+        lifecycle.stop(message: message) // Durable cancel fence before network cancellation.
         runTask?.cancel(); agent?.requestCancel(); provider?.cancel()
         bridge?.cancelTransport()
         if let liveBridge, (bridge as? TLSBridge) !== liveBridge { liveBridge.cancelTransport() }
-        lifecycle.stop(message: message)
         publishActivity(phase == .interrupted ? .interrupted : (phase == .blocked ? .blocked : .stopped))
         if let identity = runIdentity { invalidateApprovals(identity) }
         approvalTimeout?.cancel(); approvalTimeout = nil
@@ -1016,15 +1052,25 @@ struct AgentRunServices {
         do { guard let store else { return }; try store.save(records) }
         catch { storageWarning = "本地任务保存失败；当前状态未确认持久化" }
     }
-    private static func safeError(_ error: Error) -> String {
+    // The runner may wrap provider errors. Use only the dedicated adapter's
+    // locally generated summary, never arbitrary provider/server text.
+    static func runFailure(_ error: Error, provider: any ModelProvider) -> String {
+        if let message = (provider as? ChatGPTSubscriptionProvider)?.safeFailureMessage {
+            LLMDiagnostics.log(error, stage: "agent.run")
+            return message
+        }
+        return safeError(error, stage: "agent.run")
+    }
+    private static func safeError(_ error: Error, stage: String = "app.failure") -> String {
+        LLMDiagnostics.log(error, stage: stage)
         if let e = error as? AppError { return e.localizedDescription }
-        if let e = error as? LLMError, case .invalidRequest(let message) = e { return message }
+        if let e = error as? ModelError, case .invalidRequest(let message) = e { return message }
         if error is CancellationError { return "运行已取消" }
         if let error = error as? AgentError {
             switch error {
             case .cancelled, .toolCancelled: return "运行已取消"
-            case .noProviderConfigured: return "请先选择服务商和模型"
-            case .providerError, .providerRefused: return "模型请求失败；请检查服务商地址、模型、网络及账户状态"
+            case .noProviderConfigured: return "请先选择供应商和模型"
+            case .providerError, .providerRefused: return "模型请求失败；请检查供应商地址、模型、网络及账户状态"
             case .toolExecutionFailed, .toolNotFound: return "工具未能执行，请查看本轮工具记录"
             default: break
             }

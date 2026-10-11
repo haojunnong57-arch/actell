@@ -1,6 +1,6 @@
 import XCTest
 import SwiftAgentKit
-import LLMProviderKit
+import ProviderCore
 @testable import PhoneAgent
 
 private actor BatchBridge: DeviceBridge {
@@ -20,12 +20,12 @@ private actor BatchBridge: DeviceBridge {
     func granted() { events.append("approve") }
 }
 
-private struct BatchProvider: LLMProvider {
+private struct BatchProvider: ModelProvider {
     static let name = "synthetic-batch"
-    let configuration = LLMProviderConfiguration(name: name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
-    let batches: [[LLMToolCall]]
+    let configuration = ProviderConfiguration(name: name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
+    let batches: [[ModelToolCall]]
     var expectedErrors: Set<String> = []
-    func complete(_ request: LLMRequest) async throws -> LLMResponse {
+    func complete(_ request: ModelRequest) async throws -> ModelResponse {
         let turn = request.messages.filter { !($0.toolCalls ?? []).isEmpty }.count
         let results = request.messages.filter { $0.role == .tool }
         let expected = batches.prefix(turn).flatMap { $0 }.map(\.id)
@@ -34,11 +34,11 @@ private struct BatchProvider: LLMProvider {
             XCTAssertEqual(result.content.contains("ERROR"), expectedErrors.contains(result.toolCallId ?? ""))
         }
         if turn >= batches.count {
-            return LLMResponse(text: "batch finished", finishReason: .stop, request: request, providerName: Self.name)
+            return ModelResponse(text: "batch finished", finishReason: .stop, request: request, providerName: Self.name)
         }
-        return LLMResponse(text: "", finishReason: .toolCalls, toolCalls: batches[turn], request: request, providerName: Self.name)
+        return ModelResponse(text: "", finishReason: .toolCalls, toolCalls: batches[turn], request: request, providerName: Self.name)
     }
-    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
+    func stream(_ request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -54,13 +54,13 @@ private struct BatchProvider: LLMProvider {
 }
 
 final class MultiToolTests: XCTestCase {
-    private func call(_ id: String, _ name: String, _ arguments: String = "{}") -> LLMToolCall { .init(id: id, name: name, arguments: arguments) }
+    private func call(_ id: String, _ name: String, _ arguments: String = "{}") -> ModelToolCall { .init(id: id, name: name, arguments: arguments) }
     private let tap = "{\"x\":10,\"y\":20,\"purpose\":\"synthetic tap\"}"
     private let skill: SkillPackage = try! SkillPackage.make(documents: ["SKILL.md": "---\nname: batch-guide\ndescription: Synthetic batch reference\n---\nBATCH_REFERENCE"])
-    private func skillCall() -> LLMToolCall {
+    private func skillCall() -> ModelToolCall {
         call("skills", "load_skill", String(decoding: try! JSONEncoder().encode(["id": skill.id.uuidString, "revision": skill.revision]), as: UTF8.self))
     }
-    private func runner(_ batches: [[LLMToolCall]], bridge: BatchBridge, errors: Set<String> = [], approval: (@Sendable (Approval) async -> Bool)? = nil) -> Agent {
+    private func runner(_ batches: [[ModelToolCall]], bridge: BatchBridge, errors: Set<String> = [], approval: (@Sendable (Approval) async -> Bool)? = nil) -> Agent {
         let coordinator = ActionCoordinator(bridge: bridge, limits: AgentLimits(), approve: approval ?? { _ in await bridge.granted(); return true }, onImage: { _, _ in }, onReceipt: { _ in })
         let devices: [any AgentTool] = ["screenshot", "tap", "drag", "wait", "finish"].map { DeviceTool(name: $0, coordinator: coordinator) }
         let tools = devices + [SkillTool(name: "load_skill", catalog: SkillCatalog(packages: [skill]), canRead: { true })]

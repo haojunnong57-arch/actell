@@ -1,25 +1,24 @@
 import XCTest
 import SwiftAgentKit
-import LLMProviderKit
-import LLMProviderKitOpenAI
+import ProviderCore
+import OpenAIAdapter
 @testable import PhoneAgent
 
 final class ReasoningParsingTests: XCTestCase {
-    private let request = LLMRequest(model: "fixture", messages: [.user("synthetic")])
-    private let encoder = OpenAIProvider(configuration: LLMProviderConfiguration(name: "fixture", baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture"))
+    private let request = ModelRequest(model: "fixture", messages: [.user("synthetic")])
     private func line(_ delta: [String: Any], finish: String? = nil) throws -> String {
         var choice: [String: Any] = ["index": 0, "delta": delta]
         if let finish { choice["finish_reason"] = finish }
         return "data: " + String(decoding: try JSONSerialization.data(withJSONObject: ["id": "fixture", "choices": [choice]]), as: UTF8.self)
     }
-    private func reasoning(_ chunks: [LLMStreamChunk]) -> String {
+    private func reasoning(_ chunks: [ModelEvent]) -> String {
         chunks.compactMap { if case .reasoning(let text) = $0 { return text }; return nil }.joined()
     }
     func testExplicitPlainFieldsStreamWithoutAnswerMixingOrAliasDuplication() throws {
         for field in ["reasoning", "reasoning_content"] {
             var decoder = ModelStreamDecoder()
-            let first = try decoder.consume(line: line([field: "第一", "content": "答复"]), request: request, encoder: encoder)
-            let second = try decoder.consume(line: line([field: "段", "reasoning_details": [["type": "reasoning.text", "text": "DUPLICATE"]]], finish: "stop"), request: request, encoder: encoder)
+            let first = try decoder.consume(line: line([field: "第一", "content": "答复"]), request: request)
+            let second = try decoder.consume(line: line([field: "段", "reasoning_details": [["type": "reasoning.text", "text": "DUPLICATE"]]], finish: "stop"), request: request)
             XCTAssertEqual(reasoning(first + second), "第一段")
             XCTAssertEqual(first.compactMap { if case .text(let text) = $0 { return text }; return nil }, ["答复"])
             XCTAssertEqual(try decoder.finish().count, 1)
@@ -30,18 +29,18 @@ final class ReasoningParsingTests: XCTestCase {
         let first = try decoder.consume(line: line(["reasoning": "DUPLICATE", "reasoning_details": [
             ["type": "reasoning.summary", "summary": "摘要", "index": 0],
             ["type": "reasoning.encrypted", "data": "DO_NOT_DISPLAY", "text": "ALSO_HIDDEN", "index": 1]
-        ]]), request: request, encoder: encoder)
+        ]]), request: request)
         let next = try decoder.consume(line: line(["reasoning_details": [
             ["type": "reasoning.summary", "summary": "续段", "index": 0],
             ["type": "reasoning.text", "text": "正文", "signature": "SIGNATURE_HIDDEN", "index": 2],
             ["type": "unknown", "text": "UNKNOWN_HIDDEN", "index": 3]
-        ]], finish: "stop"), request: request, encoder: encoder)
+        ]], finish: "stop"), request: request)
         XCTAssertEqual(reasoning(first + next), "摘要续段\n\n正文")
         _ = try decoder.finish()
     }
     func testOpaqueObjectsAndOrdinaryAnswerTagsNeverBecomeReasoning() throws {
         var decoder = ModelStreamDecoder()
-        let chunks = try decoder.consume(line: line(["reasoning": ["encrypted": "SECRET"], "reasoning_details": [["type": "reasoning.encrypted", "data": "SECRET"]], "content": "<think>ordinary answer</think>"], finish: "stop"), request: request, encoder: encoder)
+        let chunks = try decoder.consume(line: line(["reasoning": ["encrypted": "SECRET"], "reasoning_details": [["type": "reasoning.encrypted", "data": "SECRET"]], "content": "<think>ordinary answer</think>"], finish: "stop"), request: request)
         XCTAssertEqual(reasoning(chunks), "")
         XCTAssertEqual(chunks.compactMap { if case .text(let text) = $0 { return text }; return nil }, ["<think>ordinary answer</think>"])
         _ = try decoder.finish()
@@ -142,11 +141,11 @@ final class ReasoningParsingTests: XCTestCase {
     }
 }
 
-private struct ReasoningBatchProvider: LLMProvider {
+private struct ReasoningBatchProvider: ModelProvider {
     static let name = "synthetic-reasoning-batch"
-    let configuration = LLMProviderConfiguration(name: name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
-    func complete(_ request: LLMRequest) async throws -> LLMResponse { throw AppError.invalid("Fixture must stream without retry") }
-    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
+    let configuration = ProviderConfiguration(name: name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
+    func complete(_ request: ModelRequest) async throws -> ModelResponse { throw AppError.invalid("Fixture must stream without retry") }
+    func stream(_ request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         AsyncThrowingStream { continuation in
             do {
                 XCTAssertFalse(request.messages.contains { $0.content.contains("READABLE_") || $0.content.contains("OPAQUE_") })
@@ -164,9 +163,8 @@ private struct ReasoningBatchProvider: LLMProvider {
                     ]]; finish = "stop"
                 }
                 let line = "data: " + String(decoding: try JSONSerialization.data(withJSONObject: ["id": "fixture", "choices": [["delta": delta, "finish_reason": finish]]]), as: UTF8.self)
-                let encoder = OpenAIProvider(configuration: configuration)
                 var decoder = ModelStreamDecoder()
-                for chunk in try decoder.consume(line: line, request: request, encoder: encoder) { continuation.yield(chunk) }
+                for chunk in try decoder.consume(line: line, request: request) { continuation.yield(chunk) }
                 for chunk in try decoder.finish(previousCallIDs: Set(request.messages.flatMap { $0.toolCalls ?? [] }.map(\.id))) { continuation.yield(chunk) }
                 continuation.finish()
             } catch { continuation.finish(throwing: error) }

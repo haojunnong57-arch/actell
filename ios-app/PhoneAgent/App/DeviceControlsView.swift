@@ -28,7 +28,7 @@ struct DeviceControlsView: View {
                 Button("停止采集", role: .destructive) { model.stopCapture() }
                     .disabled(!capture.active && !capture.busy).accessibilityIdentifier("stopScreenCapture")
             } header: { Text("屏幕采集") } footer: {
-                Text("查看屏幕使用本机全屏采集。开始任务后，Agent 按需将截图发送给会话所选服务商。")
+                Text("查看屏幕使用本机全屏采集。开始任务后，Agent 按需将截图发送给会话所选供应商。")
             }
             Section {
                 Text(model.usbConnectionStatus.message)

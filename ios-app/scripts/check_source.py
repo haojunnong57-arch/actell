@@ -17,7 +17,7 @@ project = yaml.safe_load((ROOT / 'project.yml').read_text())
 assert project['packages']['SwiftAgentKit']['path'] == 'Vendor/SwiftAgentKit'
 upstream = json.loads((ROOT / 'Vendor/SwiftAgentKit/UPSTREAM.json').read_text())
 assert upstream['revision'] == '84ddf324fd2a223834323537eb3f8746d669753b'
-assert project['packages']['LLMProviderKit']['exactVersion'] == '0.1.0-alpha.35'
+assert project['packages']['ProviderKit']['path'] == 'ProviderKit'
 assert 'PhoneAgentTests' in project['targets']
 plistlib.loads((ROOT / 'PhoneAgent/PrivacyInfo.xcprivacy').read_bytes())
 provider = (ROOT / 'PhoneAgent/Agent/Providers.swift').read_text()
@@ -25,8 +25,9 @@ controller = (ROOT / 'PhoneAgent/Agent/AgentViewModel.swift').read_text()
 bridge = (ROOT / 'PhoneAgent/Bridge/TLSBridge.swift').read_text()
 tools = (ROOT / 'PhoneAgent/Agent/DeviceTools.swift').read_text()
 assert 'completionHandler(nil)' in provider
-assert 'URLSessionConfiguration.ephemeral' in provider
-assert 'throw LLMError.invalidRequest' in provider
+transport = (ROOT / 'ProviderKit/Sources/OpenAIAdapter/ResponsesTransport.swift').read_text()
+assert 'URLSessionConfiguration.ephemeral' in transport
+assert 'ModelError.interrupted' in provider
 assert 'reasoning: parsed.reasoning' not in provider
 assert 'enableRepairRetry: false' in controller
 assert 'autonomousMode: false' in controller and 'parallelToolCalls: false' in controller

@@ -1,12 +1,12 @@
 # PhoneAgent iOS
 
-最低 iOS 27，Bundle ID 保持 `com.ja1chen.PhoneAgent`。截图与输入工具默认经 VPN 回环调用 CoreDevice 开发者服务执行；连接只在实际工具调用时校验，普通聊天不要求连接。手机操控支持在“设置 → 手机操控 → 连接模式”选择 VPN 回环（默认，免 ESP32）或 ESP32 NCM，在“连接与验证”中操作；首页和消息页不再显示设备入口。原 ScreenCaptureKit/PA3 HID 和 TLS 实现保留，暂未提供切换开关。NCM 任务在系统后台资格有效时可继续，无需启动录屏；各会话独立运行，同一手机控制按整轮排队。服务商管理位于“设置 → 服务商”，支持添加、编辑、确认移除及恢复。会话选择服务商/模型，当前运行不允许切换配置。现有单服务商配置与 Keychain 引用自动保留；修改服务地址不会转发旧地址的密钥。
+最低 iOS 27，Bundle ID 保持 `com.ja1chen.PhoneAgent`。截图与输入工具默认经 VPN 回环调用 CoreDevice 开发者服务执行；连接只在实际工具调用时校验，普通聊天不要求连接。手机操控支持在“设置 → 手机操控 → 连接模式”选择 VPN 回环（默认，免 ESP32）或 ESP32 NCM，在“连接与验证”中操作；首页和消息页不再显示设备入口。原 ScreenCaptureKit/PA3 HID 和 TLS 实现保留，暂未提供切换开关。NCM 任务在系统后台资格有效时可继续，无需启动录屏；各会话独立运行，同一手机控制按整轮排队。服务商管理位于“设置 → 服务商”，支持添加、编辑、确认移除及恢复。会话选择服务商/模型，当前运行不允许切换配置。现有单服务商配置与 Keychain 引用自动保留；修改服务地址不会转发旧地址的密钥。已保存的 API 密钥在编辑页以正常文字色的圆点显示，仅查询存在状态，不回填真实值；不输入替换值时保留原密钥。
 
 真实模型使用 screenshot / tap / drag / wait 设备工具，最终文字回复结束本轮。启用用户导入的技能后，系统提示词包含已启用技能的名称、描述、id 和 revision；额外提供 load_skill，只按需读取该技能包的文本。同一响应可含多个工具，按返回顺序串行执行；每个动作仍须经过原有授权、截图与故障检查，ID 不得重复或重用。模型调用数、输入数、累计 token 与固定运行时长不再作为产品预算。图像/协议大小、网络故障、系统后台资格、锁屏、手动停止、未知动作不重放仍然生效。App 不保证系统无限后台执行。
 
-输入区支持系统照片／文件选择、预览与移除；仅显式发送时传给所选模型。截图与消息图片可保存原图并在重启后查看；历史资源不恢复设备授权。设置内可管理用户主动导入的 SKILL.md／文本技能包，导入不执行脚本。服务商支持模型发现、能力缓存和每模型参数；原生 Anthropic/Gemini 目前仅支持发现，尚不提供原生推理。详细范围和验收见 [本次证据](../docs/PROJECT-TODOS.md)。
+输入区支持系统照片／文件选择、预览与移除；仅显式发送时传给所选模型。截图与消息图片可保存原图并在重启后查看；历史资源不恢复设备授权。设置内可管理用户主动导入的 SKILL.md／文本技能包，导入不执行脚本。服务商支持模型发现、能力缓存和每模型参数；添加时先选择 OpenAI、OpenRouter 或自定义供应商，预设填入名称和地址、自定义留空；编辑页固定供应商类型并可选择 Chat Completions 或 Responses API。未设置默认模型时，自动选用列表中首个模型；已有默认选择保留。模型行仅以小图标展示明确支持的图片输入、工具调用、思考和文本生成能力，未知或不支持时隐藏；图标保留辅助功能说明。旧 Anthropic、Gemini、Ollama 配置仍可读取，使用当前类型需另行添加供应商。聊天输入框的模型菜单将箭头放在文案右侧，仅保留供应商、模型和浏览全部模型；最后主动选择的供应商与模型会在本机保存，新会话默认使用该选择，已有会话保留自己的选择。详细范围和验收见 [本次证据](../docs/PROJECT-TODOS.md)。
 
-服务商明确返回的可读思考内容／摘要会在消息中单独折叠展示，支持流式状态、取消／失败后保留以及历史恢复。仅解析现有 Chat Completions 路径的 reasoning_content、reasoning 和可读 reasoning_details；不生成思考正文，不解释加密块，不从普通回复抽取，也不自动把历史思考发送到新任务。
+服务商明确返回的可读思考内容／摘要会在消息中单独折叠展示，支持流式状态、取消／失败后保留以及历史恢复。Chat Completions 解析 reasoning_content、reasoning 和可读 reasoning_details；Responses 展示明确返回的 summary 或 reasoning_text content（包括 DeepSeek 思考流事件），并将 encrypted_content 仅用于同域回放；不生成思考正文，不解释加密块，不从普通回复抽取，也不自动把历史思考发送到新任务。
 
 ## 构建
 
@@ -46,3 +46,13 @@ RUN_UI_TESTS=1 bash ios-app/scripts/test_core.sh <隔离模拟器-UDID>
 “执行任务” App Intent 收到任务文本后直接调用现有任务启动路径，不再等待 App 内确认。启动失败在 App 中显示具体原因，并保留草稿供检查；相同命令 ID 的已提交任务不会重放。设备授权、锁屏和停止机制继续生效。
 
 该入口使用前台执行模式，为新会话绑定默认服务商。若 Siri 唤起时 App 尚未活跃，请求通过当前进程内的交接队列在前台就绪后自动启动，不要求再次确认；重启不会自动启动旧草稿。打开 App 后启动后台媒体和任务。Apple App Shortcut 的调用短语不支持任意自由文本参数，因此“用执言执行任务”缺少参数时仍由 Siri 询问任务内容。需要一句话执行固定任务时，可在系统“快捷指令”中新建快捷指令，添加执言的“执行任务”操作、预填任务文本，再通过该快捷指令名称唤起 Siri。
+
+## Provider 边界
+
+已用自有 ProviderCore 与远程 SPM MacPaw/OpenAI 0.5.2 替换旧 Kit。SDK 源码未复制入工程。设置可选择 Chat Completions 或 Responses；原配置保持 Chat 默认。Responses 默认本地回放/store=false，明确选择服务端响应链后才使用 store=true/previous_response_id；续接仅限当前任务，每轮重发 instructions。旧截图不再上传不等于远端历史已删除。OpenRouter 保留 Chat 默认，也可显式使用无状态 Responses；其 store=true/previous_response_id 在本地拒绝。服务商类型与 wire 协议独立。其他原生协议推理、Conversations、background、compaction 和 hosted tools 尚未启用。细节与验证边界见 [Provider 模块](ProviderKit/README.md)。
+
+## ChatGPT 订阅配置与思考强度
+
+新增供应商预设顺序为 OpenAI、OpenRouter、ChatGPT 订阅、自定义。订阅配置固定官方地址与无状态 Responses，不接收 API Key。Continue with ChatGPT 使用系统认证浏览器与 HTTP 回环授权，校验官方 JWKS 身份后保存账号隔离的本机 Keychain 凭据。仅获套餐授权的账号模型使用独立订阅流式 Responses；退出尝试官方 discovery 撤销端点并清理本地 token。全部开发验证只用本地 mock，真实账号授权、实体设备与订阅计费尚未验证。完整官方能力与验证边界见 [订阅整合说明](../docs/CHATGPT-SUBSCRIPTION.md)。
+
+每服务商／模型可保存思考强度；仅显示明确报告或官方文档确认的档位，未知模型使用默认、不猜档位。Responses 映射 reasoning.effort，Chat Completions 映射 reasoning_effort。GPT-6.1 Sol 的文档档位只用于官方地址的 Responses 配置，不推广到代理或未知模型。

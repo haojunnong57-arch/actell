@@ -2,16 +2,16 @@
 //  AgentLLMResponse.swift
 //  SwiftAgentKit
 //
-//  Bridges between LLMProviderKit's response types and the agent layer.
-//  Adds tool-call parsing that LLMProviderKit doesn't do (yet).
+//  Bridges between ProviderCore's response types and the agent layer.
+//  Adds tool-call parsing that ProviderCore doesn't do (yet).
 //
 
 import Foundation
-import LLMProviderKit
+import ProviderCore
 
 /// The agent-layer representation of an LLM response.
 ///
-/// Wraps `LLMResponse` from LLMProviderKit and adds:
+/// Wraps `ModelResponse` from ProviderCore and adds:
 /// - Parsed tool calls (extracted from the response content or native tool-call fields)
 /// - Usage stats for token tracking
 /// - The raw response for debugging
@@ -27,6 +27,7 @@ public struct AgentLLMResponse: Sendable {
     public let finishReason: AgentFinishReason
     public let usage: AgentTokenUsage?
     public let providerName: String
+    public let replayState: ScopedChatReplayState?
 
     public init(
         text: String,
@@ -34,7 +35,8 @@ public struct AgentLLMResponse: Sendable {
         toolCalls: [AgentToolCall]? = nil,
         finishReason: AgentFinishReason = .stop,
         usage: AgentTokenUsage? = nil,
-        providerName: String
+        providerName: String,
+        replayState: ScopedChatReplayState? = nil
     ) {
         self.text = text
         self.reasoning = reasoning
@@ -42,6 +44,7 @@ public struct AgentLLMResponse: Sendable {
         self.finishReason = finishReason
         self.usage = usage
         self.providerName = providerName
+        self.replayState = replayState
     }
 
     /// Whether the model is requesting tool execution.
@@ -50,9 +53,9 @@ public struct AgentLLMResponse: Sendable {
         return !toolCalls.isEmpty
     }
 
-    /// Create from an `LLMResponse` (LLMProviderKit).
+    /// Create from an `ModelResponse` (ProviderCore).
     /// Checks native tool calls first, then falls back to text-marker parsing.
-    public static func from(_ response: LLMResponse) -> AgentLLMResponse {
+    public static func from(_ response: ModelResponse) -> AgentLLMResponse {
         // Priority 1: Native tool calls from the provider (Ollama native, OpenAI, etc.)
         if !response.toolCalls.isEmpty {
             let agentToolCalls = response.toolCalls.map { tc in
@@ -76,12 +79,12 @@ public struct AgentLLMResponse: Sendable {
                 toolCalls: agentToolCalls,
                 finishReason: .toolCalls,
                 usage: AgentTokenUsage.from(response.usage),
-                providerName: response.providerName
+                providerName: response.providerName, replayState: response.replayState
             )
         }
 
         // Priority 2: Text-marker parsing (TOOL_CALL: name {json} or JSON array)
-        let textToolCalls = ToolCallParser.parse(from: response.text)
+        let textToolCalls = response.permitsTextToolInference ? ToolCallParser.parse(from: response.text) : nil
 
         return AgentLLMResponse(
             text: response.text,
@@ -89,7 +92,7 @@ public struct AgentLLMResponse: Sendable {
             toolCalls: textToolCalls,
             finishReason: AgentFinishReason.from(response.finishReason),
             usage: AgentTokenUsage.from(response.usage),
-            providerName: response.providerName
+            providerName: response.providerName, replayState: response.replayState
         )
     }
 }
@@ -104,7 +107,7 @@ public enum AgentFinishReason: String, Sendable, Equatable {
     case toolCalls
     case unknown
 
-    public static func from(_ reason: LLMFinishReason?) -> AgentFinishReason {
+    public static func from(_ reason: ModelFinishReason?) -> AgentFinishReason {
         guard let reason else { return .unknown }
         switch reason {
         case .stop: return .stop
@@ -134,7 +137,7 @@ public struct AgentTokenUsage: Sendable, Equatable {
         self.cachedTokens = cachedTokens
     }
 
-    public static func from(_ usage: LLMUsage?) -> AgentTokenUsage? {
+    public static func from(_ usage: ModelUsage?) -> AgentTokenUsage? {
         guard let usage else { return nil }
         return AgentTokenUsage(
             promptTokens: usage.promptTokens,
@@ -149,7 +152,7 @@ public struct AgentTokenUsage: Sendable, Equatable {
 
 /// Parses tool calls from LLM response text.
 ///
-/// LLMProviderKit doesn't yet parse tool calls from provider responses.
+/// ProviderCore doesn't yet parse tool calls from provider responses.
 /// This parser supports two formats:
 ///
 /// 1. **Text-marker format** (used by Ollama models without native tool calling):

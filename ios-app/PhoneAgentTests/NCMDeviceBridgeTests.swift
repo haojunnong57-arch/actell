@@ -3,7 +3,7 @@ import ImageIO
 import CoreImage
 import CoreVideo
 import UIKit
-import LLMProviderKit
+import ProviderCore
 @testable import PhoneAgent
 
 @MainActor private final class NCMConnectionSpy: NCMControlConnection {
@@ -798,22 +798,22 @@ import LLMProviderKit
 
 }
 
-private struct DisconnectedChatProvider: LLMProvider {
+private struct DisconnectedChatProvider: ModelProvider {
     static let name = "disconnected-chat-fixture"
-    let configuration = LLMProviderConfiguration(name: Self.name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
+    let configuration = ProviderConfiguration(name: Self.name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
     let requestsScreenshot: Bool
-    func complete(_ request: LLMRequest) async throws -> LLMResponse {
+    func complete(_ request: ModelRequest) async throws -> ModelResponse {
         let result = request.messages.first { $0.role == .tool }
         if requestsScreenshot && result == nil {
-            return LLMResponse(text: "", finishReason: .toolCalls,
-                toolCalls: [LLMToolCall(id: "screen", name: "screenshot", arguments: "{}")], request: request, providerName: Self.name)
+            return ModelResponse(text: "", finishReason: .toolCalls,
+                toolCalls: [ModelToolCall(id: "screen", name: "screenshot", arguments: "{}")], request: request, providerName: Self.name)
         }
         if requestsScreenshot && result?.content.contains("等待手机操控连接超时") != true {
             throw AppError.invalid("模型未收到设备工具的连接错误")
         }
-        return LLMResponse(text: "正常回复", finishReason: .stop, request: request, providerName: Self.name)
+        return ModelResponse(text: "正常回复", finishReason: .stop, request: request, providerName: Self.name)
     }
-    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
+    func stream(_ request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {

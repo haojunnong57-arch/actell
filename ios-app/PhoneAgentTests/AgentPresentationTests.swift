@@ -3,6 +3,78 @@ import SwiftAgentKit
 @testable import PhoneAgent
 
 @MainActor final class AgentPresentationTests: XCTestCase {
+    func testLastModelChoiceDefaultsNewSessionsWithoutChangingExistingSessions() throws {
+        let providers = ProviderStore(defaults: nil)
+        let first = ProviderProfile(name: "First", settings: .init(model: "first"))
+        let second = ProviderProfile(name: "Second", settings: .init(model: "second"))
+        try providers.save(first); try providers.save(second)
+        let sessions = ConversationStore(inMemory: true)
+        let model = AgentViewModel(sessions: sessions, loadPersistentState: false, providers: providers)
+        let old = model.createConversation(mode: .live)
+        XCTAssertEqual(model.selectedProvider(in: old)?.id, first.id)
+        let chosen = model.createConversation(mode: .live)
+        model.selectProvider(second.id, in: chosen)
+        model.selectModel("custom-model", in: chosen)
+        model.selectConversation(old)
+        XCTAssertEqual(model.selectedModel(in: old), "first")
+        let fresh = model.createConversation(mode: .live)
+        XCTAssertEqual(model.selectedProvider(in: fresh)?.id, second.id)
+        XCTAssertEqual(model.selectedModel(in: fresh), "custom-model")
+        XCTAssertEqual(providers.profile(second.id)?.settings.model, "second")
+        model.selectModel("ignored", in: UUID())
+        let run = try XCTUnwrap(sessions.begin(in: fresh, query: "busy"))
+        model.selectProvider(first.id, in: fresh)
+        model.selectModel("ignored", in: fresh)
+        XCTAssertEqual(providers.lastSelection, .init(providerID: second.id, model: "custom-model"))
+        sessions.finish(run, phase: .completed, summary: "")
+    }
+    func testLastSelectionSurvivesReloadAndRemovedProviderFallsBack() throws {
+        let defaults = UserDefaults(suiteName: "last-selection-\(UUID())")!
+        defer { defaults.removeObject(forKey: ProviderStore.storageKey) }
+        let store = ProviderStore(defaults: defaults)
+        let first = ProviderProfile(settings: .init(model: "first"))
+        let second = ProviderProfile(settings: .init(model: "second"))
+        try store.save(first); try store.save(second)
+        try store.rememberSelection(providerID: second.id, model: "outside-catalog")
+        let restored = ProviderStore(defaults: defaults)
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false, providers: restored)
+        let session = model.createConversation(mode: .live)
+        XCTAssertEqual(model.selectedProvider(in: session)?.id, second.id)
+        XCTAssertEqual(model.selectedModel(in: session), "outside-catalog")
+        try restored.remove(second.id)
+        XCTAssertEqual(restored.defaultSelection?.profile.id, first.id)
+        try restored.restore(second.id)
+        XCTAssertEqual(restored.defaultSelection?.model, "outside-catalog")
+        try restored.rememberSelection(providerID: second.id, model: "")
+        XCTAssertEqual(restored.defaultSelection?.model, "second")
+        try restored.remove(first.id); try restored.remove(second.id)
+        XCTAssertNil(restored.defaultSelection)
+    }
+    func testSavedProviderKeyPresenceIsScopedAndEmptySavePreservesSyntheticKey() throws {
+        var keys: [String: String] = [:]
+        let model = AgentViewModel(sessions: ConversationStore(inMemory: true), loadPersistentState: false,
+            writeProviderKey: { keys[$1] = $0 }, containsProviderKey: { keys[$0] != nil })
+        let draft = ProviderProfile(settings: .init(baseURL: "https://key-fixture.invalid/v1", model: "fixture"))
+        XCTAssertFalse(model.hasSavedProviderKey(for: draft))
+        XCTAssertTrue(model.saveProvider(draft, key: "UI_TEST_KEY_A"))
+        let saved = try XCTUnwrap(model.providers.profile(draft.id))
+        XCTAssertTrue(model.hasSavedProviderKey(for: saved))
+        var changed = saved
+        changed.settings.baseURL = " https://key-fixture.invalid/v1/ "
+        XCTAssertTrue(model.hasSavedProviderKey(for: changed))
+        changed.settings.baseURL = "https://different.invalid/v1"
+        XCTAssertFalse(model.hasSavedProviderKey(for: changed))
+        changed = saved; changed.protocolKind = .openRouter
+        XCTAssertFalse(model.hasSavedProviderKey(for: changed))
+        changed = saved; changed.id = UUID()
+        XCTAssertFalse(model.hasSavedProviderKey(for: changed))
+        XCTAssertTrue(model.saveProvider(saved, key: ""))
+        XCTAssertEqual(keys[saved.keyAccount], "UI_TEST_KEY_A")
+        XCTAssertTrue(model.saveProvider(saved, key: "UI_TEST_KEY_B"))
+        XCTAssertEqual(keys[saved.keyAccount], "UI_TEST_KEY_B")
+        keys.removeValue(forKey: saved.keyAccount)
+        XCTAssertFalse(model.hasSavedProviderKey(for: saved))
+    }
     func testLongToolResultsSurviveProjectionUpdateAndHistoryRestore() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

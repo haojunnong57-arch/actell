@@ -1,7 +1,7 @@
 // Ported safety/transaction regression tests from 2509d7098fc8a3af4c62bd8fc20e911df4aa4933.
 import XCTest
 import AVFoundation
-import LLMProviderKit
+import ProviderCore
 @testable import PhoneAgent
 
 @MainActor private final class FakeTaskAudioPlayback: TaskAudioPlayback {
@@ -612,14 +612,14 @@ private actor BackgroundSpyBridge: DeviceBridge {
     func drag(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMS: Int, imageID: String) async throws { sent += 1 }
     func stop() async { closed = true }
 }
-private struct DisconnectedModel: LLMProvider {
+private struct DisconnectedModel: ModelProvider {
     static let name = "disconnected-test-model"
-    let configuration = LLMProviderConfiguration(name: Self.name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
-    func complete(_ request: LLMRequest) async throws -> LLMResponse {
+    let configuration = ProviderConfiguration(name: Self.name, baseURL: URL(string: "https://invalid.invalid")!, defaultModel: "fixture")
+    func complete(_ request: ModelRequest) async throws -> ModelResponse {
         try await Task.sleep(nanoseconds: 100_000_000)
-        throw LLMError.invalidRequest("测试模型网络断开；没有重试")
+        throw ModelError.invalidRequest("测试模型网络断开；没有重试")
     }
-    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
+    func stream(_ request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do { _ = try await complete(request); continuation.finish() }

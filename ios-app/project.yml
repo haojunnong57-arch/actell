@@ -19,9 +19,8 @@ settings:
 packages:
   SwiftAgentKit:
     path: Vendor/SwiftAgentKit
-  LLMProviderKit:
-    url: https://github.com/ayman3000/LLMProviderKit.git
-    exactVersion: 0.1.0-alpha.35
+  ProviderKit:
+    path: ProviderKit
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui.git
     exactVersion: 2.4.1
@@ -71,10 +70,10 @@ targets:
         embed: true
       - package: SwiftAgentKit
         product: SwiftAgentKit
-      - package: LLMProviderKit
-        product: LLMProviderKit
-      - package: LLMProviderKit
-        product: LLMProviderKitOpenAI
+      - package: ProviderKit
+        product: ProviderCore
+      - package: ProviderKit
+        product: OpenAIAdapter
       - package: MarkdownUI
         product: MarkdownUI
   PhoneAgentLiveActivity:
@@ -99,10 +98,10 @@ targets:
       - target: PhoneAgent
       - package: SwiftAgentKit
         product: SwiftAgentKit
-      - package: LLMProviderKit
-        product: LLMProviderKit
-      - package: LLMProviderKit
-        product: LLMProviderKitOpenAI
+      - package: ProviderKit
+        product: ProviderCore
+      - package: ProviderKit
+        product: OpenAIAdapter
   PhoneAgentUITests:
     type: bundle.ui-testing
     platform: iOS

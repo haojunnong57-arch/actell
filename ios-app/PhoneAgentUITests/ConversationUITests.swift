@@ -231,19 +231,23 @@ import XCTest
         app.buttons["设置"].tap()
         XCTAssertTrue(app.buttons["openProviders"].waitForExistence(timeout: 5))
         app.buttons["openProviders"].tap()
-        XCTAssertTrue(app.navigationBars["服务商"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["供应商"].waitForExistence(timeout: 5))
     }
     private func closeProviders(_ app: XCUIApplication) {
-        app.navigationBars["服务商"].buttons["BackButton"].tap()
+        app.navigationBars["供应商"].buttons["BackButton"].tap()
         XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
         app.buttons["关闭"].tap()
     }
     private func addProvider(_ app: XCUIApplication, name: String, model: String) {
         app.buttons["addProvider"].tap()
+        app.buttons["providerPresetCustom"].tap()
+        let address = app.textFields["providerURL"]
+        XCTAssertTrue(address.waitForExistence(timeout: 5)); address.tap(); address.typeText("https://fixture.invalid/v1")
         let field = app.textFields["providerName"]
         XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.tap(); field.typeText(name)
-        let modelField = app.textFields["providerModel"]
-        modelField.tap(); modelField.tap(); modelField.typeText(model)
+        app.buttons["addProviderModel"].tap()
+        app.alerts.textFields.firstMatch.typeText(model)
+        app.alerts.buttons["添加"].tap()
         app.buttons["saveProvider"].tap()
         XCTAssertTrue(app.staticTexts[name].waitForExistence(timeout: 5))
     }
@@ -267,18 +271,21 @@ import XCTest
         if !picker.exists { app.textViews["messageInput"].tap() }
         let selectedProvider = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "model-b"), object: picker)
         XCTAssertEqual(XCTWaiter.wait(for: [selectedProvider], timeout: 5), .completed)
-        picker.tap(); app.buttons["其他模型…"].tap()
-        let input = app.alerts.textFields.firstMatch
-        XCTAssertTrue(input.waitForExistence(timeout: 3))
-        input.tap(); input.tap(); input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 7) + "model-custom")
-        XCTAssertEqual(input.value as? String, "model-custom")
-        // Finish keyboard editing before tapping the alert action; iOS 27
-        // relocates this alert while the software keyboard is visible.
-        input.typeText("\n")
-        if app.alerts.buttons["使用"].exists { app.alerts.buttons["使用"].tap() }
+        picker.tap()
+        XCTAssertFalse(app.buttons["其他模型…"].exists)
+        XCTAssertFalse(app.buttons["管理供应商"].exists)
+        XCTAssertTrue(app.buttons["Fixture Two  ✓"].exists)
+        XCTAssertTrue(app.buttons["model-b  ✓"].exists)
+        capture("conversation-model-menu")
+        app.buttons["model-b-alt"].tap()
         app.textViews["messageInput"].tap()
-        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "model-custom"), object: picker)
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "model-b-alt"), object: picker)
         XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["newConversationToolbar"].tap()
+        app.textViews["messageInput"].tap(); app.textViews["messageInput"].tap()
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        XCTAssertTrue(picker.label.contains("model-b-alt"))
         capture("conversation-model")
         XCTAssertFalse(app.buttons["deviceControls"].exists)
         XCTAssertFalse(app.buttons["设置"].exists)
@@ -290,7 +297,7 @@ import XCTest
         XCTAssertFalse(app.buttons["deviceControls"].exists)
         app.buttons["设置"].tap()
         app.buttons["esp32ControlSettings"].tap()
-        XCTAssertTrue(app.navigationBars["ESP32 控制"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["VPN 回环控制"].waitForExistence(timeout: 5))
     }
     func testComposerActivationPreservesVisibleBottomAndMovesActionsBelowText() {
         continueAfterFailure = false
@@ -363,12 +370,12 @@ import XCTest
         let app = launch(); openProviders(app)
         addProvider(app, name: "Recoverable", model: "model-a")
         app.staticTexts["Recoverable"].swipeLeft(); app.buttons["移除"].tap()
-        XCTAssertTrue(app.buttons["移除服务商"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["移除供应商"].waitForExistence(timeout: 3))
         capture("provider-removal-confirmation")
         app.buttons["取消"].tap()
         XCTAssertTrue(app.staticTexts["Recoverable"].exists)
         app.staticTexts["Recoverable"].swipeLeft(); app.buttons["移除"].tap()
-        app.buttons["移除服务商"].tap()
+        app.buttons["移除供应商"].tap()
         XCTAssertTrue(app.buttons["恢复"].waitForExistence(timeout: 3))
         app.buttons["恢复"].tap()
         XCTAssertFalse(app.buttons["恢复"].exists)
@@ -389,23 +396,241 @@ import XCTest
         XCTAssertFalse(app.buttons["stopRun"].exists)
         XCTAssertFalse(app.buttons["approveTool"].exists)
     }
-    func testDiscoverModelsConfigureParameterAndSelectCachedModelInConversation() {
+    func testSavedProviderKeyUsesMaskAndKeepsExistingValue() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-provider-key"]
+        app.launch(); openProviders(app)
+        app.staticTexts["Key Fixture"].tap()
+        let key = app.secureTextFields["providerKey"]
+        XCTAssertTrue(key.waitForExistence(timeout: 5))
+        XCTAssertEqual(key.label, "API 密钥")
+        XCTAssertEqual(key.value as? String, "已保存密钥")
+        key.tap(); key.typeText("UI_TEST_REPLACEMENT")
+        app.buttons["saveProvider"].tap(); app.staticTexts["Key Fixture"].tap()
+        XCTAssertTrue(key.waitForExistence(timeout: 5))
+        XCTAssertEqual(key.value as? String, "已保存密钥")
+        XCTAssertFalse(app.staticTexts["API 密钥（留空保留原值）"].exists)
+        capture("saved-provider-key-mask")
+        // Saving without replacement retains the stored credential and mask.
+        app.buttons["saveProvider"].tap(); app.staticTexts["Key Fixture"].tap()
+        XCTAssertEqual(key.value as? String, "已保存密钥")
+        let address = app.textFields["providerURL"]
+        address.tap(); address.typeText("/proxy")
+        app.textFields["providerName"].tap()
+        XCTAssertNotEqual(key.value as? String, "已保存密钥")
+        app.buttons["取消"].tap(); app.staticTexts["Key Fixture"].tap()
+        XCTAssertEqual(key.value as? String, "已保存密钥")
+    }
+    func testSupplierCreationPresetsAndCustomBlankEditor() {
+        continueAfterFailure = false
+        let app = launch(); openProviders(app)
+        for (choice, name, url) in [
+            ("providerPresetOpenAI", "OpenAI", "https://api.openai.com/v1"),
+            ("providerPresetOpenRouter", "OpenRouter", "https://openrouter.ai/api/v1"),
+            ("providerPresetCustom", "", "")
+        ] {
+            app.buttons["addProvider"].tap()
+            XCTAssertTrue(app.navigationBars["添加供应商"].waitForExistence(timeout: 5))
+            XCTAssertFalse(app.textFields["providerName"].exists)
+            XCTAssertTrue(app.buttons["providerPresetOpenAI"].exists)
+            XCTAssertTrue(app.buttons["providerPresetOpenRouter"].exists)
+            XCTAssertTrue(app.buttons["providerPresetCustom"].exists)
+            if choice == "providerPresetOpenAI" { capture("supplier-presets") }
+            app.buttons[choice].tap()
+            let nameField = app.textFields["providerName"], address = app.textFields["providerURL"]
+            XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+            XCTAssertEqual(nameField.value as? String, name.isEmpty ? "名称" : name)
+            XCTAssertEqual(address.value as? String, url.isEmpty ? "HTTPS API 基础地址" : url)
+            XCTAssertFalse(app.buttons["providerProtocol"].exists)
+            let api = app.buttons["providerInferenceAPI"]
+            XCTAssertTrue(api.label.contains("API格式"))
+            api.tap()
+            XCTAssertTrue(app.buttons["OpenAI Chat Completions"].exists)
+            XCTAssertTrue(app.buttons["OpenAI Responses"].exists)
+            app.buttons["OpenAI Chat Completions"].tap()
+            capture(choice)
+            app.buttons["取消"].tap()
+            XCTAssertTrue(app.navigationBars["供应商"].waitForExistence(timeout: 5))
+        }
+    }
+    func testLocalEmbeddedSystemSafariHTTPCallback() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing", "--ui-test-chatgpt-loopback"]
+        app.launch(); openProviders(app); app.buttons["addProvider"].tap(); app.buttons["ChatGPT 订阅"].tap()
+        app.swipeUp(); app.swipeUp()
+        let start = app.buttons["chatGPTLoopbackEmbeddedSafari"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5)); start.tap()
+        XCTAssertTrue(app.staticTexts["本地浏览器回调实验：HTTP 回调验证成功，监听已释放"].waitForExistence(timeout: 15), app.debugDescription)
+        capture("chatgpt-local-embedded-system-safari-callback")
+    }
+    func testLocalSafariLoopbackReceivesCallbackWhileBackgrounded() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing", "--ui-test-chatgpt-loopback"]
+        app.launch(); openProviders(app); app.buttons["addProvider"].tap(); app.buttons["ChatGPT 订阅"].tap()
+        app.swipeUp(); app.swipeUp()
+        let start = app.buttons["chatGPTLoopbackSafari"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5)); start.tap()
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+        let foreground = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in safari.state == .runningForeground }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [foreground], timeout: 5), .completed)
+        app.activate()
+        XCTAssertTrue(app.staticTexts["本地浏览器回调实验：HTTP 回调验证成功，监听已释放"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["chatGPTLoopbackLifecycle"].label.contains("background"), app.debugDescription)
+        capture("chatgpt-local-safari-background-callback")
+    }
+    func testLocalSystemBrowserHTTPCallbackAndCancellation() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing", "--ui-test-chatgpt-loopback"]
+        app.launch(); openProviders(app); app.buttons["addProvider"].tap(); app.buttons["ChatGPT 订阅"].tap()
+        app.swipeUp(); app.swipeUp()
+        let start = app.buttons["chatGPTLoopbackStart"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5)); start.tap()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for label in ["Continue", "继续"] {
+            if app.buttons[label].waitForExistence(timeout: 1) { app.buttons[label].tap(); break }
+            if springboard.buttons[label].waitForExistence(timeout: 1) { springboard.buttons[label].tap(); break }
+        }
+        let success = app.staticTexts["本地浏览器回调实验：HTTP 回调验证成功，监听已释放"]
+        XCTAssertTrue(success.waitForExistence(timeout: 15), app.debugDescription)
+        capture("chatgpt-local-system-browser-callback")
+        app.buttons["chatGPTLoopbackWait"].tap()
+        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "取消", "Done", "完成"])).firstMatch
+        if cancel.waitForExistence(timeout: 3) { cancel.tap() }
+        XCTAssertTrue(app.staticTexts["本地浏览器回调实验：已取消，监听已释放"].waitForExistence(timeout: 5))
+        app.buttons["chatGPTLoopbackWait"].tap()
+        XCTAssertTrue(app.staticTexts["本地浏览器回调实验：超时，监听已释放"].waitForExistence(timeout: 16))
+        capture("chatgpt-local-browser-timeout")
+    }
+    func testSubscriptionPresetLoginCancellationAndNoAPIKey() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing", "--ui-test-chatgpt-auth", "--ui-test-chatgpt-auth-wait"]; app.launch(); openProviders(app)
+        app.buttons["addProvider"].tap()
+        for title in ["OpenAI", "OpenRouter", "ChatGPT 订阅", "自定义供应商"] { XCTAssertTrue(app.buttons[title].exists) }
+        app.buttons["ChatGPT 订阅"].tap()
+        XCTAssertTrue(app.buttons["chatGPTSignIn"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.secureTextFields["providerKey"].exists)
+        XCTAssertFalse(app.textFields["providerURL"].exists)
+        app.buttons["chatGPTSignIn"].tap()
+        XCTAssertTrue(app.buttons["chatGPTCancelSignIn"].waitForExistence(timeout: 5))
+        app.buttons["chatGPTCancelSignIn"].tap()
+        XCTAssertTrue(app.staticTexts["ChatGPT 登录已取消"].waitForExistence(timeout: 5))
+        capture("chatgpt-subscription-login-cancel")
+        app.buttons["取消"].tap()
+        XCTAssertFalse(app.buttons["chatGPTSignIn"].exists)
+        app.buttons["addProvider"].tap(); app.buttons["providerPresetChatGPTSubscription"].tap()
+        let name = app.textFields["providerName"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap(); name.tap()
+        name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8) + "Subscription Fixture")
+        app.buttons["saveProvider"].tap()
+        XCTAssertTrue(app.navigationBars["供应商"].waitForExistence(timeout: 5), app.debugDescription)
+        let saved = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "provider-", "Subscription Fixture")).firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 5), app.debugDescription)
+    }
+    func testSubscriptionSignedMockLoginModelsAndLogout() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing", "--ui-test-chatgpt-auth"]; app.launch(); openProviders(app)
+        app.buttons["addProvider"].tap(); app.buttons["ChatGPT 订阅"].tap()
+        let login = app.buttons["chatGPTSignIn"]; XCTAssertTrue(login.waitForExistence(timeout: 5)); login.tap()
+        XCTAssertFalse(app.buttons["chatGPTAccount"].exists)
+        let account = app.descendants(matching: .any)["chatGPTAccount"]
+        XCTAssertTrue(account.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(app.staticTexts["chatGPTConnectionStatus"].exists)
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "已获订阅额度授权")).firstMatch.exists)
+        let displayedAccount = account.label + " " + (account.value as? String ?? "")
+        XCTAssertTrue(displayedAccount.contains("local-fixture@example.invalid"), app.debugDescription)
+        XCTAssertFalse(displayedAccount.contains(" · "), displayedAccount)
+        XCTAssertFalse(login.exists)
+        XCTAssertFalse(app.buttons["启用 ChatGPT 套餐额度"].exists)
+        XCTAssertFalse(app.buttons["连接其他账户／工作区"].exists)
+        XCTAssertFalse(app.staticTexts["ChatGPT 身份已连接；请核对订阅权限和模型"].exists)
+        XCTAssertFalse(app.staticTexts["通过系统浏览器连接 ChatGPT；身份登录还需订阅额度授权。仅对已授权模型使用套餐额度，不自动改用付费 API。"].exists)
+        XCTAssertFalse(app.staticTexts["仅获授权的账户／模型使用订阅额度，受套餐与工作区限制。HTTP 请求必须 store=false、stream=true，发送本地上下文；不支持 previous_response_id。"].exists)
+        app.swipeUp()
+        XCTAssertTrue(app.buttons["providerModel-fixture-vision"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["providerModel-fixture-vision"].value as? String, "已选中")
+        XCTAssertFalse(app.staticTexts["设置仅用于此供应商的当前模型；可用档位以模型能力为准。"].exists)
+        XCTAssertFalse(app.staticTexts["请选择此账户列表中的模型；列表不保证所有能力或额度可用。"].exists)
+        capture("chatgpt-signed-local-login-models")
+        app.swipeDown(); app.swipeDown()
+        let logout = app.buttons["chatGPTDisconnect"]; XCTAssertTrue(logout.waitForExistence(timeout: 5)); logout.tap()
+        XCTAssertTrue(app.staticTexts["已退出，服务器已确认结束此刷新会话。"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["chatGPTConnectionStatus"].label, "未连接 ChatGPT")
+        XCTAssertTrue(login.waitForExistence(timeout: 5))
+        capture("chatgpt-local-logout")
+    }
+    func testSubscriptionBadSignatureMockIsNeverConnected() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing", "--ui-test-chatgpt-auth", "--ui-test-chatgpt-auth-invalid"]; app.launch(); openProviders(app)
+        app.buttons["addProvider"].tap(); app.buttons["ChatGPT 订阅"].tap()
+        let login = app.buttons["chatGPTSignIn"]; XCTAssertTrue(login.waitForExistence(timeout: 5)); login.tap()
+        XCTAssertTrue(app.staticTexts["ChatGPT 身份签名、账号或授权回调校验失败"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.staticTexts["chatGPTConnectionStatus"].label, "未连接 ChatGPT")
+        XCTAssertFalse(app.buttons["chatGPTAccount"].exists)
+        capture("chatgpt-local-invalid-signature")
+    }
+    func testResponsesContextSelectionPersistsAndChatResetsChain() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing", "--ui-test-composer-models"]; app.launch()
+        openProviders(app); app.staticTexts["Fixture One"].tap()
+        XCTAssertFalse(app.buttons["providerProtocol"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["providerKind"].exists)
+        let api = app.buttons["providerInferenceAPI"], context = app.buttons["providerContextPolicy"]
+        XCTAssertTrue(api.waitForExistence(timeout: 5)); api.tap(); app.buttons["OpenAI Responses"].tap()
+        XCTAssertTrue(context.waitForExistence(timeout: 3)); context.tap()
+        app.buttons["服务端响应链 · 保存远端响应"].tap()
+        capture("responses-context-setting")
+        app.buttons["saveProvider"].tap(); app.staticTexts["Fixture One"].tap()
+        XCTAssertTrue(api.label.contains("Responses")); XCTAssertTrue(context.label.contains("服务端响应链"))
+        api.tap(); app.buttons["OpenAI Chat Completions"].tap(); XCTAssertFalse(context.exists)
+        app.buttons["saveProvider"].tap(); app.staticTexts["Fixture One"].tap()
+        XCTAssertTrue(api.label.contains("Chat Completions")); XCTAssertFalse(context.exists)
+    }
+    func testDiscoverModelsBrowseAllAndSelectCachedModelInConversation() {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing", "--ui-test-model-catalog"]; app.launch()
         openProviders(app); app.staticTexts["Catalog Fixture"].tap()
         XCTAssertTrue(app.buttons["fetchModels"].waitForExistence(timeout: 5)); app.buttons["fetchModels"].tap()
-        XCTAssertTrue(app.buttons["chooseDiscoveredModel"].waitForExistence(timeout: 5))
-        app.buttons["chooseDiscoveredModel"].tap()
-        XCTAssertTrue(app.staticTexts["fixture-vision"].waitForExistence(timeout: 3)); app.staticTexts["fixture-vision"].tap()
+        XCTAssertTrue(app.buttons["providerModel-fixture-vision"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["providerModel-fixture-vision"].value as? String, "已选中")
+        XCTAssertFalse(app.staticTexts["图片：未知"].firstMatch.exists)
+        XCTAssertFalse(app.buttons["providerModel-fixture-vision"].label.contains("支持图片输入"))
+        XCTAssertFalse(app.buttons["providerModel-fixture-vision"].label.contains("支持文本生成"))
+        XCTAssertFalse(app.textFields["parameter-temperature"].exists)
+        XCTAssertFalse(app.staticTexts["接口报告的能力"].exists)
+        XCTAssertFalse(app.buttons["providerModel-fixture-seventh"].exists)
         app.swipeUp()
-        let parameter = app.textFields["parameter-temperature"]
-        XCTAssertTrue(parameter.waitForExistence(timeout: 3)); parameter.tap(); parameter.typeText("0.4")
-        capture("model-parameters")
+        let effort = app.buttons["reasoningEffort"]
+        XCTAssertTrue(effort.waitForExistence(timeout: 3)); effort.tap(); app.buttons["high"].tap()
+        XCTAssertFalse(app.textFields["parameter-temperature"].exists)
+        let browse = app.buttons["browseAllProviderModels"]
+        XCTAssertTrue(browse.waitForExistence(timeout: 5)); browse.tap()
+        XCTAssertTrue(app.navigationBars["选择模型"].waitForExistence(timeout: 5))
+        let search = app.searchFields["搜索模型 ID"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap(); search.typeText("fixture-seventh")
+        let option = app.buttons["providerModelOption-fixture-seventh"]
+        XCTAssertTrue(option.waitForExistence(timeout: 3))
+        capture("all-models-search")
+        option.tap()
+        app.swipeUp()
+        let selected = app.buttons["providerModel-fixture-seventh"]
+        XCTAssertTrue(selected.waitForExistence(timeout: 3))
+        XCTAssertEqual(selected.value as? String, "已选中")
+        XCTAssertFalse(app.textFields["providerModel"].exists)
+        XCTAssertTrue(app.buttons["providerModel-fixture-fifth"].exists)
+        XCTAssertFalse(app.buttons["providerModel-fixture-sixth"].exists)
+        XCTAssertLessThan(app.buttons["providerModel-fixture-fifth"].frame.minY, selected.frame.minY)
+        XCTAssertLessThan(selected.frame.minY, app.buttons["browseAllProviderModels"].frame.minY)
+        capture("compact-model-chips")
         app.buttons["saveProvider"].tap(); closeProviders(app); app.buttons["newConversation"].tap()
         let picker = app.buttons["conversationModelPicker"]
-        app.textViews["messageInput"].tap()
+        // Match the existing composer-model test: complete the focus transition
+        // after dismissing an editor keyboard before expecting its action row.
+        app.textViews["messageInput"].tap(); app.textViews["messageInput"].tap()
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
-        XCTAssertTrue(picker.label.contains("fixture-vision")); picker.tap(); app.buttons["fixture-other"].tap()
+        XCTAssertTrue(picker.label.contains("fixture-seventh")); picker.tap(); app.buttons["fixture-other"].tap()
         XCTAssertTrue(picker.label.contains("fixture-other"))
         capture("discovered-model-selection")
     }

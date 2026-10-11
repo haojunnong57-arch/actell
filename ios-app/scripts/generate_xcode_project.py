@@ -46,8 +46,7 @@ def configs(name, settings):
 def generate():
     packages = [
         add("SwiftAgentKit", "XCLocalSwiftPackageReference", relativePath="Vendor/SwiftAgentKit"),
-        add("LLMProviderKit", "XCRemoteSwiftPackageReference", repositoryURL="https://github.com/ayman3000/LLMProviderKit.git",
-            requirement=dict(kind="exactVersion", version="0.1.0-alpha.35")),
+        add("ProviderKit", "XCLocalSwiftPackageReference", relativePath="ProviderKit"),
         add("MarkdownUI", "XCRemoteSwiftPackageReference", repositoryURL="https://github.com/gonzalezreal/swift-markdown-ui.git",
             requirement=dict(kind="exactVersion", version="2.4.1")),
     ]
@@ -97,7 +96,7 @@ def generate():
                       includeInIndex=0, path=name + "." + extension, sourceTree="BUILT_PRODUCTS_DIR")
         products.append(product)
         package_products, frameworks = [], []
-        linked_products = [] if name in ("PhoneAgentUITests", "PhoneAgentLiveActivity") else [("SwiftAgentKit", packages[0]), ("LLMProviderKit", packages[1]), ("LLMProviderKitOpenAI", packages[1])]
+        linked_products = [] if name in ("PhoneAgentUITests", "PhoneAgentLiveActivity") else [("SwiftAgentKit", packages[0]), ("ProviderCore", packages[1]), ("OpenAIAdapter", packages[1])]
         for product_name, package in linked_products:
             dependency = add(name + product_name, "XCSwiftPackageProductDependency", package=package, productName=product_name)
             package_products.append(dependency)

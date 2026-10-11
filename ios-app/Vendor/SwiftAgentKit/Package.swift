@@ -9,7 +9,7 @@ let package = Package(
     platforms: [.macOS(.v13), .iOS(.v16), .tvOS(.v16), .watchOS(.v9), .visionOS(.v1)],
     products: [.library(name: "SwiftAgentKit", targets: ["SwiftAgentKit"])],
     dependencies: [
-        .package(url: "https://github.com/ayman3000/LLMProviderKit.git", exact: "0.1.0-alpha.35"),
+        .package(path: "../../ProviderKit"),
         .package(url: "https://github.com/swiftlang/swift-syntax.git", exact: "603.0.2"),
     ],
     targets: [
@@ -19,7 +19,7 @@ let package = Package(
             .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
         ]),
         .target(name: "SwiftAgentKit", dependencies: [
-            .product(name: "LLMProviderKit", package: "LLMProviderKit"),
+            .product(name: "ProviderCore", package: "ProviderKit"),
             "SwiftAgentKitMacros",
         ]),
     ]

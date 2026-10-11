@@ -4,7 +4,7 @@
 
 **Vibe Coding 项目，技术原型初期，用于思路分享。** PhoneAgent（执言）探索让 iPhone 上的 Agent 调用 CoreDevice 服务，获取屏幕画面并执行点击、拖动。当前默认使用外部 VPN 回环的免 ESP32 路线，也可选择 ESP32-S3 USB NCM 转发；尚不具备生产可用性或长期后台稳定性保证。
 
-App 使用 [SwiftAgentKit](https://github.com/ayman3000/SwiftAgentKit)、[LLMProviderKit](https://github.com/ayman3000/LLMProviderKit) 和 [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui)。开发者服务后端复用 [Device Hub](https://github.com/JaviSoto/device-hub-ios) 的补丁版 [idevice](https://github.com/jkcoxson/idevice)，协议实现参考 [pymobiledevice3](https://github.com/doronz88/pymobiledevice3)；具体复用边界见下文。
+App 使用 [SwiftAgentKit](https://github.com/ayman3000/SwiftAgentKit)、[MacPaw/OpenAI](https://github.com/MacPaw/OpenAI) 和 [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui)。开发者服务后端复用 [Device Hub](https://github.com/JaviSoto/device-hub-ios) 的补丁版 [idevice](https://github.com/jkcoxson/idevice)，协议实现参考 [pymobiledevice3](https://github.com/doronz88/pymobiledevice3)；具体复用边界见下文。
 
 ## 从 ESP32 外设到 CoreDevice
 
@@ -12,7 +12,7 @@ App 使用 [SwiftAgentKit](https://github.com/ayman3000/SwiftAgentKit)、[LLMPro
 
 ## 当前能力与边界
 
-- 支持 OpenAI Chat Completions 兼容服务商与模型，通过 `screenshot`、`tap`、`drag`、`wait` 工具执行任务；服务商在「设置 → 服务商」管理。原生 Anthropic/Gemini 当前仅支持模型发现。
+- 支持 OpenAI Chat Completions 兼容服务商与模型，通过 `screenshot`、`tap`、`drag`、`wait` 工具执行任务；「设置 → 供应商」添加时先选择 OpenAI、OpenRouter 或自定义供应商；自定义不预填，编辑页固定供应商类型并可选择 API格式。旧 Anthropic、Gemini、Ollama 配置仍可读取，使用当前类型需另行添加供应商。
 - 可导入 Markdown/TXT 技能包，按需读取文本；导入不执行脚本。支持会话历史、图片附件、工具审批与手动停止。同一手机的控制任务按整轮排队，结果不确定的动作不自动重放。
 - 控制会话持续接收显示流，用 VideoToolbox 解码并缓存最近完整帧。截图工具从该流取得画面、裁去填充区域并编码 JPEG，默认不逐次调用系统独立截图服务。调用时仍会等待新解码帧，或请求开始后的发送端进度报告确认缓存画面完整；最长等待八秒，不能理解为立即返回任意旧缓存。独立 PNG 截图实现保留，但不会自动回退。
 - ESP32 路线已有真实截图与测试按钮计数增加的记录；VPN 回环路线在 2026-10-09 的 iPhone 15 Pro 测试中复用配对身份，得到 1179 × 2556 截图、实际点击计数 0 → 1，并确认媒体释放。完整模型任务、拖动及 VPN 回环后台持续执行仍待单独验收。
@@ -70,7 +70,7 @@ RUN_UI_TESTS=1 bash ios-app/scripts/test_core.sh <隔离模拟器-UDID>
 | 项目 | 当前使用方式 |
 | --- | --- |
 | [SwiftAgentKit](https://github.com/ayman3000/SwiftAgentKit) | Agent 核心与宏的本地源码快照，含 iOS 存储兼容补丁；未引入上游 MCP 模块 |
-| [LLMProviderKit](https://github.com/ayman3000/LLMProviderKit) / [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui) | Swift Package 依赖，分别用于模型调用和消息 Markdown 渲染 |
+| [MacPaw/OpenAI](https://github.com/MacPaw/OpenAI) / [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui) | Swift Package 依赖，分别用于模型调用和消息 Markdown 渲染 |
 | [idevice](https://github.com/jkcoxson/idevice) / [Device Hub](https://github.com/JaviSoto/device-hub-ios) | 使用 Device Hub 固定的补丁版 idevice 源码与 PNG validator，并作本地适配；不是集成整个 Device Hub App |
 | [ManifoldKit](https://github.com/ManifoldKit/ManifoldKit) | 摘取、适配工具调用展示组件，不是整个框架的包依赖 |
 | [ESP-IDF](https://github.com/espressif/esp-idf/tree/v5.5.5)、[esp_tinyusb](https://github.com/espressif/esp-usb)、[TinyUSB](https://github.com/hathach/tinyusb) | ESP32 固件工具链及 USB 组件；固定 ESP-IDF 5.5.5、esp_tinyusb 2.2.0、TinyUSB 0.21.0~2 |

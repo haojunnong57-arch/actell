@@ -1,7 +1,7 @@
 import XCTest
 import Combine
 import SwiftAgentKit
-import LLMProviderKit
+import ProviderCore
 @testable import PhoneAgent
 
 @MainActor final class ConversationTests: XCTestCase {
@@ -316,21 +316,21 @@ import LLMProviderKit
     }
 }
 
-private struct ReceiptInspectionProvider: LLMProvider {
+private struct ReceiptInspectionProvider: ModelProvider {
     static let name = "receipt-inspection"
     let configuration = DemoProvider().configuration
     let inspect: @MainActor @Sendable () -> Void
-    func complete(_ request: LLMRequest) async throws -> LLMResponse {
+    func complete(_ request: ModelRequest) async throws -> ModelResponse {
         if request.messages.contains(where: { $0.role == .tool }) {
             await inspect()
-            return LLMResponse(text: "回执验证完成", finishReason: .stop, request: request, providerName: Self.name)
+            return ModelResponse(text: "回执验证完成", finishReason: .stop, request: request, providerName: Self.name)
         }
-        return LLMResponse(text: "", finishReason: .toolCalls, toolCalls: [
+        return ModelResponse(text: "", finishReason: .toolCalls, toolCalls: [
             .init(id: "receipt-1", name: "wait", arguments: "{\"duration_ms\":1}"),
             .init(id: "receipt-2", name: "wait", arguments: "{\"duration_ms\":1}")
         ], request: request, providerName: Self.name)
     }
-    func stream(_ request: LLMRequest) -> AsyncThrowingStream<LLMStreamChunk, Error> {
+    func stream(_ request: ModelRequest) -> AsyncThrowingStream<ModelEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {

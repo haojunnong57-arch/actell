@@ -75,6 +75,13 @@ import Foundation
                     runServices: AgentRunServices(provider: DemoProvider(), bridge: DemoBridge()))
             }
             let sessions = ConversationStore(inMemory: true)
+            if arguments.contains("--ui-test-provider-key") {
+                var keys: [String: String] = [:]
+                let model = AgentViewModel(sessions: sessions, loadPersistentState: false,
+                    writeProviderKey: { keys[$1] = $0 }, containsProviderKey: { keys[$0] != nil })
+                _ = model.saveProvider(ProviderProfile(name: "Key Fixture", settings: .init(baseURL: "https://fixture.invalid/v1", model: "fixture")), key: "UI_TEST_ONLY_NOT_A_REAL_KEY")
+                return model
+            }
             if arguments.contains("--ui-test-disclosure-scroll") {
                 let id = sessions.create(mode: .live)
                 for index in 0..<20 { sessions.addNotice("展开滚动验收 \(index)\n本地历史记录", in: id) }
@@ -106,7 +113,7 @@ import Foundation
             if arguments.contains("--ui-test-composer-models") {
                 let model = AgentViewModel(sessions: sessions, loadPersistentState: false)
                 try? model.providers.save(ProviderProfile(name: "Fixture One", settings: .init(baseURL: "https://fixture.invalid/v1", model: "model-a")))
-                try? model.providers.save(ProviderProfile(name: "Fixture Two", settings: .init(baseURL: "https://fixture.invalid/v1", model: "model-b")))
+                try? model.providers.save(ProviderProfile(name: "Fixture Two", settings: .init(baseURL: "https://fixture.invalid/v1", model: "model-b"), models: ["model-b-alt"]))
                 return model
             }
             if arguments.contains("--ui-test-composer-history") {

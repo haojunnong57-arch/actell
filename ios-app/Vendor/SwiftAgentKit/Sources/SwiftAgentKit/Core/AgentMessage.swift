@@ -6,11 +6,11 @@
 //
 
 import Foundation
-import LLMProviderKit
+import ProviderCore
 
 /// A single message in an agent conversation.
 ///
-/// Extends LLMProviderKit's `LLMMessage` with agent-specific fields:
+/// Extends ProviderCore's `ModelMessage` with agent-specific fields:
 /// tool calls (assistant requesting tool execution) and tool results
 /// (user/system feeding tool output back to the model).
 ///
@@ -22,7 +22,8 @@ public struct AgentMessage: Identifiable, @unchecked Sendable, Codable {
     public let id: UUID
     public var role: AgentMessageRole
     public var content: String
-    public var images: [LLMImage]
+    public var images: [ModelImage]
+    public var replayState: ScopedChatReplayState?
     public var toolCalls: [AgentToolCall]?
     public var toolResults: [AgentToolResult]?
     public let timestamp: Date
@@ -33,10 +34,11 @@ public struct AgentMessage: Identifiable, @unchecked Sendable, Codable {
         id: UUID = UUID(),
         role: AgentMessageRole,
         content: String,
-        images: [LLMImage] = [],
+        images: [ModelImage] = [],
         toolCalls: [AgentToolCall]? = nil,
         toolResults: [AgentToolResult]? = nil,
-        timestamp: Date = Date()
+        timestamp: Date = Date(),
+        replayState: ScopedChatReplayState? = nil
     ) {
         self.id = id
         self.role = role
@@ -45,6 +47,7 @@ public struct AgentMessage: Identifiable, @unchecked Sendable, Codable {
         self.toolCalls = toolCalls
         self.toolResults = toolResults
         self.timestamp = timestamp
+        self.replayState = replayState
     }
 
     // MARK: - Factories
@@ -60,18 +63,18 @@ public struct AgentMessage: Identifiable, @unchecked Sendable, Codable {
     }
 
     /// Create a user message with images (for vision-capable models).
-    public static func user(_ content: String, images: [LLMImage]) -> AgentMessage {
+    public static func user(_ content: String, images: [ModelImage]) -> AgentMessage {
         AgentMessage(role: .user, content: content, images: images)
     }
 
     /// Create an assistant message (model response).
-    public static func assistant(_ content: String) -> AgentMessage {
-        AgentMessage(role: .assistant, content: content)
+    public static func assistant(_ content: String, replayState: ScopedChatReplayState? = nil) -> AgentMessage {
+        AgentMessage(role: .assistant, content: content, replayState: replayState)
     }
 
     /// Create an assistant message with tool calls.
-    public static func assistant(content: String = "", toolCalls: [AgentToolCall]) -> AgentMessage {
-        AgentMessage(role: .assistant, content: content, toolCalls: toolCalls)
+    public static func assistant(content: String = "", toolCalls: [AgentToolCall], replayState: ScopedChatReplayState? = nil) -> AgentMessage {
+        AgentMessage(role: .assistant, content: content, toolCalls: toolCalls, replayState: replayState)
     }
 
     /// Create a tool-result message (fed back to the model after tool execution).
@@ -79,15 +82,15 @@ public struct AgentMessage: Identifiable, @unchecked Sendable, Codable {
         AgentMessage(role: .tool, content: "", toolResults: results)
     }
 
-    // MARK: - Conversion to LLMProviderKit
+    // MARK: - Conversion to ProviderCore
 
-    /// Convert to one or more `LLMMessage` values for the LLM provider layer.
+    /// Convert to one or more `ModelMessage` values for the LLM provider layer.
     ///
     /// Most agent messages map to exactly one provider message. Tool-result
     /// messages are the exception: strict providers require one provider message
     /// per original tool call ID, so a single `.tool(results:)` agent message fans
-    /// out into multiple `LLMMessage.tool` messages.
-    public func toLLMMessages() -> [LLMMessage] {
+    /// out into multiple `ModelMessage.tool` messages.
+    public func toModelMessages() -> [ModelMessage] {
         switch role {
         case .tool:
             guard let toolResults, !toolResults.isEmpty else {
@@ -98,21 +101,21 @@ public struct AgentMessage: Identifiable, @unchecked Sendable, Codable {
                 let status = result.isError ? "ERROR" : "OK"
                 let toolName = result.toolName ?? "unknown"
                 let content = "[Tool: \(toolName)] \(status)\n\(result.result)"
-                return LLMMessage(role: .tool, content: content, images: result.images, toolCallId: result.toolCallId)
+                return ModelMessage(role: .tool, content: content, images: result.images, toolCallId: result.toolCallId)
             }
 
         default:
-            return [toLLMMessage()]
+            return [toModelMessage()]
         }
     }
 
-    /// Convert to a single `LLMMessage` for the LLM provider layer.
+    /// Convert to a single `ModelMessage` for the LLM provider layer.
     ///
-    /// Prefer `toLLMMessages()` when building provider requests from conversation
+    /// Prefer `toModelMessages()` when building provider requests from conversation
     /// history because tool-result messages may need to fan out. This method is
     /// kept for source compatibility and for contexts that explicitly require a
     /// single provider message.
-    public func toLLMMessage() -> LLMMessage {
+    public func toModelMessage() -> ModelMessage {
         switch role {
         case .system:
             return .system(content)
@@ -125,25 +128,25 @@ public struct AgentMessage: Identifiable, @unchecked Sendable, Codable {
 
         case .assistant:
             if let toolCalls, !toolCalls.isEmpty {
-                // Convert AgentToolCall to LLMToolCall so the provider
+                // Convert AgentToolCall to ModelToolCall so the provider
                 // can serialize them for the model to correlate results
                 let llmToolCalls = toolCalls.map { call in
                     // Serialize parameters to JSON string
                     let paramsData = try? JSONEncoder().encode(call.parameters)
                     let argsString = paramsData.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-                    return LLMToolCall(
+                    return ModelToolCall(
                         id: call.id,
                         name: call.name,
                         arguments: argsString,
                         providerMetadata: call.providerMetadata
                     )
                 }
-                return .assistant(content: content, toolCalls: llmToolCalls)
+                return .assistant(content: content, toolCalls: llmToolCalls, replayState: replayState)
             }
-            return .assistant(content)
+            return .assistant(content, replayState: replayState)
 
         case .tool:
-            if let first = toLLMMessages().first {
+            if let first = toModelMessages().first {
                 return first
             }
             return .user(content)
@@ -225,7 +228,7 @@ public struct AgentToolResult: Sendable, Identifiable, Equatable, Codable {
     public let result: String
     public let isError: Bool
     /// Images the tool returned (e.g. a screenshot), for vision-capable models.
-    public let images: [LLMImage]
+    public let images: [ModelImage]
 
     public init(
         id: String = UUID().uuidString,
@@ -233,7 +236,7 @@ public struct AgentToolResult: Sendable, Identifiable, Equatable, Codable {
         toolName: String? = nil,
         result: String,
         isError: Bool = false,
-        images: [LLMImage] = []
+        images: [ModelImage] = []
     ) {
         self.id = id
         self.toolCallId = toolCallId
@@ -244,12 +247,12 @@ public struct AgentToolResult: Sendable, Identifiable, Equatable, Codable {
     }
 
     /// Create a successful result.
-    public static func success(toolCallId: String, toolName: String?, result: String, images: [LLMImage] = []) -> AgentToolResult {
+    public static func success(toolCallId: String, toolName: String?, result: String, images: [ModelImage] = []) -> AgentToolResult {
         AgentToolResult(toolCallId: toolCallId, toolName: toolName, result: result, isError: false, images: images)
     }
 
     /// Create an error result.
-    public static func error(toolCallId: String, toolName: String?, message: String, images: [LLMImage] = []) -> AgentToolResult {
+    public static func error(toolCallId: String, toolName: String?, message: String, images: [ModelImage] = []) -> AgentToolResult {
         AgentToolResult(toolCallId: toolCallId, toolName: toolName, result: message, isError: true, images: images)
     }
 }
