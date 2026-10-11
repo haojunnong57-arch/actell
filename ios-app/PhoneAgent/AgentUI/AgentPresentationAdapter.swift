@@ -37,6 +37,7 @@ struct ToolPresentation {
     }
 
     var session: AgentConversation? { model.sessions.conversation(sessionID) }
+    var activeTurnID: UUID? { model.sessions.activeRuns[sessionID]?.runID }
     var activeRun: RunIdentity? { model.ownedRun.flatMap { $0.conversationID == sessionID ? $0 : nil } }
     var backgroundStatus: String { model.backgroundStatus }
     var running: Bool { activeRun != nil && model.running }

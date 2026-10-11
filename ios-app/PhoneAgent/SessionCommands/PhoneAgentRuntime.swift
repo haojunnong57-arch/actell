@@ -75,6 +75,25 @@ import Foundation
                     runServices: AgentRunServices(provider: DemoProvider(), bridge: DemoBridge()))
             }
             let sessions = ConversationStore(inMemory: true)
+            if arguments.contains("--ui-test-turn-summaries") {
+                let id = sessions.create(mode: .live)
+                if let run = sessions.begin(in: id, query: "汇总验收") {
+                    for index in 1...2 {
+                        sessions.beginAssistantTurn(run)
+                        sessions.completeAssistantTurn("中间答复\(index)", reasoning: "第\(index)段思考内容", identity: run)
+                        sessions.updateTool(callID: "summary-\(index)", name: "wait", state: .succeeded, result: "已等待", identity: run)
+                    }
+                    sessions.beginAssistantTurn(run)
+                    sessions.completeAssistantTurn("汇总后的最终答复", identity: run)
+                    sessions.finish(run, phase: .completed, summary: "")
+                }
+                if let run = sessions.begin(in: id, query: "只有正文") {
+                    sessions.beginAssistantTurn(run)
+                    sessions.completeAssistantTurn("没有工具和思考的答复", identity: run)
+                    sessions.finish(run, phase: .completed, summary: "")
+                }
+                return AgentViewModel(sessions: sessions, loadPersistentState: false)
+            }
             if arguments.contains("--ui-test-provider-key") {
                 var keys: [String: String] = [:]
                 let model = AgentViewModel(sessions: sessions, loadPersistentState: false,

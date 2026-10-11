@@ -1,6 +1,45 @@
 import XCTest
 
 @MainActor final class ConversationUITests: XCTestCase {
+    func testCompletedTurnSummariesCountCollapseAndKeepAnswerVisible() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-test-turn-summaries"]
+        app.launch(); app.staticTexts["汇总验收"].firstMatch.tap()
+        let summary = app.buttons["2 次工具调用 · 2 段思考"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertEqual(summary.value as? String, "已收起")
+        XCTAssertTrue(app.staticTexts["汇总后的最终答复"].exists)
+        XCTAssertTrue(app.staticTexts["没有工具和思考的答复"].exists)
+        XCTAssertFalse(app.buttons["0 次工具调用"].exists)
+        XCTAssertFalse(app.buttons["0 段思考"].exists)
+        XCTAssertFalse(app.staticTexts["第1段思考内容"].exists)
+        summary.tap()
+        let tools = app.otherElements.matching(identifier: "tool-invocation-succeeded-wait")
+        XCTAssertEqual(tools.count, 2)
+        let firstThought = app.staticTexts["第1段思考内容"], secondThought = app.staticTexts["第2段思考内容"]
+        XCTAssertFalse(firstThought.exists); XCTAssertFalse(secondThought.exists)
+        let thoughtHeaders = app.buttons.matching(NSPredicate(format: "label == %@", "思考"))
+        XCTAssertEqual(thoughtHeaders.count, 2)
+        XCTAssertEqual(thoughtHeaders.element(boundBy: 0).value as? String, "已收起")
+        XCTAssertEqual(thoughtHeaders.element(boundBy: 1).value as? String, "已收起")
+        thoughtHeaders.element(boundBy: 0).tap()
+        XCTAssertTrue(firstThought.exists); XCTAssertFalse(secondThought.exists)
+        thoughtHeaders.element(boundBy: 1).tap()
+        XCTAssertTrue(secondThought.exists)
+        XCTAssertLessThan(firstThought.frame.minY, app.staticTexts["中间答复1"].frame.minY)
+        XCTAssertLessThan(app.staticTexts["中间答复1"].frame.minY, tools.element(boundBy: 0).frame.minY)
+        XCTAssertLessThan(tools.element(boundBy: 0).frame.minY, secondThought.frame.minY)
+        XCTAssertLessThan(secondThought.frame.minY, tools.element(boundBy: 1).frame.minY)
+        capture("turn-summary-expanded-in-message-order")
+        summary.tap()
+        XCTAssertFalse(firstThought.exists)
+        XCTAssertFalse(tools.firstMatch.exists)
+        capture("turn-summary-collapsed")
+        summary.tap()
+        XCTAssertFalse(firstThought.exists); XCTAssertFalse(secondThought.exists)
+        XCTAssertEqual(thoughtHeaders.element(boundBy: 0).value as? String, "已收起")
+    }
     func testUnsentNewConversationStaysOutOfHistoryUntilFirstSend() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -45,7 +84,7 @@ import XCTest
         app.launch()
         app.staticTexts["新会话"].firstMatch.tap()
         XCTAssertTrue(app.scrollViews["conversationMessages"].waitForExistence(timeout: 5))
-        for title in ["思考", "查询 App"] {
+        for title in ["1 次工具调用 · 1 段思考"] {
             let toggle = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
             XCTAssertTrue(toggle.waitForExistence(timeout: 5))
             for _ in 0..<3 {
@@ -70,6 +109,8 @@ import XCTest
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "--ui-test-disclosure-scroll"]
         app.launch(); app.staticTexts["新会话"].firstMatch.tap()
+        app.buttons["1 次工具调用 · 1 段思考"].tap()
+        app.scrollViews["conversationMessages"].swipeUp()
         let toggle = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "查询 App")).firstMatch
         XCTAssertTrue(toggle.waitForExistence(timeout: 5)); toggle.tap()
         let card = app.scrollViews["toolResultScroll"]
@@ -93,7 +134,8 @@ import XCTest
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "--ui-test-disclosure-scroll"]
         app.launch(); app.staticTexts["新会话"].firstMatch.tap()
-        let header = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "思考")).firstMatch
+        app.buttons["1 次工具调用 · 1 段思考"].tap()
+        let header = app.buttons["思考"]
         XCTAssertTrue(header.waitForExistence(timeout: 5))
         let content = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "reasoningContent-")).firstMatch
         for x in [0.5, 0.95, 0.5, 0.95, 0.5, 0.95] {

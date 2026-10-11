@@ -121,6 +121,42 @@ struct AgentConversation: Identifiable, Codable, Sendable {
         return messages.last(where: { $0.role == .user || $0.role == .assistant })?.text ?? "开始一个新的任务或问题"
     }
 }
+
+/// Presentation-only grouping; archives and model replay keep their original messages.
+struct ConversationTurn: Identifiable {
+    var messages: [ChatMessage]
+    var id: UUID { messages[0].id }
+    var runID: UUID? { messages.compactMap(\.runID).first }
+    var tools: [ChatMessage] { messages.filter { $0.role == .tool && $0.tool != nil } }
+    var thoughts: [ChatMessage] {
+        messages.filter { $0.role == .assistant && $0.reasoning?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
+    }
+    private func hasActivity(_ message: ChatMessage) -> Bool {
+        message.tool != nil || (message.role == .assistant && message.reasoning?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+    }
+    var firstActivityID: UUID? { messages.first(where: hasActivity)?.id }
+    var foldedMessages: [ChatMessage] {
+        guard let first = messages.firstIndex(where: hasActivity), let last = messages.lastIndex(where: hasActivity) else { return [] }
+        // Preserve interleaved replies and notices as well as tools and thoughts.
+        return Array(messages[first...last])
+    }
+    var summaryLabel: String {
+        var counts: [String] = []
+        if !tools.isEmpty { counts.append("\(tools.count) 次工具调用") }
+        if !thoughts.isEmpty { counts.append("\(thoughts.count) 段思考") }
+        return counts.joined(separator: " · ")
+    }
+    static func group(_ messages: [ChatMessage]) -> [ConversationTurn] {
+        var turns: [ConversationTurn] = []
+        for message in messages {
+            let differentRun = message.runID.map { run in turns.last?.runID.map { $0 != run } ?? false } ?? false
+            if turns.isEmpty || message.role == .user || differentRun {
+                turns.append(ConversationTurn(messages: [message]))
+            } else { turns[turns.count - 1].messages.append(message) }
+        }
+        return turns
+    }
+}
 extension RunPhase {
     var label: String {
         switch self {

@@ -5,6 +5,34 @@ import ProviderCore
 @testable import PhoneAgent
 
 @MainActor final class ConversationTests: XCTestCase {
+    func testTurnSummaryGroupsWholeRunsAndCountsOnlyNonemptyThoughtsAndToolCalls() {
+        let first = UUID(), second = UUID()
+        let messages = [
+            ChatMessage(runID: first, role: .user, text: "first"),
+            ChatMessage(runID: first, role: .assistant, text: "", reasoning: .init(text: "one\n\ntwo")),
+            ChatMessage(runID: first, role: .tool, text: "", tool: .init(callID: "a", name: "tap", state: .succeeded, detail: "")),
+            ChatMessage(runID: first, role: .assistant, text: "answer", reasoning: .init(text: "next")),
+            ChatMessage(runID: second, role: .user, text: "second"),
+            ChatMessage(runID: second, role: .assistant, text: "answer", reasoning: .init(text: " \n"))
+        ]
+        let turns = ConversationTurn.group(messages)
+        XCTAssertEqual(turns.count, 2)
+        XCTAssertEqual(turns[0].id, messages[0].id)
+        XCTAssertEqual(turns[0].runID, first)
+        XCTAssertEqual(turns[0].tools.count, 1)
+        XCTAssertEqual(turns[0].thoughts.count, 2)
+        XCTAssertEqual(turns[0].firstActivityID, messages[1].id)
+        XCTAssertEqual(turns[0].foldedMessages.map(\.id), Array(messages[1...3]).map(\.id))
+        XCTAssertEqual(turns[0].summaryLabel, "1 次工具调用 · 2 段思考")
+        XCTAssertTrue(turns[1].tools.isEmpty)
+        XCTAssertTrue(turns[1].thoughts.isEmpty)
+        XCTAssertNil(turns[1].firstActivityID)
+        XCTAssertTrue(turns[1].foldedMessages.isEmpty)
+        XCTAssertEqual(turns[1].summaryLabel, "")
+        XCTAssertEqual(turns.flatMap(\.messages), messages)
+        XCTAssertTrue(ConversationTurn.group([]).isEmpty)
+        XCTAssertEqual(ConversationTurn.group([ChatMessage(role: .user, text: "legacy"), ChatMessage(role: .assistant, text: "old"), ChatMessage(role: .user, text: "next")]).count, 2)
+    }
     func testUnsentDraftStaysOutOfHistoryAndEveryArchiveWrite() throws {
         let directory = try temporaryDirectory()
         let store = ConversationStore(directory: directory)

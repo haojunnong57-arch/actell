@@ -46,9 +46,12 @@ struct ConversationView: View {
                                         }.accessibilityIdentifier("dismissSiriTask")
                                     }.padding(.vertical, 20)
                                 } else if session.messages.isEmpty { welcome(session.mode) }
-                                ForEach(session.messages) { message in
-                                    messageView(message).id(message.id)
-
+                                ForEach(ConversationTurn.group(session.messages)) { turn in
+                                    if let runID = turn.runID, runID == presentation.activeTurnID {
+                                        ForEach(turn.messages) { message in messageView(message).id(message.id) }
+                                    } else {
+                                        completedTurn(turn)
+                                    }
                                 }
                                 if running && presentation.pendingApproval == nil { HStack(spacing: 8) { ProgressView().controlSize(.small); Text(presentation.status).font(.caption).foregroundStyle(.secondary) } }
                                 Color.clear.frame(height: 1).id("latest")
@@ -238,7 +241,39 @@ struct ConversationView: View {
             }.buttonStyle(.bordered).accessibilityIdentifier("suggestedPrompt")
         }.padding(.bottom, 24)
     }
-    @ViewBuilder private func messageView(_ message: ChatMessage) -> some View {
+    private func completedTurn(_ turn: ConversationTurn) -> some View {
+        let folded = turn.foldedMessages
+        let foldedIDs = Set(folded.map(\.id))
+        return VStack(alignment: .leading, spacing: 12) {
+            ForEach(turn.messages) { message in
+                if message.id == folded.first?.id {
+                    ConversationDisclosureGroup {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(folded) { item in
+                                if let reasoning = item.reasoning, !reasoning.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    ReasoningMessageView(reasoning: reasoning, messageID: item.id)
+                                }
+                                if item.role != .assistant || item.id != folded.last?.id {
+                                    messageView(item, includeReasoning: false).id(item.id)
+                                }
+                            }
+                        }.padding(.top, 8)
+                    } label: {
+                        HStack(spacing: 8) {
+                            MessageHeaderIcon(systemName: "text.bubble")
+                            Text(turn.summaryLabel)
+                        }
+                    }
+                }
+                if !foldedIDs.contains(message.id) || (message.id == folded.last?.id && message.role == .assistant) {
+                    if message.role != .tool && (message.role != .assistant || !message.text.isEmpty || message.attachments?.isEmpty == false || message.state == .interrupted || message.state == .failed) {
+                        messageView(message, includeReasoning: false).id(message.id)
+                    }
+                }
+            }
+        }
+    }
+    @ViewBuilder private func messageView(_ message: ChatMessage, includeReasoning: Bool = true) -> some View {
         switch message.role {
         case .user:
             VStack(alignment: .trailing, spacing: 8) {
@@ -247,7 +282,7 @@ struct ConversationView: View {
             }
         case .assistant:
             VStack(alignment: .leading, spacing: 6) {
-                if let reasoning = message.reasoning, !reasoning.text.isEmpty {
+                if includeReasoning, let reasoning = message.reasoning, !reasoning.text.isEmpty {
                     ReasoningMessageView(reasoning: reasoning, messageID: message.id)
                 }
                 if !message.text.isEmpty {
