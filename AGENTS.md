@@ -1,3 +1,9 @@
+# 项目命名
+
+- 项目英文名为 **Actell**，中文名为 **执言**。新增或修改面向用户的文档、界面文案时使用对应名称，不再以 PhoneAgent 或 iOS Use 作为项目展示名称。
+- 采用渐进式迁移。现有源码目录、类型名、Xcode 工程与 scheme、Bundle ID 等内部标识按后续改动范围逐步迁移；文档中的路径、链接和构建命令须与实际工程保持一致，不能只替换名称而使其失效。
+- 中英文 README 同步维护
+
 # 阅读与验证入口
 
 当前 App 默认路线是 iOS 27 + VPN 回环开发者服务截图/触控（免 ESP32）；可在设置选择 ESP32 NCM 模式，复用系统配对身份与 CoreDevice 后端。ScreenCaptureKit + PA3 USB Device NCM/HID 和 TLS 实现保留，旧链路暂未提供切换开关。先读 `README.md` 和本次改动涉及的源码；项目待办重评/证据在 `docs/PROJECT-TODOS.md`。

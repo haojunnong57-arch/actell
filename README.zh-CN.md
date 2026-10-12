@@ -1,8 +1,8 @@
-# iOS Use · PhoneAgent
+# iPhone Use · Phone Agent · 执言
 
 [English](README.md) | 简体中文
 
-**Vibe Coding 项目，技术原型初期，用于思路分享。** PhoneAgent（执言）探索让 iPhone 上的 Agent 调用 CoreDevice 服务，获取屏幕画面并执行点击、拖动。当前默认使用外部 VPN 回环的免 ESP32 路线，也可选择 ESP32-S3 USB NCM 转发；尚不具备生产可用性或长期后台稳定性保证。
+**Vibe Coding 项目，技术原型初期，用于思路分享。** 执言（Actell）探索让 iPhone 上的 Agent 调用 CoreDevice 服务，获取屏幕画面并执行点击、拖动。当前默认使用外部 VPN 回环的免 ESP32 路线，也可选择 ESP32-S3 USB NCM 转发；尚不具备生产可用性或长期后台稳定性保证。
 
 https://github.com/user-attachments/assets/2aefc1a7-bdf1-42e7-83b9-51bd879256c8
 
@@ -34,6 +34,14 @@ App 使用 [SwiftAgentKit](https://github.com/ayman3000/SwiftAgentKit)、[MacPaw
    - **VPN 回环（默认，免 ESP32）**：在同一 iPhone 启用支持本机数据包回注的 VPN（已使用 [LocalDevVPN](https://github.com/jkcoxson/LocalDevVPN) 验证）。在控制页编辑接口地址与对端地址，默认分别为 `10.7.1.1`、`10.7.0.1`，需与外部 VPN 配置一致。App 不安装或启停 VPN；详见 [路线说明](docs/ncm-coredevice/LOCALDEVVPN.md)。
    - **ESP32 NCM**：使用支持原生 USB Device 的 ESP32-S3 与数据线，安装当前 NCM 固件并通过原生 USB 接口连接 iPhone。USB 角色、板级接线和供电须按实际硬件核对，见 [固件说明](firmware-device/README.md) 和 [硬件资料](docs/hardware/ESP32-S3-USB.md)。
 4. 在设置添加服务商后创建会话。普通聊天不要求设备连接；控制工具执行时仍检查身份、连接和授权。运行中不能切换控制路线。
+
+### VPN 回环与日常 VPN 共用
+
+如果启用 LocalDevVPN 会替换日常使用的 VPN 连接，可以改用自带本机回环功能的代理/VPN App。该功能可能需要手动开启，开启后同一个 VPN 连接即可同时承担日常代理和本机回环，无需另开 LocalDevVPN。目前已实测 Shadowrocket 和 Clash 均可与本 App 配合使用。
+
+不同 VPN App 使用的接口地址可能不同。本 App 已预置部分已知接口地址，可以尝试选择。
+
+**蜂窝网络限制：** 已核对 [LocalDevVPN issue #31 的原始回复](https://github.com/jkcoxson/LocalDevVPN/issues/31)：项目协作者 **CelloSerenity** 于 **2026-09-10** 明确表示，LocalDevVPN 无法在蜂窝网络下正常工作，这是 Apple 施加的限制，他们无法绕过；该 issue 随后被以 **not planned（不计划修复）** 关闭。建立操控连接时请连接 Wi-Fi。与其他 VPN App 兼容不代表已绕过蜂窝网络限制，也不保证建立连接后切换到蜂窝网络仍能持续工作。
 
 ### 构建
 
@@ -87,7 +95,7 @@ Rust 其余直接及传递依赖见 [Cargo.toml](ncm-dev/rust/Cargo.toml) 和 [C
 
 | 路径 | 用途 |
 | --- | --- |
-| `ios-app/` | PhoneAgent App、测试与工程生成脚本 |
+| `ios-app/` | 执言 App、测试与工程生成脚本 |
 | `firmware-device/` | 当前 USB Device NCM 固件及保留的 HID 模式 |
 | `ncm-dev/` | 共用 Swift/C/Rust CoreDevice 后端、协议模块及独立 Probe |
 | `tests/usb_device/` | USB Device 生产协议的本机测试夹具 |

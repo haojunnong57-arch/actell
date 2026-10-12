@@ -1,8 +1,8 @@
-# iOS Use · PhoneAgent
+# iPhone Use · Phone Agent · Actell
 
 English | [简体中文](README.zh-CN.md)
 
-**A vibe-coded project in its early technical prototype stage, shared to explore ideas.** PhoneAgent (执言) explores how an agent running on an iPhone can call CoreDevice services to capture the screen and perform taps and drags. The current default uses an external VPN loopback route without an ESP32; ESP32-S3 USB NCM forwarding is also available. Production readiness and reliable long-running background execution are not guaranteed.
+**A vibe-coded project in its early technical prototype stage, shared to explore ideas.** Actell (执言) explores how an agent running on an iPhone can call CoreDevice services to capture the screen and perform taps and drags. The current default uses an external VPN loopback route without an ESP32; ESP32-S3 USB NCM forwarding is also available. Production readiness and reliable long-running background execution are not guaranteed.
 
 https://github.com/user-attachments/assets/2aefc1a7-bdf1-42e7-83b9-51bd879256c8
 
@@ -36,6 +36,14 @@ Prerequisites for device control:
    - **VPN loopback (default, no ESP32 required):** Enable a VPN on the same iPhone that supports reinjecting local packets; this has been verified with [LocalDevVPN](https://github.com/jkcoxson/LocalDevVPN). Edit the interface and peer addresses on the control screen. Their defaults are `10.7.1.1` and `10.7.0.1`, respectively, and must match the external VPN configuration. The app does not install, start, or stop the VPN. See the [route documentation](docs/ncm-coredevice/LOCALDEVVPN.md).
    - **ESP32 NCM:** Use an ESP32-S3 with native USB Device support and a data cable. Install the current NCM firmware and connect its native USB port to the iPhone. Verify USB roles, board wiring, and power against the actual hardware. See the [firmware documentation](firmware-device/README.md) and [hardware notes](docs/hardware/ESP32-S3-USB.md).
 4. Add a provider in Settings and create a conversation. Regular chat does not require a device connection; control tools still check identity, connection, and authorization when executing. The control route cannot be switched during execution.
+
+### Using loopback with your regular VPN
+
+If LocalDevVPN replaces your regular VPN connection, you can instead use a proxy/VPN app with built-in local loopback support. This feature may need to be enabled manually, allowing the same VPN connection to handle both regular proxy traffic and local loopback without a separate LocalDevVPN connection. Shadowrocket and Clash have both been tested with this app.
+
+The interface address may differ between VPN apps. This app includes presets for some known interface addresses that you can try.
+
+**Cellular limitation:** In [LocalDevVPN issue #31](https://github.com/jkcoxson/LocalDevVPN/issues/31), project collaborator **CelloSerenity** replied on **2026-09-10** that LocalDevVPN does not work over cellular, calling it “an Apple-enforced issue that we can't get around,” and closed the issue as **not planned**. Establish the control connection while connected to Wi-Fi. Compatibility with other VPN apps does not establish that the cellular limitation is bypassed or that switching to cellular after connecting will keep the session working.
 
 ### Build
 
@@ -89,7 +97,7 @@ Existing license and attribution records are in [LICENSE](LICENSE), [THIRD_PARTY
 
 | Path | Purpose |
 | --- | --- |
-| `ios-app/` | PhoneAgent app, tests, and project generation scripts |
+| `ios-app/` | Actell app, tests, and project generation scripts |
 | `firmware-device/` | Current USB Device NCM firmware and retained HID mode |
 | `ncm-dev/` | Shared Swift/C/Rust CoreDevice backend, protocol modules, and standalone probes |
 | `tests/usb_device/` | Local test fixtures for the production USB Device protocol |
