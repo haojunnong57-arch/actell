@@ -42,7 +42,8 @@ struct AgentRunServices {
     private var clearingAssets = false
     let sessions: ConversationStore
     let lifecycle: RunLifecycleCoordinator
-    private let executionScheduler = RunExecutionScheduler()
+    private let executionScheduler: RunExecutionScheduler
+    private let executionBackground: BackgroundExecutionCoordinator
     private let allowSystemProcessing: Bool
     @Published private(set) var backgroundStatus = ""
     private var lifecycleSubscription: AnyCancellable?
@@ -85,7 +86,7 @@ struct AgentRunServices {
         if let value = sessionRuntimes[id] { return value }
         let directory = URL.applicationSupportDirectory.appending(path: "PhoneAgent/Sessions/" + id.uuidString)
         let worker = AgentViewModel(sessions: sessions, loadPersistentState: persistentRuntime,
-            approvalRecords: approvalRecords,
+            backgroundCoordinator: allowSystemProcessing ? executionBackground : nil, approvalRecords: approvalRecords,
             attachments: attachments, skills: skills, providers: providers, sharedCapture: capture,
             sharedActivities: liveActivities, checkpointDirectory: directory, restoreLegacyState: false,
             runServicesFactory: runServicesFactory, makeUSBClient: makeUSBClient)
@@ -115,7 +116,7 @@ struct AgentRunServices {
     var commandNeedsForeground: Bool {
         // A retained process/scene is not proof of background execution time.
         // Idle apps stop media playback and may already be suspended.
-        !hasActivatedScene || !commandCanStart || (!foreground && !PiPExecutionActivity.shared.active)
+        !hasActivatedScene || !commandCanStart || (!foreground && !executionBackground.residentReady)
     }
     private var hasActivatedScene = false
     private var foreground = true
@@ -132,7 +133,7 @@ struct AgentRunServices {
     var activeRecord: TaskRecord? { records.first(where: { $0.id == activeID }) ?? records.first }
     var canResume: Bool { !running && !stopping && [.stopped, .interrupted, .blocked].contains(activeRecord?.phase ?? .idle) }
     init(sessions: ConversationStore? = nil, loadPersistentState: Bool = true, runServices: AgentRunServices? = nil,
-         lifecycle: RunLifecycleCoordinator? = nil,
+         lifecycle: RunLifecycleCoordinator? = nil, backgroundCoordinator: BackgroundExecutionCoordinator? = nil,
          approvalRecords: ApprovalRecordStore? = nil, liveActivitiesEnabled: Bool? = nil,
          attachments: AttachmentStore? = nil, skills: SkillStore? = nil,
          providers: ProviderStore? = nil, sharedCapture: ScreenCaptureController? = nil,
@@ -151,7 +152,9 @@ struct AgentRunServices {
         self.approvalRecords = approvalRecords ?? ApprovalRecordStore(inMemory: !loadPersistentState)
         self.liveActivities = sharedActivities ?? AgentLiveActivityController(enabled: liveActivitiesEnabled ?? loadPersistentState)
         self.runServices = runServices
-        self.allowSystemProcessing = loadPersistentState
+        self.executionBackground = backgroundCoordinator ?? .shared
+        self.executionScheduler = RunExecutionScheduler(coordinator: self.executionBackground)
+        self.allowSystemProcessing = loadPersistentState || backgroundCoordinator != nil
         self.lifecycle = lifecycle ?? RunLifecycleFactory.make(persistent: loadPersistentState, scheduler: executionScheduler, directory: checkpointDirectory)
         var legacy: [TaskRecord] = []
         if loadPersistentState && restoreLegacyState {
@@ -619,7 +622,8 @@ struct AgentRunServices {
         }
         screenExecutionContext = selectedBridge.executionContext
         executionScheduler.configure(context: screenExecutionContext, allowSystemProcessing: allowSystemProcessing,
-                                     useSystemProcessing: BackgroundPlaybackMode.selected.usesSystemProcessing)
+                                     selection: executionBackground.selection, runID: identity.runID,
+                                     userInitiated: foreground && !allowBackgroundStart)
         do { try lifecycle.begin(identity: identity, generation: token, allowBackgroundStart: allowBackgroundStart) }
         catch {
             stopHealthObservation()

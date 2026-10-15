@@ -3,12 +3,13 @@ import AppIntents
 import Darwin
 
 @main @MainActor struct PhoneAgentApp: App {
+    @StateObject private var background = BackgroundExecutionCoordinator.shared
+    @StateObject private var settings = BackgroundSettingsStore.shared
     @StateObject private var model = PhoneAgentRuntime.shared.model
-    @StateObject private var statusPiP = StatusPiPController()
-    @AppStorage(BackgroundPlaybackMode.defaultsKey) private var backgroundMode = BackgroundPlaybackMode.defaultMode.rawValue
-    @AppStorage(BackgroundPlaybackMode.residentDefaultsKey) private var backgroundResident = false
+    @StateObject private var statusPiP = BackgroundExecutionCoordinator.shared.media!
     @Environment(\.scenePhase) private var scenePhase
     init() {
+        _ = BackgroundSettingsStore.shared // Migrate before runtime/history creation or any UI binding.
         PhoneAgentShortcuts.updateAppShortcutParameters()
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--local-vpn-probe") {
@@ -41,13 +42,11 @@ import Darwin
                 .task {
                     let streamProbe = ProcessInfo.processInfo.arguments.contains("--task-pip-probe") && ProcessInfo.processInfo.arguments.contains("--background-stream-probe")
                     if !streamProbe { PairingFlow.shared.restoreConnection() }
-                    statusPiP.setBackgroundMode(BackgroundPlaybackMode(rawValue: backgroundMode) ?? .defaultMode)
-                    statusPiP.setBackgroundResident(backgroundResident)
-                    model.liveActivities.setBackgroundResident(backgroundResident)
+                    model.liveActivities.setBackgroundResident(settings.residentEnabled)
                     statusPiP.observeTasks(in: model)
                     #if DEBUG
                     if ProcessInfo.processInfo.arguments.contains("--task-pip-probe") {
-                        if streamProbe { statusPiP.setBackgroundMode(.audio) }
+                        if streamProbe { background.applySelection([.audio]) }
                         model.start()
                         let startCPU = processCPUSecondsForProbe(), startTime = Date()
                         for step in 0..<(streamProbe ? 10 : 5) {
@@ -62,27 +61,28 @@ import Darwin
                     } else { await PairingFlow.shared.runBackgroundProbeIfRequested() }
                     #endif
                 }
-                .onChange(of: backgroundMode) { _, value in
-                    statusPiP.setBackgroundMode(BackgroundPlaybackMode(rawValue: value) ?? .defaultMode)
-                }
-                .onChange(of: backgroundResident) { _, enabled in
-                    statusPiP.setBackgroundResident(enabled)
+                .onChange(of: settings.residentEnabled) { _, enabled in
                     model.liveActivities.setBackgroundResident(enabled)
                 }
+                .alert("启用定位后台执行？", isPresented: Binding(get: { background.locationExplanation && !background.locationExplanationInSettings }, set: { _ in })) {
+                    Button("暂不启用", role: .cancel) { background.dismissLocationExplanation() }
+                    Button("继续授权") { background.acceptLocationExplanation() }
+                } message: { Text(BackgroundExecutionCoordinator.locationPurpose) }
                 .onChange(of: model.approval?.id) { _, id in
                     #if DEBUG
                     if id != nil { Task { await PhoneAgentRuntime.shared.invokeSiriFixtureIfNeeded(busy: true) } }
                     #endif
                 }
                 .onChange(of: scenePhase, initial: true) { _, phase in
+                    // Return run leases to foreground before stopping PiP revokes its background receipt.
+                    model.setScene(phase == .active ? .active : phase == .background ? .background : .inactive)
+                    background.setForeground(phase == .active, transitioning: phase == .inactive)
                     if phase == .background { PairingFlow.shared.background() }
                     else if phase == .active { PairingFlow.shared.resume() }
-                    model.setScene(phase == .active ? .active : phase == .background ? .background : .inactive)
                     model.setProtectedDataAvailable(UIApplication.shared.isProtectedDataAvailable)
                     if phase == .active { PhoneAgentRuntime.shared.commands.resumePendingExecutions() }
                     // Inactive is a transition, not a request to show PiP.
-                    if phase == .active { statusPiP.setForeground(true) }
-                    else if phase == .background { statusPiP.setForeground(false) }
+
                     #if DEBUG
                     if phase == .background { PhoneAgentRuntime.shared.completeBackgroundUIFixtureIfNeeded() }
                     if phase == .active { PhoneAgentRuntime.shared.finishForegroundUIFixtureIfNeeded() }
@@ -91,15 +91,15 @@ import Darwin
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
                     PairingFlow.shared.applicationWillTerminate()
-                    statusPiP.setBackgroundResident(false)
-                    statusPiP.setTaskRunning(false)
+                    background.shutdown()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
                     PairingFlow.shared.cancel()
-                    statusPiP.setTaskRunning(false)
+                    background.setProtectedData(false)
                     model.setProtectedDataAvailable(false)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+                    background.setProtectedData(true)
                     model.setProtectedDataAvailable(true)
                     PhoneAgentRuntime.shared.commands.resumePendingExecutions()
                 }
@@ -210,7 +210,7 @@ private struct NCMVideoGeometryProbeView: View {
         let backgroundProbe = ProcessInfo.processInfo.arguments.contains("--ncm-video-background-probe")
         let repeatedProbe = backgroundProbe || ProcessInfo.processInfo.arguments.contains("--ncm-video-repeat-probe")
         if backgroundProbe {
-            statusPiP.setBackgroundMode(.audio)
+            BackgroundExecutionCoordinator.shared.applySelection([.audio])
             statusPiP.setControlProbeRunning(true)
         }
         defer { if backgroundProbe { statusPiP.setControlProbeRunning(false) } }
@@ -265,7 +265,7 @@ private struct NCMToolsProbeView: View {
         func record(_ value: String) { records.append(Date().ISO8601Format() + " " + value); try? records.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8) }
         let flow = PairingFlow.shared
         statusPiP.setControlProbeRunning(true)
-        let scheduler = PiPBackedRunScheduler(primary: ContinuedProcessingScheduler())
+        let scheduler = CompositeRunScheduler(primary: ContinuedProcessingScheduler(), allowed: { [.audio, .systemTask] })
         let identifier = (Bundle.main.bundleIdentifier ?? "com.ja1chen.PhoneAgent") + ".backgroundRun." + UUID().uuidString
         var lease: (any RunBackgroundLease)?
         defer { lease?.complete(success: true); scheduler.cancel(identifier: identifier); statusPiP.setControlProbeRunning(false) }

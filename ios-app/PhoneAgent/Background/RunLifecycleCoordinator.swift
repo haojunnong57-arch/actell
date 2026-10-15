@@ -8,12 +8,14 @@ import Combine
 @MainActor protocol RunBackgroundLease: AnyObject {
     var expirationHandler: (() -> Void)? { get set }
     var backgroundReady: Bool { get }
+    var requiresRunPause: Bool { get }
     func report(completed: Int, subtitle: String)
     func complete(success: Bool)
 }
-extension RunBackgroundLease { var backgroundReady: Bool { true } }
+extension RunBackgroundLease { var backgroundReady: Bool { true }; var requiresRunPause: Bool { false } }
 
 @MainActor protocol RunBackgroundScheduler {
+    func endRun()
     func setForeground(_ active: Bool)
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void) throws
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void,
@@ -21,6 +23,7 @@ extension RunBackgroundLease { var backgroundReady: Bool { true } }
     func cancel(identifier: String)
 }
 extension RunBackgroundScheduler {
+    func endRun() {}
     func setForeground(_ active: Bool) {}
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void,
                 failed: @escaping @MainActor () -> Void) throws { try submit(identifier: identifier, launched: launched) }
@@ -113,7 +116,7 @@ extension RunCheckpointStorage {
 @MainActor final class RunLifecycleCoordinator: ObservableObject {
     @Published private(set) var checkpoint: RunCheckpoint?
     private(set) var recoveries: [RunCheckpoint] = []
-    @Published private(set) var backgroundStatus = "后台需有效采集、画中画或系统实际授予的执行资格"
+    @Published private(set) var backgroundStatus = "后台需有效采集、音频、画中画、定位或系统实际授予的执行资格"
     private(set) var foreground = true
     private(set) var hasLease = false
     var canAwaitApprovalInBackground: Bool { checkpoint?.phase == .waitingApproval && activeToolBackgroundCapable }
@@ -204,16 +207,20 @@ extension RunCheckpointStorage {
         incoming.expirationHandler = { [weak self] in
             guard self?.checkpoint?.segmentID == identifier, self?.hasLease == true else { return }
             guard let self else { return }
-            if self.foreground {
+            if incoming.requiresRunPause {
+                self.pause("系统持续任务已到期或被取消；本轮已暂停，请手动继续")
+            } else if self.foreground {
                 // Returning to the app closes PiP, not the foreground task.
                 self.lease?.complete(success: false); self.lease = nil; self.hasLease = false
                 self.scheduler.cancel(identifier: identifier)
-                self.requestSegment()
+                self.checkpoint?.segmentID = nil
+                self.backgroundStatus = "后台执行资格已结束；仅前台继续，需明确操作开始新执行段"
+                self.saveOrPause()
             } else {
                 self.pause("后台执行资格失效或到期；已暂停，请核对设备后手动继续")
             }
         }
-        backgroundStatus = incoming.backgroundReady ? "后台执行资格有效；设备工具仍需独立校验" : "等待后台媒体实际开始播放；设备操作尚未发送"
+        backgroundStatus = incoming.backgroundReady ? "后台执行资格有效；设备工具仍需独立校验" : "等待音频、画中画、定位或系统执行回执；设备操作尚未发送"
         incoming.report(completed: checkpoint?.milestones.count ?? 0, subtitle: "等待实际模型响应或工具结果；总步骤未知")
     }
     func setForeground(_ active: Bool) {
@@ -283,7 +290,7 @@ extension RunCheckpointStorage {
         if wasWaiting { checkpoint?.pendingApproval = nil; checkpoint?.phase = .running }
         activeToolBackgroundCapable = true
         saveOrPause()
-        if wasWaiting, checkpoint?.phase == .running { requestSegment() }
+        if wasWaiting, checkpoint?.phase == .running { backgroundStatus = "审批未通过；当前仅前台继续，未重新申请系统执行段" }
     }
     func waitForApproval(callID: String, generation: UUID) throws {
         guard ownsRun, checkpoint?.generation == generation, checkpoint?.phase == .running,
@@ -337,16 +344,17 @@ extension RunCheckpointStorage {
         checkpoint?.phase = phase; checkpoint?.message = message
         watchdog?.cancel(); watchdog = nil
         backgroundStatus = message
-        if cancelExecution { onPause?(message) }
         try? persist()
         endSegment(success: success)
+        scheduler.endRun()
+        if cancelExecution { onPause?(message) }
         ownsRun = false
     }
     private func endSegment(success: Bool) {
         let old = lease; lease = nil; hasLease = false
+        old?.expirationHandler = nil; old?.complete(success: success)
         if let id = checkpoint?.segmentID { scheduler.cancel(identifier: id) }
         checkpoint?.segmentID = nil
-        old?.expirationHandler = nil; old?.complete(success: success)
         try? persist()
     }
     private func persist() throws {

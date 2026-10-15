@@ -140,7 +140,13 @@ struct SaveScreenshotButton: View {
             Task { @MainActor in
                 defer { saving = false }
                 var status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
-                if status == .notDetermined { status = await PHPhotoLibrary.requestAuthorization(for: .addOnly) }
+                if status == .notDetermined {
+                    guard let token = PermissionRequestGate.shared.acquire() else {
+                        result = "另一个权限流程正在进行，请稍后重试"; showResult = true; return
+                    }
+                    status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+                    PermissionRequestGate.shared.release(token)
+                }
                 if status == .authorized || status == .limited {
                     do {
                         try await PHPhotoLibrary.shared().performChanges {
@@ -150,7 +156,7 @@ struct SaveScreenshotButton: View {
                         }
                         result = "已保存到相册"
                     } catch { result = "保存失败，请重试" }
-                } else { result = "无法保存，请在系统设置中允许 PhoneAgent 添加照片" }
+                } else { result = "无法保存，请在系统设置中允许执言添加照片" }
                 showResult = true
             }
         } label: {

@@ -545,7 +545,7 @@ enum NCMControlError: Error { case unavailable(String), stopped }
         let systemScheduler = ContinuedProcessingScheduler()
         systemScheduler.diagnostic = { record($0) }
         let scheduler: any RunBackgroundScheduler = pip == nil
-            ? systemScheduler : PiPBackedRunScheduler(primary: ForegroundOnlyScheduler())
+            ? systemScheduler : CompositeRunScheduler(allowed: { [.pictureInPicture] })
         let identifier = (Bundle.main.bundleIdentifier ?? "com.ja1chen.PhoneAgent") + ".backgroundRun." + UUID().uuidString
         var lease: (any RunBackgroundLease)?
         var expired = false
