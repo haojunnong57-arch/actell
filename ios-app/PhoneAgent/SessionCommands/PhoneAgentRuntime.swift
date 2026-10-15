@@ -224,7 +224,7 @@ import Foundation
     func submit(identifier: String, launched: @escaping @MainActor (any RunBackgroundLease) -> Void) throws {
         let lease = ExecutionTransitionLease()
         lease.begin()
-        guard lease.valid else { throw AppError.unavailable("诊断任务未获得有限后台时间") }
+        guard lease.valid else { throw AppError.unavailable(String(localized: "The diagnostic task was not granted background time")) }
         leases[identifier] = lease
         BackgroundExecutionTrace.record("activity.probeUIKitOnly")
         launched(lease)

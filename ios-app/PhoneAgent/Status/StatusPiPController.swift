@@ -156,7 +156,7 @@ extension AVPictureInPictureController: StatusPiPControlling {
     @Published private(set) var audioActive = false
     @Published private(set) var audioState: BackgroundDriverState = .idle
     @Published private(set) var pipState: BackgroundDriverState = .idle
-    @Published private(set) var message = "状态卡片默认关闭"
+    @Published private(set) var message = String(localized: "Status card is off by default")
     @Published var previewEnabled = false
     let displayLayer = AVSampleBufferDisplayLayer()
     let supported: Bool
@@ -318,7 +318,7 @@ extension AVPictureInPictureController: StatusPiPControlling {
         guard demand.contains(.pictureInPicture), policy.shouldStart, !pipAttempted, !starting, !active,
               let controller, sessionToken != nil, sessionTask == nil else { return }
         pipAttempted = true
-        guard controller.isPictureInPicturePossible else { pipState = .failed; message = "系统尚不允许画中画；返回前台后可手动重试"; return }
+        guard controller.isPictureInPicturePossible else { pipState = .failed; message = String(localized: "Picture in Picture is not available yet. Return to the app to try again manually."); return }
         starting = true; pipState = .starting; controller.startPictureInPicture()
     }
     /// Only PiP is stopped by this UI/AVKit operation. Other sources keep their leases.
@@ -352,7 +352,7 @@ extension AVPictureInPictureController: StatusPiPControlling {
         retirementTasks.removeValue(forKey: identity)?.cancel()
         // A timer is not proof that AVKit released its content source. Keep the layer fenced.
         pipState = .failed
-        message = "画中画尚未停止"
+        message = String(localized: "Picture in Picture has not stopped yet")
     }
     private func finishRetirement(_ identity: ObjectIdentifier) {
         guard retiredControllers[identity] != nil else { return }
@@ -364,7 +364,7 @@ extension AVPictureInPictureController: StatusPiPControlling {
     }
     private func render() {
         do { displayLayer.flushAndRemoveImage(); displayLayer.enqueue(try StatusFrameRenderer.sample(for: snapshot)); controller?.invalidatePlaybackState() }
-        catch { message = "状态画面生成失败" }
+        catch { message = String(localized: "Could not create the status image") }
     }
     func setSystemPlayback(_ playing: Bool, suspended: Bool) {
         if !suspended { playback.playing = playing && policy.running }; controller?.invalidatePlaybackState()
@@ -440,23 +440,23 @@ extension StatusPiPController: AVPictureInPictureControllerDelegate, AVPictureIn
                     .font: UIFont.systemFont(ofSize: size, weight: weight), .foregroundColor: color, .paragraphStyle: paragraph
                 ])
             }
-            text("执言 · 状态预览", y: 28, size: 22, color: .lightGray, weight: .semibold)
+            text(String(localized: "Actell · Status preview"), y: 28, size: 22, color: .lightGray, weight: .semibold)
             text(snapshot.title, y: 83, size: 29, color: .white, weight: .medium)
-            text(snapshot.phase.rawValue, y: 143, size: 37, color: .systemTeal, weight: .bold)
+            text(snapshot.phase.title, y: 143, size: 37, color: .systemTeal, weight: .bold)
             text(snapshot.detail, y: 216, size: 24, color: .white, weight: .regular)
         }
         var pixel: CVPixelBuffer?
         let attributes: [CFString: Any] = [kCVPixelBufferCGImageCompatibilityKey: true, kCVPixelBufferCGBitmapContextCompatibilityKey: true, kCVPixelBufferIOSurfacePropertiesKey: [:]]
-        guard CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, attributes as CFDictionary, &pixel) == kCVReturnSuccess, let pixel else { throw AppError.unavailable("状态帧分配失败") }
+        guard CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, attributes as CFDictionary, &pixel) == kCVReturnSuccess, let pixel else { throw AppError.unavailable(String(localized: "Could not allocate the status frame")) }
         CVPixelBufferLockBaseAddress(pixel, [])
         defer { CVPixelBufferUnlockBaseAddress(pixel, []) }
-        guard let context = CGContext(data: CVPixelBufferGetBaseAddress(pixel), width: width, height: height, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixel), space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue), let cgImage = image.cgImage else { throw AppError.unavailable("状态帧绘制失败") }
+        guard let context = CGContext(data: CVPixelBufferGetBaseAddress(pixel), width: width, height: height, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixel), space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue), let cgImage = image.cgImage else { throw AppError.unavailable(String(localized: "Could not draw the status frame")) }
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
         var description: CMVideoFormatDescription?
-        guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pixel, formatDescriptionOut: &description) == noErr, let description else { throw AppError.unavailable("状态帧格式失败") }
+        guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pixel, formatDescriptionOut: &description) == noErr, let description else { throw AppError.unavailable(String(localized: "Could not format the status frame")) }
         var timing = CMSampleTimingInfo(duration: CMTime(seconds: 1, preferredTimescale: 600), presentationTimeStamp: .zero, decodeTimeStamp: .invalid)
         var sample: CMSampleBuffer?
-        guard CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pixel, formatDescription: description, sampleTiming: &timing, sampleBufferOut: &sample) == noErr, let sample else { throw AppError.unavailable("状态帧封装失败") }
+        guard CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pixel, formatDescription: description, sampleTiming: &timing, sampleBufferOut: &sample) == noErr, let sample else { throw AppError.unavailable(String(localized: "Could not package the status frame")) }
         // Live status frames are displayed immediately; AVKit owns the PiP timeline.
         if let array = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true) {
             let dictionary = unsafeBitCast(CFArrayGetValueAtIndex(array, 0), to: CFMutableDictionary.self)

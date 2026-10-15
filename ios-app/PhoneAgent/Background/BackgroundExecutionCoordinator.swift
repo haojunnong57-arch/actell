@@ -124,14 +124,14 @@ import Combine
     }
     func stateText(_ mechanism: BackgroundMechanism) -> String {
         switch mechanism {
-        case .audio: return media?.audioState.rawValue ?? BackgroundDriverState.idle.rawValue
-        case .pictureInPicture: return media?.pipState.rawValue ?? BackgroundDriverState.idle.rawValue
-        case .location: return location?.state.rawValue ?? BackgroundDriverState.idle.rawValue
+        case .audio: return media?.audioState.title ?? BackgroundDriverState.idle.title
+        case .pictureInPicture: return media?.pipState.title ?? BackgroundDriverState.idle.title
+        case .location: return location?.state.title ?? BackgroundDriverState.idle.title
         case .systemTask:
             let states = Array(systemStates.values)
-            if states.contains(.active) { return "本轮系统资格有效（按任务隔离）" }
-            return states.first?.rawValue ?? BackgroundDriverState.idle.rawValue
+            if states.contains(.active) { return String(localized: "Background execution is available for this task") }
+            return states.first?.title ?? BackgroundDriverState.idle.title
         }
     }
-    static let locationPurpose = "执言会使用系统定位服务，尝试让当前任务在切换 App 后继续。坐标不会保存或上传；定位会增加耗电并显示系统指示。你可以拒绝，其他已选方式继续尝试。系统仍可暂停或终止任务。"
+    static let locationPurpose = String(localized: "The app uses location services to help the current task continue when you switch apps. Your location is never saved or uploaded. This uses more battery and shows the system location indicator. You can decline and use other selected options. The system may still pause or stop the task.")
 }

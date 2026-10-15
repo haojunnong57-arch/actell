@@ -6,10 +6,10 @@ enum BackgroundMechanism: String, CaseIterable, Codable, Sendable, Identifiable 
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .audio: "音频"
-        case .pictureInPicture: "画中画"
-        case .systemTask: "系统后台任务"
-        case .location: "定位"
+        case .audio: String(localized: "Audio")
+        case .pictureInPicture: String(localized: "Picture in Picture")
+        case .systemTask: String(localized: "System background task")
+        case .location: String(localized: "Location")
         }
     }
     static let continuous: Set<Self> = [.audio, .pictureInPicture, .location]
@@ -73,19 +73,19 @@ struct BackgroundConfiguration: Equatable, Sendable, Codable {
             if let data = raw as? Data {
                 if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let version = object["version"] as? Int, version > 2 {
-                    futureSchema = true; warning = "后台配置来自更新版本；请升级。此版本不使用可选后台方式。"; return
+                    futureSchema = true; warning = String(localized: "These background settings need a newer version of the app. Update the app to use them."); return
                 }
                 if let config = try? JSONDecoder().decode(BackgroundConfiguration.self, from: data), config.version == 2 {
                     configuration = config; return
                 }
             }
-            warning = "后台配置损坏，原数据已保留；请重新选择。"; return
+            warning = String(localized: "Your background settings could not be read. The original data was kept. Select your options again."); return
         }
         var initial: Set<BackgroundMechanism>
         if let legacy = saved[Self.legacyKey] {
             if let raw = legacy as? String, let mechanism = BackgroundMechanism(rawValue: raw), mechanism != .location {
                 initial = [mechanism]
-            } else { initial = []; warning = "旧后台选项无法识别，原值已保留；请重新选择。" }
+            } else { initial = []; warning = String(localized: "A previous background option is no longer recognized. Select your options again.") }
         } else if saved[Self.residentKey] != nil || existingInstallation {
             initial = [.audio]
         } else { initial = [.audio] }
@@ -107,12 +107,12 @@ struct BackgroundConfiguration: Equatable, Sendable, Codable {
     private func persist(_ value: BackgroundConfiguration) -> Bool {
         guard let data = try? JSONEncoder().encode(value) else { return false }
         if let writer {
-            guard writer(data) else { warning = "后台配置保存失败；原配置保留。"; return false }
+            guard writer(data) else { warning = String(localized: "Background settings could not be saved. Your previous settings were kept."); return false }
         } else {
             var saved = defaults.persistentDomain(forName: domain) ?? [:]
             saved[Self.key] = data; defaults.setPersistentDomain(saved, forName: domain)
             guard defaults.persistentDomain(forName: domain)?[Self.key] as? Data == data else {
-                warning = "后台配置保存失败；原配置保留。"; return false
+                warning = String(localized: "Background settings could not be saved. Your previous settings were kept."); return false
             }
         }
         return true

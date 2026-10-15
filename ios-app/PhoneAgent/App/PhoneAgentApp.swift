@@ -64,9 +64,9 @@ import Darwin
                 .onChange(of: settings.residentEnabled) { _, enabled in
                     model.liveActivities.setBackgroundResident(enabled)
                 }
-                .alert("启用定位后台执行？", isPresented: Binding(get: { background.locationExplanation && !background.locationExplanationInSettings }, set: { _ in })) {
-                    Button("暂不启用", role: .cancel) { background.dismissLocationExplanation() }
-                    Button("继续授权") { background.acceptLocationExplanation() }
+                .alert(String(localized: "Enable location for background execution?"), isPresented: Binding(get: { background.locationExplanation && !background.locationExplanationInSettings }, set: { _ in })) {
+                    Button(String(localized: "Not now"), role: .cancel) { background.dismissLocationExplanation() }
+                    Button(String(localized: "Continue to permission")) { background.acceptLocationExplanation() }
                 } message: { Text(BackgroundExecutionCoordinator.locationPurpose) }
                 .onChange(of: model.approval?.id) { _, id in
                     #if DEBUG
@@ -121,17 +121,17 @@ import Darwin
 private struct LocalVPNProbeView: View {
     @State private var count = 0
     @State private var target = CGRect.zero
-    @State private var status = "正在验证 VPN 回环"
+    @State private var status = String(localized: "Verifying VPN loopback")
     @State private var started = false
     var body: some View {
         ZStack {
             Color(uiColor: .systemBackground).ignoresSafeArea()
             Button { count += 1 } label: {
-                VStack { Text("VPN 回环 点击目标"); Text("实际触摸：\(count)").font(.largeTitle) }
+                VStack { Text(String(localized: "VPN loopback tap target")); Text(String(localized: "Actual touches: \(count)")).font(.largeTitle) }
                     .frame(width: 270, height: 160)
             }.buttonStyle(.borderedProminent)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { target = $0 }
-            VStack { Text("免 ESP32 真机验证").font(.title2); Spacer(); Text(status).font(.footnote).multilineTextAlignment(.center) }.padding()
+            VStack { Text(String(localized: "Device verification without ESP32")).font(.title2); Spacer(); Text(status).font(.footnote).multilineTextAlignment(.center) }.padding()
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { await run() }
     }
@@ -160,7 +160,7 @@ private struct LocalVPNProbeView: View {
             try frame.png.write(to: URL.documentsDirectory.appending(path: "local-vpn-before.jpg"))
             record("screenshot \(frame.width)x\(frame.height) bytes=\(frame.png.count)")
             guard !target.isEmpty, let screen = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first?.screen else {
-                throw AppError.invalid("点击目标尚未布局")
+                throw AppError.invalid(String(localized: "The tap target has not been laid out"))
             }
             let x = Int((target.midX / screen.bounds.width * 65535).rounded())
             let y = Int((target.midY / screen.bounds.height * 65535).rounded())
@@ -172,7 +172,7 @@ private struct LocalVPNProbeView: View {
             let after = try await bridge.screenshot()
             try after.png.write(to: URL.documentsDirectory.appending(path: "local-vpn-after.jpg"))
             await bridge.stop(); control = nil
-            let released = flow.ready && !flow.running && flow.lastFailure == nil && flow.message == "屏幕控制已结束"
+            let released = flow.ready && !flow.running && flow.lastFailure == nil && flow.message == String(localized: "Screen control ended")
             record("media release confirmed=\(released)")
             record(count == baseline + 1 && released ? "PASS screenshot + actual touch + media release" : "FAIL touch or media release not confirmed; input will not replay")
         } catch {
@@ -191,9 +191,9 @@ private func processCPUSecondsForProbe() -> Double {
 /// Explicit read-only screenshot probe. Raw media is saved only for this launch flag.
 private struct NCMVideoGeometryProbeView: View {
     let statusPiP: StatusPiPController
-    @State private var status = "视频截图诊断"
+    @State private var status = String(localized: "Video screenshot diagnostics")
     var body: some View {
-        VStack(spacing: 20) { Text("视频截图诊断").font(.title); Text(status) }
+        VStack(spacing: 20) { Text(String(localized: "Video screenshot diagnostics")).font(.title); Text(status) }
             .padding().frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(uiColor: .systemBackground))
             .task { await run() }
     }
@@ -218,7 +218,7 @@ private struct NCMVideoGeometryProbeView: View {
         if !flow.ready && !flow.running { flow.verify() }
         let deadline = ContinuousClock.now.advanced(by: .seconds(120))
         while !flow.ready && flow.running && ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(100)) }
-        guard flow.ready else { status = "连接未就绪"; record(flow.lastFailure ?? flow.statusText); return }
+        guard flow.ready else { status = String(localized: "Connection is not ready"); record(flow.lastFailure ?? flow.statusText); return }
         var bridge: NCMDeviceBridge?
         do {
             let control = try NCMDeviceBridge(flow: flow); bridge = control
@@ -229,7 +229,7 @@ private struct NCMVideoGeometryProbeView: View {
                     try keyframe.write(to: directory.appending(path: "ncm-video-probe.hevc"))
                 }
                 record("screenshot \(index) \(frame.width)x\(frame.height) appState=\(UIApplication.shared.applicationState.rawValue)")
-                status = "已截图 \(index+1)/\(repeatedProbe ? 7 : 3)：\(frame.width) × \(frame.height)"
+                status = String(localized: "Captured \(index+1)/\(repeatedProbe ? 7 : 3): \(frame.width) × \(frame.height)")
                 if backgroundProbe && index == 0 {
                     try await Task.sleep(for: .seconds(3))
                     UIApplication.shared.perform(NSSelectorFromString("suspend"))
@@ -243,7 +243,7 @@ private struct NCMVideoGeometryProbeView: View {
                 try await Task.sleep(for: .milliseconds(repeatedProbe ? 6000 : 1200))
             }
             record("completed")
-        } catch { record("failed \(String(describing: error))"); status = "诊断未完成" }
+        } catch { record("failed \(String(describing: error))"); status = String(localized: "Diagnostics did not finish") }
         if let bridge { await bridge.stop() }
     }
 }
@@ -251,10 +251,10 @@ private struct NCMVideoGeometryProbeView: View {
 /// Explicit real-device fixture, no provider calls or user conversation writes.
 private struct NCMToolsProbeView: View {
     let statusPiP: StatusPiPController
-    @State private var status = "验证准备中"
+    @State private var status = String(localized: "Preparing verification")
     var body: some View {
         VStack(spacing: 24) {
-            Text("ESP32 工具验证").font(.title)
+            Text(String(localized: "ESP32 tool verification")).font(.title)
             Text(status)
         }.padding().frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(uiColor: .systemBackground))
         .task { await run() }
@@ -280,7 +280,7 @@ private struct NCMToolsProbeView: View {
         if !flow.ready && !flow.running { flow.verify() }
         let deadline = ContinuousClock.now.advanced(by: .seconds(120))
         while !flow.ready && flow.running && ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(100)) }
-        guard flow.ready else { record("connection not ready"); status = "连接未就绪"; return }
+        guard flow.ready else { record("connection not ready"); status = String(localized: "Connection is not ready"); return }
         statusPiP.setControlProbeRunning(true)
         do {
             let bridge = try NCMDeviceBridge(flow: flow)
@@ -304,7 +304,7 @@ private struct NCMToolsProbeView: View {
             let screenURL = URL.documentsDirectory.appending(path: "ncm-tools-screen.png")
             try frame.png.write(to: screenURL)
             record("Notes screenshot ready \(frame.width)x\(frame.height)")
-            lease?.report(completed: 3, subtitle: "Home、App 查询和备忘录启动已返回；等待测试操作")
+            lease?.report(completed: 3, subtitle: String(localized: "Home, app discovery, and Notes launch returned. Waiting for test actions."))
             // Explicit debug-only command fixture. Never read task history,
             // arbitrary typed text, identities or paths from this command file.
             let commandURL = URL.documentsDirectory.appending(path: "ncm-tools-command.json")
@@ -323,20 +323,20 @@ private struct NCMToolsProbeView: View {
                 if action != "screenshot" {
                     try await bridge.authorizeTaskInput(imageID: frame.id)
                     if action == "tap" {
-                        guard let x = command["x"] as? Int, let y = command["y"] as? Int else { throw AppError.invalid("测试坐标缺失") }
+                        guard let x = command["x"] as? Int, let y = command["y"] as? Int else { throw AppError.invalid(String(localized: "Test coordinates are missing")) }
                         try await bridge.tap(x: x, y: y, imageID: frame.id)
                     } else if action == "type_text" {
                         try await bridge.systemAction(name: action, text: "ESP32 direct input", arguments: [], imageID: frame.id)
-                    } else { throw AppError.invalid("不支持的测试操作") }
+                    } else { throw AppError.invalid(String(localized: "Unsupported test action")) }
                     try await Task.sleep(for: .seconds(1))
                 }
                 frame = try await bridge.screenshot()
                 try frame.png.write(to: screenURL)
                 record("command id=\(id) action=\(action) delivered and screenshot received")
-                lease?.report(completed: id + 3, subtitle: "备忘录真实操作已返回截图")
+                lease?.report(completed: id + 3, subtitle: String(localized: "Notes verification returned a screenshot"))
             }
-            status = "验证完成"
-        } catch { status = "验证未完成"; record("failed: " + String(describing: error)) }
+            status = String(localized: "Verification complete")
+        } catch { status = String(localized: "Verification did not finish"); record("failed: " + String(describing: error)) }
     }
 }
 #endif

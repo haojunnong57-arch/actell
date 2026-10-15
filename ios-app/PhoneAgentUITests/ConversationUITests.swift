@@ -899,7 +899,7 @@ import XCTest
     }
     func testDiscoverModelsBrowseAllAndSelectCachedModelInConversation() {
         continueAfterFailure = false
-        let app = XCUIApplication(); app.launchArguments = ["--ui-testing", "--ui-test-model-catalog"]; app.launch()
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing", "--ui-test-model-catalog", "-AppleLanguages", "(zh-Hans)"]; app.launch()
         openProviders(app); app.staticTexts["Catalog Fixture"].tap()
         XCTAssertTrue(app.buttons["fetchModels"].waitForExistence(timeout: 5)); app.buttons["fetchModels"].tap()
         XCTAssertTrue(app.buttons["providerModel-fixture-vision"].waitForExistence(timeout: 5))
@@ -912,7 +912,7 @@ import XCTest
         XCTAssertFalse(app.buttons["providerModel-fixture-seventh"].exists)
         app.swipeUp()
         let effort = app.buttons["reasoningEffort"]
-        XCTAssertTrue(effort.waitForExistence(timeout: 3)); effort.tap(); app.buttons["high"].tap()
+        XCTAssertTrue(effort.waitForExistence(timeout: 3)); effort.tap(); app.buttons["高"].tap()
         XCTAssertFalse(app.textFields["parameter-temperature"].exists)
         let browse = app.buttons["browseAllProviderModels"]
         XCTAssertTrue(browse.waitForExistence(timeout: 5)); browse.tap()
@@ -954,19 +954,19 @@ import XCTest
         modelRow.tap(); app.buttons["fixture-other"].tap()
         XCTAssertEqual(modelRow.value as? String, "fixture-other")
         modelRow.tap(); app.buttons["fixture-vision"].tap()
-        XCTAssertEqual(effortRow.value as? String, "high")
+        XCTAssertEqual(effortRow.value as? String, "高")
         effortRow.tap()
         capture("conversation-reasoning-popup")
-        app.buttons["low"].tap()
-        XCTAssertEqual(effortRow.value as? String, "low")
+        app.buttons["低"].tap()
+        XCTAssertEqual(effortRow.value as? String, "低")
         modelRow.tap(); app.buttons["fixture-other"].tap()
         XCTAssertEqual(effortRow.value as? String, "服务商默认")
         modelRow.tap(); app.buttons["fixture-vision"].tap()
-        XCTAssertEqual(effortRow.value as? String, "low")
-        effortRow.tap(); app.buttons["服务商默认（low）"].tap()
-        XCTAssertEqual(effortRow.value as? String, "服务商默认（low）")
+        XCTAssertEqual(effortRow.value as? String, "低")
+        effortRow.tap(); app.buttons["服务商默认（低）"].tap()
+        XCTAssertEqual(effortRow.value as? String, "服务商默认（低）")
         app.textViews["messageInput"].tap()
-        XCTAssertFalse(picker.label.contains("low"))
+        XCTAssertFalse(picker.label.contains("低"))
         capture("discovered-model-selection")
     }
 }

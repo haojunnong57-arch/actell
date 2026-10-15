@@ -92,14 +92,14 @@ enum LocationEvent: Sendable { case authorization, evidence([LocationEvidence]),
     var authorizationText: String {
         let value: String
         switch authorization {
-        case .notDetermined: value = "尚未授权"
-        case .denied: value = "已拒绝"
-        case .restricted: value = "系统限制"
-        case .authorizedWhenInUse: value = "使用 App 期间"
-        case .authorizedAlways: value = "始终（既有授权）"
-        @unknown default: value = "未知授权"
+        case .notDetermined: value = String(localized: "Not requested")
+        case .denied: value = String(localized: "Denied")
+        case .restricted: value = String(localized: "Restricted")
+        case .authorizedWhenInUse: value = String(localized: "While using the app")
+        case .authorizedAlways: value = String(localized: "Always")
+        @unknown default: value = String(localized: "Unknown permission")
         }
-        return "授权：\(value)；系统定位：\(servicesEnabled ? "开启" : "关闭")；精度：\(reducedAccuracy ? "大致" : "精确")"
+        return String(localized: "Permission: \(value); location services: \(servicesEnabled ? String(localized: "On") : String(localized: "Off")); accuracy: \(reducedAccuracy ? String(localized: "Approximate") : String(localized: "Precise"))")
     }
     func refreshAuthorization() {
         let probe = manager ?? permissionManager ?? factory()

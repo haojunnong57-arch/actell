@@ -46,7 +46,7 @@ final class AudioSessionCoordinator: @unchecked Sendable {
                 self.activate { ready in
                     self.queue.async {
                         if ready { self.owners.insert(token); continuation.resume() }
-                        else { continuation.resume(throwing: AppError.unavailable("媒体会话不可用")) }
+                        else { continuation.resume(throwing: AppError.unavailable(String(localized: "Media session unavailable"))) }
                         finished()
                     }
                 }

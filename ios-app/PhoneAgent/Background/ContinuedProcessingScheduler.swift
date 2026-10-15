@@ -27,7 +27,7 @@ import UIKit
             }
         }) else {
             transition.complete(success: false); leases.removeValue(forKey: identifier)
-            throw AppError.unavailable("后台片段 ID 注册失败")
+            throw AppError.unavailable(String(localized: "Could not register the background task"))
         }
         if transition.valid { launched(transition) }
         submissions[identifier] = Task { [weak self] in
@@ -49,7 +49,7 @@ import UIKit
         }
     }
     private nonisolated static func submitRequest(identifier: String) async throws {
-        let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: "执言正在处理任务", subtitle: "等待实际响应；可随时取消")
+        let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: String(localized: "Processing your task"), subtitle: String(localized: "Waiting for a response. You can cancel at any time."))
         request.strategy = .fail
         request.requiredResources = [] // CPU/network only; no GPU entitlement.
         // iOS 27's asynchronous API reports errors missed by deprecated submit.
@@ -88,7 +88,7 @@ import UIKit
     func report(completed: Int, subtitle: String) {
         guard !self.completed else { return }
         task.progress.completedUnitCount = Int64(completed)
-        task.updateTitle("\(AppIdentity.displayName) 正在处理任务", subtitle: subtitle)
+        task.updateTitle(String(localized: "\(AppIdentity.displayName) is processing your task"), subtitle: subtitle)
     }
     func complete(success: Bool) {
         guard !completed else { return }; completed = true
