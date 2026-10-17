@@ -1,0 +1,58 @@
+name: Build PhoneAgent IPA
+
+on:
+workflow_dispatch:
+push:
+branches: [main]
+
+jobs:
+build-ipa:
+runs-on: macos-latest
+timeout-minutes: 90
+
+steps:
+  - name: Checkout
+    uses: actions/checkout@v4
+  - name: Show Xcode version
+    run: |
+      echo "Available Xcode versions:"
+      ls -d /Applications/Xcode*.app || true
+      xcodebuild -version
+  - name: Install Rust
+    uses: dtolnay/rust-toolchain@stable
+    with:
+      targets: aarch64-apple-ios,aarch64-apple-ios-sim
+  - name: Build iOS app
+    run: |
+      set -o pipefail
+      xcodebuild \
+        -project ios-app/PhoneAgent.xcodeproj \
+        -scheme PhoneAgent \
+        -configuration Release \
+        -destination 'generic/platform=iOS' \
+        -derivedDataPath .build/DeviceBuild \
+        CODE_SIGNING_ALLOWED=NO \
+        build
+  - name: Package IPA
+    run: |
+      set -e
+      APP=".build/DeviceBuild/Build/Products/Release-iphoneos/PhoneAgent.app"
+      if [ ! -d "$APP" ]; then
+        APP=$(find .build/DeviceBuild/Build/Products \
+          -type d -name "PhoneAgent.app" -print -quit)
+      fi
+      if [ -z "$APP" ] || [ ! -d "$APP" ]; then
+        echo "ERROR: PhoneAgent.app was not found"
+        exit 1
+      fi
+      mkdir -p Payload
+      cp -R "$APP" Payload/
+      zip -qr PhoneAgent-unsigned.ipa Payload
+      ls -lh PhoneAgent-unsigned.ipa
+  - name: Upload IPA
+    uses: actions/upload-artifact@v4
+    with:
+      name: PhoneAgent-unsigned-ipa
+      path: PhoneAgent-unsigned.ipa
+      if-no-files-found: error
+      retention-days: 7
