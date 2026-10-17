@@ -18015,6 +18015,60 @@
           }
         }
       }
+    },
+    "Approved (Dynamic Island)": {
+      "comment": "Dynamic Island status. Keep the Simplified Chinese translation exactly two characters.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approved"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "批准"
+          }
+        }
+      }
+    },
+    "Interrupted (Dynamic Island)": {
+      "comment": "Dynamic Island status. Keep the Simplified Chinese translation exactly two characters.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interrupted"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "中断"
+          }
+        }
+      }
+    },
+    "Processing (Dynamic Island)": {
+      "comment": "Dynamic Island status. Keep the Simplified Chinese translation exactly two characters.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Processing"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "处理"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

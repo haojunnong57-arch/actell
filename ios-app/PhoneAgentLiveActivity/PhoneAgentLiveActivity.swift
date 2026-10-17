@@ -37,20 +37,20 @@ struct PhoneAgentLiveActivity: Widget {
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     if standby {
-                        Image(systemName: "sparkles").foregroundStyle(.cyan)
+                        IslandSymbol(name: "sparkles").foregroundStyle(.cyan)
                     } else {
-                        Label((context.state.isDemo ?? context.attributes.isDemo) ? String(localized: "\(AppIdentity.displayName) · Offline demo") : AppIdentity.displayName, systemImage: "sparkles")
-                            .font(.caption).foregroundStyle(.secondary)
+                        Label {
+                            Text((context.state.isDemo ?? context.attributes.isDemo) ? String(localized: "\(AppIdentity.displayName) · Offline demo") : AppIdentity.displayName)
+                        } icon: {
+                            IslandSymbol(name: "sparkles")
+                        }.font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    if standby {
-                        Text(String(localized: "Waiting for tasks")).font(.subheadline).foregroundStyle(.cyan)
-                    } else {
-                        Label(stale ? String(localized: "View") : context.state.title,
-                              systemImage: stale ? "exclamationmark.circle" : context.state.symbol)
-                            .font(.headline).foregroundStyle(activityTint(context)).lineLimit(2)
-                    }
+                    IslandStatus(title: stale ? String(localized: "View") : context.state.compactTitle,
+                                 symbol: stale ? "exclamationmark.circle" : context.state.symbol,
+                                 expanded: true)
+                        .foregroundStyle(activityTint(context))
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     if !standby {
@@ -68,23 +68,45 @@ struct PhoneAgentLiveActivity: Widget {
                     }
                 }
             } compactLeading: {
-                Image(systemName: "sparkles").foregroundStyle(.cyan)
+                IslandSymbol(name: "sparkles").foregroundStyle(.cyan)
             } compactTrailing: {
                 if !standby {
-                    HStack(spacing: 3) {
-                        Image(systemName: stale ? "exclamationmark.circle" : context.state.symbol)
-                        Text(stale ? String(localized: "View") : context.state.compactTitle).lineLimit(1)
-                    }.font(.caption2).foregroundStyle(activityTint(context))
+                    IslandStatus(title: stale ? String(localized: "View") : context.state.compactTitle,
+                                 symbol: stale ? "exclamationmark.circle" : context.state.symbol)
+                        .foregroundStyle(activityTint(context))
                 }
             } minimal: {
-                if standby {
-                    Image(systemName: "sparkles").foregroundStyle(.cyan)
-                } else {
-                    Image(systemName: stale ? "exclamationmark.circle" : context.state.symbol).foregroundStyle(activityTint(context))
-                }
+                IslandSymbol(name: standby ? "sparkles" : (stale ? "exclamationmark.circle" : context.state.symbol))
+                    .foregroundStyle(activityTint(context))
+                    .accessibilityLabel(stale ? String(localized: "View") : context.state.compactTitle)
             }
             .widgetURL(activityURL(context))
             .keylineTint(activityTint(context))
+        }
+    }
+}
+
+private struct IslandSymbol: View {
+    let name: String
+
+    var body: some View {
+        Image(systemName: name)
+            .resizable().scaledToFit()
+            .frame(width: 16, height: 16)
+    }
+}
+
+private struct IslandStatus: View {
+    let title: String
+    let symbol: String
+    var expanded = false
+
+    var body: some View {
+        HStack(spacing: 3) {
+            IslandSymbol(name: symbol).accessibilityHidden(true)
+            Text(title)
+                .font(expanded ? .headline : .caption2)
+                .lineLimit(1).minimumScaleFactor(0.8)
         }
     }
 }
