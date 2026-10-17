@@ -101,7 +101,7 @@ struct AgentActivityAttributes: ActivityAttributes {
         var isTerminal: Bool { [.completed, .stopped, .interrupted, .blocked].contains(self) }
         var title: String {
             switch self {
-            case .standby: return String(localized: "Background standby")
+            case .standby: return String(localized: "Waiting for tasks")
             case .thinking: return String(localized: "Thinking")
             case .working: return String(localized: "Processing")
             case .awaitingApproval: return String(localized: "Waiting for confirmation")

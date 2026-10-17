@@ -162,6 +162,26 @@ import ActivityKit
         await controller.waitForPendingUpdates()
         XCTAssertEqual(handle.ended.count, 1)
     }
+    func testDisablingStandbyPreservesRunningActivityAndEndsItAfterCompletion() async {
+        let handle = RecordingActivityHandle()
+        var requests = 0
+        let controller = AgentLiveActivityController(createActivity: { _ in requests += 1; return handle })
+        controller.setBackgroundResident(true)
+        await controller.waitForPendingUpdates()
+        let run = UUID()
+        controller.submit(snapshot(.thinking, run: run))
+        await controller.waitForPendingUpdates()
+        controller.setBackgroundResident(false)
+        await controller.waitForPendingUpdates()
+        XCTAssertTrue(handle.ended.isEmpty)
+        controller.submit(snapshot(.executing, run: run))
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.states.last?.phase, .executing)
+        controller.submit(snapshot(.completed, run: run))
+        await controller.waitForPendingUpdates()
+        XCTAssertEqual(handle.ended.count, 1)
+        XCTAssertEqual(requests, 1)
+    }
     func testResidentDoesNotRequestStandbyInBackgroundOrAfterDisable() async {
         var requests = 0
         let controller = AgentLiveActivityController(createActivity: { _ in requests += 1; return RecordingActivityHandle() })
@@ -296,7 +316,7 @@ import ActivityKit
         XCTAssertEqual(decoded.route(attributes: attributes), AgentActivityRoute(sessionID: attributes.sessionID, runID: attributes.runID))
         var standby = decoded; standby.phase = .standby
         XCTAssertNil(standby.route(attributes: attributes))
-        XCTAssertEqual(standby.title, "后台待命")
+        XCTAssertEqual(standby.title, "等待任务")
         XCTAssertEqual(standby.compactTitle, "待命")
     }
     func testBackgroundCompletionAlertsOnceAndRemainsUntilForeground() async throws {
