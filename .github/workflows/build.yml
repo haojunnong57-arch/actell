@@ -14,25 +14,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode 27
+      - name: Select Xcode
         run: |
-          echo "## Available Xcode versions" >> $GITHUB_STEP_SUMMARY
-          ls /Applications/ | grep -i xcode >> $GITHUB_STEP_SUMMARY
-          if [ -d "/Applications/Xcode_27.0.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_27.0.app
-          elif ls /Applications/Xcode_27*.app 2>/dev/null; then
-            XCODE_APP=$(ls -d /Applications/Xcode_27*.app | head -1)
-            sudo xcode-select -s "$XCODE_APP"
-          elif [ -d "/Applications/Xcode_26.6.app" ]; then
-            echo "WARNING: No Xcode 27, falling back to Xcode 26.6" >> $GITHUB_STEP_SUMMARY
+          if [ -d "/Applications/Xcode_26.6.app" ]; then
             sudo xcode-select -s /Applications/Xcode_26.6.app
-          else
-            echo "ERROR: No suitable Xcode found" >> $GITHUB_STEP_SUMMARY
-            ls /Applications/ | grep -i xcode
-            exit 1
           fi
-          xcodebuild -version >> $GITHUB_STEP_SUMMARY
-          xcrun --sdk iphoneos --show-sdk-version >> $GITHUB_STEP_SUMMARY
+          xcodebuild -version
 
       - name: Install Rust
         run: |
@@ -40,16 +27,9 @@ jobs:
           source "$HOME/.cargo/env"
           rustup target add aarch64-apple-ios aarch64-apple-ios-sim
           rustc --version
-          cargo --version
 
       - name: Generate Xcode project
-        run: |
-          python3 ios-app/scripts/generate_xcode_project.py -d
-
-      - name: Resolve Swift Packages
-        run: |
-          source "$HOME/.cargo/env"
-          xcodebuild -project ios-app/PhoneAgent.xcodeproj -scheme PhoneAgent -resolvePackageDependencies
+        run: python3 ios-app/scripts/generate_xcode_project.py -d
 
       - name: Build for Device (unsigned)
         run: |
@@ -62,6 +42,7 @@ jobs:
             -archivePath build/PhoneAgent.xcarchive \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build/DerivedData \
+            IPHONEOS_DEPLOYMENT_TARGET=26.0 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -69,22 +50,24 @@ jobs:
           RC=$?
           echo "## Build exit: $RC" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          tail -80 build_output.log >> $GITHUB_STEP_SUMMARY
+          # Show error lines and surrounding context
+          grep -n -i "error:" build_output.log | head -30 >> $GITHUB_STEP_SUMMARY
+          echo "--- last 100 lines ---" >> $GITHUB_STEP_SUMMARY
+          tail -100 build_output.log >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          tail -40 build_output.log
+          tail -50 build_output.log
           exit 0
 
       - name: Package IPA
         run: |
           APP_PATH="build/PhoneAgent.xcarchive/Products/Applications/PhoneAgent.app"
           if [ ! -d "$APP_PATH" ]; then
-            echo "No .app found at $APP_PATH"
+            echo "No .app found"
             exit 1
           fi
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
-          cd build
-          zip -r PhoneAgent-unsigned.ipa Payload
+          cd build && zip -r PhoneAgent-unsigned.ipa Payload
           ls -lh PhoneAgent-unsigned.ipa
 
       - name: Upload IPA
