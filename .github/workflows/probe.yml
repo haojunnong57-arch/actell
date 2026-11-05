@@ -1,0 +1,37 @@
+name: Probe Xcode
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: List Xcode versions
+        run: |
+          ls /Applications/ | grep -i xcode
+          echo "---"
+          xcodebuild -version || true
+      - name: Check if Xcode 27 exists
+        run: |
+          if [ -d "/Applications/Xcode_27.app" ]; then
+            echo "Xcode 27 found"
+            sudo xcode-select -s /Applications/Xcode_27.app
+            xcodebuild -version
+          elif ls /Applications/Xcode_27*.app 2>/dev/null; then
+            XCODE_APP=$(ls -d /Applications/Xcode_27*.app | head -1)
+            echo "Found: $XCODE_APP"
+            sudo xcode-select -s "$XCODE_APP"
+            xcodebuild -version
+          else
+            echo "No Xcode 27 found, listing all available:"
+            ls /Applications/ | grep -i xcode
+          fi
+      - name: Check Rust
+        run: |
+          which rustc || echo "no rust"
+          which cargo || echo "no cargo"
+      - name: Check Python
+        run: python3 --version
